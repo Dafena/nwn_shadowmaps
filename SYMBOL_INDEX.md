@@ -62,7 +62,10 @@ The bucket replay is the known caster-selection defect. It inherits the stencil
 shadow population, so it can omit visible `shadow 0` pieces and include invisible
 stencil proxies.
 
-## Intended visible-caster flow (next patch; not implemented yet)
+## HISTORICAL -- Intended visible-caster flow (next patch; not implemented yet)
+
+> **SUPERSEDED.** The visible-caster path was built, shipped, and then REMOVED on 2026-08-15 when the sun-path fill replaced it. This flow no longer exists.
+
 
 ```text
 after receiver, frame N

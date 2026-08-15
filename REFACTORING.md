@@ -79,7 +79,10 @@ behavior has passed another gate.
 - In-game test of the refactored build: **passed**. The maintainer confirmed the
   split works correctly and preserves the accepted single-light behavior.
 
-## Active workspace and next feature
+## HISTORICAL -- Active workspace and next feature
+
+> **SUPERSEDED.** The refactor is complete and `refactored/` IS the tree you are reading. The source-budget description predates the sun-path rewrite.
+
 
 `refactored/` is now the authoritative workplace. The parent tree and all
 savepoints are read-only references. The source-budget activation is compiled

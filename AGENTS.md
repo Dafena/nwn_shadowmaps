@@ -1,5 +1,14 @@
 # NWN:EE Linux shadow-map injector — agent context (refactored workspace)
 
+> **NOTE ON `run-shadowmap-*.sh` LAUNCHERS.** The phase-era diagnostic launchers
+> named throughout these documents are NOT included in this repository. They
+> were one-off scripts for specific investigations, most of which are finished,
+> and several drove code paths that no longer exist. The shipped launchers are
+> `run-dev.sh`, `run-nwn.sh`, `run-shadowmap-trace.sh` and `nwn-shadows.sh`;
+> everything the old ones did is reachable through the `NWN_SHADOWMAP_*`
+> environment variables they set.
+
+
 **This `csm_claude/refactored/` directory is the only active development
 workspace as of 2026-08-13.** The maintainer runtime-tested the modularized
 single-local-light build and confirmed it preserves the accepted behavior.
@@ -374,7 +383,10 @@ skips the receiver and the screen capture), **Moving casters**, **Fixed
 casters**. With all three off the injector draws nothing, which is the fastest
 way to establish whether it is costing anything at all.
 
-## Current validated diagnostic and next blocker
+## HISTORICAL -- Current validated diagnostic and next blocker
+
+> **SUPERSEDED.** Phase-3r era. Kept for the transform-stability reasoning; the blocker described is long resolved.
+
 
 Phase 3r is in-game verified for transform stability while orbiting, panning,
 and zooming: the shadows it has captured stay world-aligned, and tree foliage,
@@ -960,7 +972,10 @@ Corollaries, all of which cost a test round each in that session:
 - Update `README.md` when the current test command, verified status, or blocker
   materially changes.
 
-## Immediate next steps
+## HISTORICAL -- Immediate next steps
+
+> **SUPERSEDED.** Phase 4a era (2026-08-09). Cascades shipped; these steps are all done.
+
 
 1. **Phase 4a is in-game validated (2026-08-09):**
    `run-shadowmap-four-cascade-capture.sh` replays each accepted Phase 3r draw

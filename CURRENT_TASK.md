@@ -1,5 +1,41 @@
 # Current task checkpoint
 
+## STATE OF PLAY (2026-08-15)
+
+**Working and maintainer-confirmed on Linux and Windows.**
+
+- Sun shadows: cascaded shadow maps, world-anchored static map.
+- Local lights: one downward face per light at 170 degrees, filled from INSIDE
+  the engine's own `Scene::RenderDrawBucket` pass -- the same point the cascades
+  use. That timing is what makes the casters the visible geometry.
+- Area shadow policy works on BOTH platforms, including Windows where nothing of
+  `CNWCArea` is exported (the decision is observed through the `Aur*` calls).
+- Panel: sources pinned to 3 in shipping builds, resolution ladder up to
+  Ultra (8192), self-illumination guard, lift toggle.
+
+### Open, and honestly open
+
+- **Lift saturation.** `att` clamps across most of a lamp's radius, so a dense
+  area lifts the sun's shadow broadly. Real, deliberately unfixed, shared with
+  Linux. "Bright surfaces keep light" and the lift toggle are the knobs.
+- **`lightpriority` ordering is DISABLED on Windows.** The read at
+  `0x8c + kPartLightDelta` returns 2/0/0 there, never a torch's 3, so the offset
+  is wrong on that platform. Gated behind `g_localPriorityOffset != 0`;
+  `[prio-scan]` prints candidate offsets. Linux is untouched -- the maintainer
+  asked to extend ordering there and then interrupted, so ASK FIRST.
+- **`kPartLightFadeOff` on Windows** is `+4` by inheritance and unverified. The
+  priority field being wrong at the same inherited delta makes it more suspect.
+- **Selection flicker** when NWN reorders its shadow-light list. Two fixes were
+  tried and reverted (pinning the carried light -- wrong pointer type; hysteresis
+  -- held stale lights across area changes). Still open.
+
+### How to read the rest of this file
+
+Everything below is a DATED LOG, newest first. Sections marked RESOLVED or
+HISTORICAL describe work that is finished or was superseded; they are kept
+because the reasoning behind a reverted idea is the expensive part.
+
+
 ## 2026-08-15 (final) -- CONFIRMED WORKING ON BOTH PLATFORMS
 
 Maintainer-confirmed on Windows AND Linux after this round.
@@ -105,7 +141,10 @@ in the census (it is not), `kPartLightRadiusOff` (radii read correctly), and
 lamp-lift saturation (real, but symptom-independent -- "Lift strength" changed
 every other light and not the torch, which is what pointed here).
 
-## START HERE (next session) -- Windows lift bug, leads in priority order
+## RESOLVED -- START HERE (next session) -- Windows lift bug, leads in priority order
+
+> **FIXED 2026-08-15.** None of the leads below were the cause. The torch was deleting the sun's shadow because `UpdateShadowingLights` swaps area shadowing for a carried light's projection, and the observed path took that literally. See the carried-light section further down. The census, radius offset and sun-in-census theories were all disproved with logs.
+
 
 Symptom: on Windows, drawing a torch makes EVERY sun shadow vanish at any
 distance, and the "Lights lift sun shadow" checkbox does not stop it. Linux is
@@ -290,7 +329,10 @@ exported. Never begun, because the question was never answered: is it about
 WHICH LIGHT CASTS (selection, currently `GetShadowLights()` order) or about the
 SUN-SHADOW LIFT? They are different subsystems and need different work.
 
-## NEXT TASK (planned, NOT started) -- fill local light maps the way the SUN does
+## RESOLVED -- NEXT TASK (planned, NOT started) -- fill local light maps the way the SUN does
+
+> **DONE 2026-08-15 and confirmed on both platforms.** This is now the ONLY fill; Legacy/Emitter/High were deleted with ~700 lines. Kept for the reasoning about WHY the timing matters.
+
 
 **Maintainer's framing, 2026-08-15: "the way to get the shadows should be the
 sun's cheap way, the way to render them should be the current one."** Keep the
@@ -461,7 +503,10 @@ Still present and deliberately untouched: the `selfcheck` block in
 `g_localLightTrace && g_dumpCapturePgm`. It predates the fade work and was not on
 the strip list.
 
-## NEXT SESSION, IN ORDER
+## RESOLVED -- NEXT SESSION, IN ORDER
+
+> **All done.** Superseded by the dated entries above.
+
 
 Everything below 1 is blocked on 1: three separate pieces of work landed today
 without a single in-game run, so the first job is finding out which of them are
@@ -905,7 +950,8 @@ stencil programs are excluded.
   `NWN_SHADOWMAP_GAME_DIR` as an explicit override.
 - Full rationale and module map: `REFACTORING.md`.
 - Runtime confirmation and exact library/source hashes are in the savepoint's
-  `MANIFEST.md`.
+  `MANIFEST.sha256` inside each savepoint (savepoints are not part of this
+  repository).
 
 ## Current implementation: first multi-light slice
 
