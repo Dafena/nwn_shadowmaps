@@ -1,0 +1,15 @@
+# Build output
+*.o
+*.so
+*.dll
+build-deploy/
+win/*.o
+
+# Runtime files the injector writes next to the game
+*.log
+*.pgm
+nwn_shadowmap_settings.ini
+
+# Editor / OS
+*.swp
+.DS_Store

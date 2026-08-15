@@ -1,0 +1,22 @@
+; Every version.dll export must be forwarded: a proxy replaces the DLL
+; for the WHOLE process, and other modules (notably NVIDIA's nvoglv64.dll)
+; import names the game itself never uses. Missing one is a hard load
+; failure for them -- that is what the GetFileVersionInfoW error was.
+EXPORTS
+    GetFileVersionInfoA = nwn_fwd_0
+    GetFileVersionInfoByHandle = nwn_fwd_1
+    GetFileVersionInfoExA = nwn_fwd_2
+    GetFileVersionInfoExW = nwn_fwd_3
+    GetFileVersionInfoSizeA = nwn_fwd_4
+    GetFileVersionInfoSizeExA = nwn_fwd_5
+    GetFileVersionInfoSizeExW = nwn_fwd_6
+    GetFileVersionInfoSizeW = nwn_fwd_7
+    GetFileVersionInfoW = nwn_fwd_8
+    VerFindFileA = nwn_fwd_9
+    VerFindFileW = nwn_fwd_10
+    VerInstallFileA = nwn_fwd_11
+    VerInstallFileW = nwn_fwd_12
+    VerLanguageNameA = nwn_fwd_13
+    VerLanguageNameW = nwn_fwd_14
+    VerQueryValueA = nwn_fwd_15
+    VerQueryValueW = nwn_fwd_16
