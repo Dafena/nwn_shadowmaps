@@ -75,6 +75,10 @@ static FILE* open_dump_file(const char* name) {
 // The receiver debug mode is NOT saved: it is a diagnostic, and restarting into
 // solid magenta with no memory of why would be its own bug report.
 struct SettingRef { const char* key; float* f; int* i; bool* b; };
+// ONE number, used by every caller and by the adders' bound. Three call sites
+// each hard-coded 32 while the list grew to 35, and the three settings past the
+// end were dropped in silence.
+static constexpr unsigned kSettingsMax = 64;
 
 // Bump when a DEFAULT changes, so an .ini written by an older build cannot
 // pin the retuned values. Without this, anyone who ran a previous build keeps
@@ -83,16 +87,35 @@ struct SettingRef { const char* key; float* f; int* i; bool* b; };
 // too. On an older file the keys listed in settings_retuned() are ignored and
 // the file is rewritten at the new version; everything else the user set is
 // preserved.
-static constexpr int kSettingsVersion = 5;
+static constexpr int kSettingsVersion = 6;
 
 // Keys whose defaults changed in a local-light tuning pass.  Version 5 also
 // makes these controls live on the cube receiver; reset the old 1-unit
 // separation default rather than letting it detach every point-light shadow.
+//
+// Version 6 (2026-08-18): the shipped local-light look was retuned in-game --
+// strength, edge fade, falloff, cone angle and lamp lift all moved together as
+// one set (see the panel screenshot this was matched against). These are
+// exactly the controls "#if !NWN_SHIP" hides, so a Windows tester has no way to
+// reach them; the compiled-in default IS the shipped behaviour, and a stale
+// file must not be allowed to pin the old one.
 static bool settings_retuned(const char* key) {
     static const char* kV2[] = {
         "local_min_sep", "local_normal_bias", "local_soft",
     };
     for (const char* k : kV2) if (std::strcmp(k, key) == 0) return true;
+    static const char* kV6[] = {
+        "local_strength", "local_edge_fade", "local_falloff",
+        "local_fov", "local_height",
+        // Every existing file holds local_map=256, a value the panel's ladder
+        // no longer offers. Left alone it would keep pinning a resolution the
+        // user cannot see or change.
+        "local_map",
+        // Shipped defaults corrected from the phase-trial 0/0/off; existing
+        // files hold the old values and would keep pinning hard shadows.
+        "csm_blend", "csm_pcf", "csm_composite",
+    };
+    for (const char* k : kV6) if (std::strcmp(k, key) == 0) return true;
     return false;
 }
 
@@ -100,6 +123,13 @@ static bool  g_settingsLoaded = false;
 static bool  g_settingsResetRequested = false;   // panel's "Restore defaults"
 static double g_settingsSaveAt = 0.0;   // debounce; 0 = nothing pending
 
+// CAPACITY IS CHECKED, NOT ASSUMED. Callers size a stack array and pass its
+// length; the adders below silently drop anything past it. That is exactly what
+// happened: the table grew to 35 entries against callers still passing 32, so
+// local_alpha_cast, local_min_sep and local_dyn_only stopped being saved or
+// loaded at all -- no error, no log line, the checkbox just forgot itself every
+// launch. kSettingsMax exists so the array size and the bound cannot drift
+// apart again, and the assert fires the moment the list outgrows it.
 static unsigned settings_table(SettingRef* out, unsigned max) {
     unsigned n = 0;
     auto addf = [&](const char* k, float* v) { if (n<max) out[n++] = {k,v,nullptr,nullptr}; };
@@ -113,6 +143,9 @@ static unsigned settings_table(SettingRef* out, unsigned max) {
     addi("world_map",          &g_staticWorldSize);
     addf("world_extent",       &g_staticWorldExtent);
     addb("local_emit_cast",    &g_localLightEmittersCast); // "Lights casting shadows"
+    // "Day/night fade": a panel slider on BOTH platforms that was never
+    // registered, so every launch forgot it and reverted to 0.75 in silence.
+    addf("area_fade_secs",     &g_areaShadowFadeSeconds);   // "Day/night fade"
     addi("local_map",          &g_pendingLocalSize);       // "Light casted shadow"
     // "Light supported" removed: the count follows the engine. Persisting a
     // duplicate would let a saved value fight it.
@@ -175,6 +208,14 @@ static unsigned settings_table(SettingRef* out, unsigned max) {
     addf("local_min_sep",      &g_localLightMinSep);
     addb("local_dyn_only",     &g_localLightDynamicOnly);
 #endif
+    // TRIPWIRE: if the list outgrows the callers' array this fires at startup
+    // instead of silently dropping whatever was added last.
+    static bool warned = false;
+    if (!warned && n >= max) {
+        warned = true;
+        fprintf(stderr, "[shadowmap][settings] TABLE FULL: %u entries, capacity %u -- "
+                        "raise kSettingsMax; settings past the limit are NOT saved\n", n, max);
+    }
     return n;
 }
 
@@ -201,20 +242,21 @@ static void settings_reset_defaults() {
 #else
     g_localLightReceiver       = false;  // opt-in on the development build
 #endif
-    g_localLightStrength       = 0.50f;
+    g_areaShadowFadeSeconds    = 0.75f;
+    g_localLightStrength       = 0.77f;
     g_localLightBias           = 0.0f;
     g_localLightLift           = 1.0f;
-    g_localLightEdgeFade       = 0.0f;
-    g_localLightFalloff        = 0.50f;
-    g_localLightFovDeg         = 170.0f;
-    g_localLightHeight         = 0.0f;
+    g_localLightEdgeFade       = 0.05f;
+    g_localLightFalloff        = 0.52f;
+    g_localLightFovDeg         = 150.0f;
+    g_localLightHeight         = 3.0f;
     g_localLightSoft           = 0.51f;
     g_localLightSlopeBias      = 1.8f;
     g_localLightNormalBias     = 0.0f;
     g_localLightAlphaCasters   = false;
     g_localLightMinSep         = 0.30f;
     g_localLightEmittersCast   = true;
-    g_pendingLocalSize         = 256;   // Low
+    g_pendingLocalSize         = 1024;  // Low -- the bottom of the panel's ladder
     g_localLightDynamicOnly    = true;
     g_localCubeQuality         = kLocalCubeQualityMax;   // every frame
 #if NWN_SHIP
@@ -334,8 +376,15 @@ static void apply_local_cube_runtime_settings(bool startup, const char* source) 
 // staged value must become the live allocation size immediately.  Previously
 // only g_pendingLocalSize was loaded; the panel could say High/Ultra while the
 // first target was still allocated at the launcher's/default Low size (256).
+// MUST MATCH THE PANEL'S LADDER (nwn_overlay_imgui.cpp, "Light casted shadow").
+//
+// This list had drifted twice in the same direction. It still held 256 and 512,
+// which the ladder dropped as never worth picking, and it never gained 8192 --
+// so selecting "Ultra (8192)" snapped to the nearest entry, 4096, and the
+// highest quality setting silently did nothing. Anything that snaps a user's
+// choice has to be kept in step with what the user was offered.
 static int sanitize_local_shadow_map_size(int requested) {
-    static const int sizes[5] = {256, 512, 1024, 2048, 4096};
+    static const int sizes[4] = {1024, 2048, 4096, 8192};
     int best = sizes[0];
     int bestDelta = requested > best ? requested - best : best - requested;
     for (int size : sizes) {
@@ -387,8 +436,8 @@ static void load_settings() {
         apply_local_map_runtime_settings(true, "environment/defaults (no settings file)");
         return;
     }
-    SettingRef table[32];
-    const unsigned count = settings_table(table, 32);
+    SettingRef table[kSettingsMax];
+    const unsigned count = settings_table(table, kSettingsMax);
     // Two passes: the version is needed before deciding what to honour.
     int fileVersion = 1;
     {
@@ -443,8 +492,8 @@ static void save_settings() {
     fprintf(f, "# NWN shadow map panel settings. Delete this file to reset,\n"
                "# or run with NWN_SHADOWMAP_NO_SETTINGS=1 to ignore it.\n");
     fprintf(f, "version=%d\n", kSettingsVersion);
-    SettingRef table[32];
-    const unsigned count = settings_table(table, 32);
+    SettingRef table[kSettingsMax];
+    const unsigned count = settings_table(table, kSettingsMax);
     for (unsigned i = 0; i < count; ++i) {
         if (table[i].f)      fprintf(f, "%s=%.6g\n", table[i].key, (double)*table[i].f);
         else if (table[i].i) fprintf(f, "%s=%d\n",   table[i].key, *table[i].i);
@@ -470,8 +519,8 @@ static void settings_tick() {
     apply_local_cube_runtime_settings(false, "panel");
     static double last[32] = {};
     static bool primed = false;
-    SettingRef table[32];
-    const unsigned count = settings_table(table, 32);
+    SettingRef table[kSettingsMax];
+    const unsigned count = settings_table(table, kSettingsMax);
     bool changed = false;
     for (unsigned i = 0; i < count; ++i) {
         const double v = table[i].f ? (double)*table[i].f

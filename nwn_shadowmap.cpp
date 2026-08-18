@@ -278,7 +278,7 @@ static const void* g_engineFadeLight = nullptr;
 // that never received one behaves exactly as before.
 static float    g_localLightSlotFade[kLocalSlotsMax] = {};
 static unsigned g_localLightSlotCount     = 0;
-static float    g_localLightStrength     = 0.50f;  // NWN_SHADOWMAP_LOCAL_LIGHT_STRENGTH
+static float    g_localLightStrength     = 0.77f;  // NWN_SHADOWMAP_LOCAL_LIGHT_STRENGTH
 static float    g_localLightBias         = 0.0f;
 // How much a local light's illumination cancels the SUN's shadow on the same
 // surface. 1 = fully lit at the light's centre, fading with its radius; 0 =
@@ -287,7 +287,7 @@ static float    g_localLightBias         = 0.0f;
 static float    g_localLightLift         = 1.0f;
 // How wide a band at the shadow map's border fades out, in UV. The shadow used
 // to stop dead where the light's frustum ended.
-static float    g_localLightEdgeFade     = 0.0f;
+static float    g_localLightEdgeFade     = 0.05f;
 // LOCAL SHADOW FALLOFF CURVE. Exponent applied to the lamp's attenuation
 // BEFORE it scales the local shadow's opacity. 1.0 is the old behaviour.
 //
@@ -302,7 +302,7 @@ static float    g_localLightEdgeFade     = 0.0f;
 // was the obvious alternative and is WRONG: att reaching 0 at the lamp's radius
 // is what fades the shadow out smoothly, and a floor turns that into a hard
 // visible ring at every light's edge. pow() keeps 0 at 0 and 1 at 1.
-static float    g_localLightFalloff      = 0.50f;  // NWN_SHADOWMAP_LOCAL_FALLOFF
+static float    g_localLightFalloff      = 0.52f;  // NWN_SHADOWMAP_LOCAL_FALLOFF
 // PCF radius in texels for the local shadow's own outline.
 static float    g_localLightSoft         = 0.51f;   // same default as the sun
 // Slope-scaled depth offset used while FILLING a local shadow map. Kills the
@@ -476,7 +476,7 @@ static int      g_receiverDebug          = 0;      // NWN_SHADOWMAP_RECEIVER_DEB
 // for why aiming at the camera measured as zero coverage everywhere).
 // NWN_SHADOWMAP_LOCAL_LIGHT_DIR="x,y,z" / NWN_SHADOWMAP_LOCAL_LIGHT_FOV=deg.
 static float    g_localLightDir[3]       = { 0.0f, 0.0f, -1.0f };
-static float    g_localLightFovDeg       = 170.0f;
+static float    g_localLightFovDeg       = 150.0f;
 // VIRTUAL LIGHT HEIGHT for the local shadow projection, in world units, 0 = off.
 //
 // A torch on a post is genuinely low, so a physically correct shadow map rakes
@@ -490,7 +490,7 @@ static float    g_localLightFovDeg       = 170.0f;
 // the receiver derives its bias texel size from the distance to the REAL light,
 // so a very large lift makes that estimate slightly optimistic -- re-check
 // slope bias if shadows start to shimmer after a big change here.
-static float    g_localLightHeight       = 0.0f;
+static float    g_localLightHeight       = 3.0f;
 // NWN_SHADOWMAP_OVERLAY_LEGACY=1 restores the Phase 5b bitmap-font overlay
 // (kept only as an A/B reference; it toggles but has never been visible).
 static bool     g_overlayLegacy          = false;
@@ -499,9 +499,19 @@ static bool     g_overlayLegacy          = false;
 // -- the panel prints the total, because at 4096 with 32 lights that is 2 GB
 // and the decision belongs to whoever owns the card.
 //
-// Starts at LOW (256). NWN_SHADOWMAP_LOCAL_LIGHT_SIZE still overrides.
-static int      g_localLightCaptureSize  = 256;
-static int      g_pendingLocalSize       = 256;
+// Starts at LOW (1024) -- the BOTTOM OF THE LADDER, which is the point.
+//
+// This used to default to 256, and 256 was later dropped from the panel's
+// ladder ("never good enough to pick"). Nothing moved the default with it, so a
+// fresh .ini was written with a resolution the UI can no longer even select:
+// the combo's match loop found no entry, fell through to index 0, and DISPLAYED
+// "Low (1024)" while the light maps were really being captured at 256. On
+// Windows, where this control is hidden entirely, a fresh install simply ran at
+// 256 forever with no way to discover it.
+//
+// NWN_SHADOWMAP_LOCAL_LIGHT_SIZE still overrides.
+static int      g_localLightCaptureSize  = 1024;
+static int      g_pendingLocalSize       = 1024;
 static bool     g_localSizeCommit        = false;   // set by Apply
 static long     g_localLightDumpAt       = -1;     // NWN_SHADOWMAP_LOCAL_LIGHT_DUMP
 static double   g_localLightDumpDeadline = 0.0;
@@ -910,7 +920,10 @@ static bool     g_cascadeCsmAlphaReceiver = false;
 // Phase 5a: the same receiver may draw a conventional translucent-black
 // shadow overlay instead of the red proof colour.  It is opt-in so the red
 // result remains an exact regression/reference mode.
-static bool     g_cascadeCompositeShadows = false;
+// Same story as the two above. The env read below used to be unconditional
+// (`= getenv(...) != nullptr`), so absence forced this OFF and the declared
+// value never mattered; it is now a real default that the env can override.
+static bool     g_cascadeCompositeShadows = true;
 static float    g_cascadeCompositeStrength = 0.42f;
 // Read-only area policy.  This deliberately follows NWN's existing area
 // properties and never changes the engine's sun, the CSM fit, or cached depth.
@@ -950,12 +963,14 @@ static float effective_area_sun_strength() {
                        (g_areaShadowFadeTo - g_areaShadowFadeFrom) * t);
 }
 static float    g_cascadeReceiverBias = 0.0025f;
-// Zero preserves the accepted hard-boundary path.  Phase 5c enables a narrow
-// world-space overlap so adjacent, already-valid CSM layers cross-fade.
-static float    g_cascadeBlendWidth = 0.0f;
-// Zero keeps the hardware 2x2 comparison sample.  Phase 5d uses a compact
-// receiver-only 3x3 PCF footprint when this radius is positive.
-static float    g_cascadePcfRadius = 0.0f;
+// SHIPPED DEFAULTS, not phase gates. These were 0/0 -- the opt-in values from
+// when cross-fade and PCF were being trialled -- while run-dev.sh passed 0.75
+// for both and "Restore defaults" set 0.75. So Linux development never ran the
+// compiled value, and a fresh install with no .ini did: hard cascade boundaries
+// and unfiltered, aliased shadow edges. Worst on Windows, where these two
+// sliders live behind "#if !NWN_SHIP" and cannot be reached to correct it.
+static float    g_cascadeBlendWidth = 0.75f;
+static float    g_cascadePcfRadius = 0.75f;
 
 // Phase 5b: injector-owned ReShade-style settings overlay.  It is deliberately
 // keyboard-first until SDL event consumption is mapped safely; Ctrl+Shift avoids
@@ -2370,7 +2385,8 @@ static void shadowmap_init() {
     }
     if (const char* s = shadow_getenv("NWN_SHADOWMAP_LOCAL_LIGHT_SIZE")) {
         int v = atoi(s);
-        if (v >= 128 && v <= 4096) { g_localLightCaptureSize = v; g_pendingLocalSize = v; }
+        // Upper bound follows the panel's ladder, which now reaches 8192.
+        if (v >= 128 && v <= 8192) { g_localLightCaptureSize = v; g_pendingLocalSize = v; }
         else fprintf(stderr, "[shadowmap][local-light] ignoring NWN_SHADOWMAP_LOCAL_LIGHT_SIZE=%s\n", s);
     }
     if (const char* s = shadow_getenv("NWN_SHADOWMAP_LOCAL_LIGHT_DUMP")) g_localLightDumpAt = atol(s);
@@ -2507,7 +2523,15 @@ static void shadowmap_init() {
         if (std::isfinite(v) && v >= 0.0f && v <= 10000.0f) g_cascadeMaxDistance = v;
         else fprintf(stderr, "[shadowmap][csm] ignoring NWN_SHADOWMAP_CSM_DISTANCE=%s\n", sv);
     }
-    g_staticWorldEnabled = shadow_getenv("NWN_SHADOWMAP_STATIC_WORLD") != nullptr;
+    // VALUE-BASED, and it has to be. This was presence-only, so run-dev.sh
+    // passing NWN_SHADOWMAP_STATIC_WORLD=0 still evaluated TRUE (the variable
+    // exists) and Linux ran with the world map on -- while a shipping build,
+    // which passes no environment at all, got FALSE and ran without it. The
+    // declared default says "always on"; it had never once applied.
+    // run-dev.sh's own default moves to 1 in the same change, so Linux keeps
+    // the exact behaviour it has been developed and tested against.
+    if (const char* s = shadow_getenv("NWN_SHADOWMAP_STATIC_WORLD"))
+        g_staticWorldEnabled = (atoi(s) != 0);
     if (const char* sv = shadow_getenv("NWN_SHADOWMAP_STATIC_WORLD_SIZE")) {
         int v = atoi(sv);
         if (v >= 512 && v <= 16384) g_staticWorldSize = v;
@@ -2562,8 +2586,10 @@ static void shadowmap_init() {
         shadow_getenv("NWN_SHADOWMAP_CSM_DYNAMIC_RECEIVER") != nullptr;
     g_cascadeCsmAlphaReceiver =
         shadow_getenv("NWN_SHADOWMAP_CSM_ALPHA_RECEIVER") != nullptr;
-    g_cascadeCompositeShadows =
-        shadow_getenv("NWN_SHADOWMAP_CSM_COMPOSITE") != nullptr;
+    // Presence-only reads cannot express "leave the default alone", which is
+    // how this silently pinned itself off on every build without the env var.
+    if (const char* s = shadow_getenv("NWN_SHADOWMAP_CSM_COMPOSITE"))
+        g_cascadeCompositeShadows = (atoi(s) != 0);
     if (const char* s = shadow_getenv("NWN_SHADOWMAP_AREA_SHADOW_FLAGS"))
         g_areaShadowFlagsEnabled = atoi(s) != 0;
     if (const char* s = shadow_getenv("NWN_SHADOWMAP_AREA_SHADOW_OPACITY"))

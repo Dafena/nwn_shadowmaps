@@ -60,7 +60,7 @@ WORLD_SIZE="${NWN_SHADOWMAP_STATIC_WORLD_SIZE:-8192}"
 WORLD_EXTENT="${NWN_SHADOWMAP_STATIC_WORLD_EXTENT:-128}"
 # Per-draw static capture is the alpha-safe diagnostic path. The world map is
 # a whole-bucket re-entry, so it must stay off while proving the fix.
-STATIC_WORLD="${NWN_SHADOWMAP_STATIC_WORLD:-0}"
+STATIC_WORLD="${NWN_SHADOWMAP_STATIC_WORLD:-1}"   # was 0, which the old presence-only read treated as ON
 # Static AlphaDiscard casters (foliage, transparent tile overlays).  Keep this
 # independently switchable: these are the materials that flicker under a
 # moving scripted sun, while opaque/static and character paths stay active.

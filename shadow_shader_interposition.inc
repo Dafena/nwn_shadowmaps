@@ -1090,7 +1090,16 @@ static bool local_layer_accepts_caster(int layer, const float p[3], bool havePos
     if (layer < 0 || layer >= (int)g_localVisibleSlotCount) return true;
     const float r = g_localVisibleSlotRadius[layer];
     if (!(r > 0.0f)) return true;
-    const float reach = std::max(kLocalLightMinRange, r * 2.0f) + kLocalCullMarginUnits;
+    // MIRRORS THE CAPTURE'S FAR PLANE, LIFT INCLUDED. shadow_local_lights.inc
+    // builds zfi as max(kLocalLightMinRange, r*2 + g_localLightHeight): "Lamp
+    // lift" raises the apex the shadow is cast from and extends the far plane
+    // by the same amount. This cull is WINDOWS-ONLY, so it did not move with
+    // that change and silently began rejecting casters the capture's frustum
+    // still covers -- the same drift that broke the receiver's world-to-depth
+    // conversion, in the one place the platform split hides it from Linux.
+    const float reach = std::max(kLocalLightMinRange,
+                                 r * 2.0f + std::max(0.0f, g_localLightHeight)) +
+                        kLocalCullMarginUnits;
     const float dx = p[0] - g_localVisibleSlotPos[layer][0];
     const float dy = p[1] - g_localVisibleSlotPos[layer][1];
     const float dz = p[2] - g_localVisibleSlotPos[layer][2];
