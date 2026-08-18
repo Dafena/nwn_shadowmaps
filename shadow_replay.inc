@@ -110,6 +110,10 @@ struct SavedState {
     GLint     fbo = 0, vp[4] = {0,0,0,0};
     GLboolean depthMask = GL_TRUE, scissor = GL_FALSE, depthTest = GL_TRUE;
     GLboolean colorMask[4] = {GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE};
+    // Polygon offset, saved because the local fill turns it on (see
+    // apply_local_slope_offset) and the engine's own passes must not inherit it.
+    GLboolean polyOffset = GL_FALSE;
+    GLfloat   polyFactor = 0.0f, polyUnits = 0.0f;
 };
 
 // forceDepth: also enable GL_DEPTH_TEST. The probe needs it -- if the engine
@@ -121,6 +125,15 @@ static SavedState bind_target(bool forceDepth) {
     gl::GetIntegerv(GL_VIEWPORT, st.vp);
     gl::GetBooleanv(GL_DEPTH_WRITEMASK, &st.depthMask);
     gl::GetBooleanv(GL_COLOR_WRITEMASK, st.colorMask);
+    // restore_state() puts polygon offset back, and EVERY caller shares that
+    // function -- so if this did not record the real values, the cascade paths
+    // would restore a default-constructed 0/0/disabled over whatever the engine
+    // had set for its own decals.
+    if (gl::PolygonOffset && gl::GetFloatv) {
+        st.polyOffset = gl::IsEnabled(GL_POLYGON_OFFSET_FILL);
+        gl::GetFloatv(GL_POLYGON_OFFSET_FACTOR, &st.polyFactor);
+        gl::GetFloatv(GL_POLYGON_OFFSET_UNITS,  &st.polyUnits);
+    }
     st.scissor   = gl::IsEnabled(GL_SCISSOR_TEST);
     st.depthTest = gl::IsEnabled(GL_DEPTH_TEST);
 
@@ -134,6 +147,10 @@ static SavedState bind_target(bool forceDepth) {
 }
 
 static void restore_state(const SavedState& st) {
+    if (gl::PolygonOffset) {
+        gl::PolygonOffset(st.polyFactor, st.polyUnits);
+        if (!st.polyOffset && gl::Disable) gl::Disable(GL_POLYGON_OFFSET_FILL);
+    }
     if (!st.depthTest) gl::Disable(GL_DEPTH_TEST);
     if (!st.depthMask) gl::DepthMask(GL_FALSE);
     if (st.scissor)    gl::Enable(GL_SCISSOR_TEST);
@@ -745,6 +762,11 @@ static void replay_bucket_into_local_light_layers(void* scene, int bucket) {
     gl::GetBooleanv(GL_COLOR_WRITEMASK, outer.colorMask);
     outer.scissor   = gl::IsEnabled(GL_SCISSOR_TEST);
     outer.depthTest = gl::IsEnabled(GL_DEPTH_TEST);
+    if (gl::PolygonOffset && gl::GetFloatv) {
+        outer.polyOffset = gl::IsEnabled(GL_POLYGON_OFFSET_FILL);
+        gl::GetFloatv(GL_POLYGON_OFFSET_FACTOR, &outer.polyFactor);
+        gl::GetFloatv(GL_POLYGON_OFFSET_UNITS,  &outer.polyUnits);
+    }
 
     gl::BindFramebuffer(GL_FRAMEBUFFER, g_localLightFbo);
     gl::Viewport(0, 0, g_localLightCaptureSize, g_localLightCaptureSize);
@@ -752,6 +774,28 @@ static void replay_bucket_into_local_light_layers(void* scene, int bucket) {
     if (!outer.depthMask) gl::DepthMask(GL_TRUE);
     gl::ColorMask(GL_FALSE, GL_FALSE, GL_FALSE, GL_FALSE);   // depth-only target
     if (!outer.depthTest) gl::Enable(GL_DEPTH_TEST);
+    // SLOPE-SCALED DEPTH BIAS, the thing "Local slope bias" always claimed to do.
+    //
+    // The control existed, was persisted, defaulted to 1.8 and was shown in the
+    // panel -- but nothing ever read it, and glPolygonOffset was bound in the GL
+    // layer and never called. So the only way to kill self-shadow acne was the
+    // FLAT bias and the minimum-separation slider, and those two are precisely
+    // what detaches a shadow from its caster's feet: a constant depth offset
+    // moves the contact point as well as the acne.
+    //
+    // Polygon offset is the correct tool because it scales with each polygon's
+    // slope in depth space. A floor square-on to the lamp gets almost nothing
+    // (so the shadow still meets the feet), while the steeply-angled polygons
+    // that actually produce acne get as much as they need. Applied at FILL time,
+    // which is what the slider's own help text describes.
+    if (gl::PolygonOffset && g_localLightSlopeBias > 0.0f) {
+        gl::Enable(GL_POLYGON_OFFSET_FILL);
+        // factor = slope term, units = a small constant floor so a polygon
+        // exactly perpendicular to the light still clears its own depth texel.
+        gl::PolygonOffset(g_localLightSlopeBias, 1.0f);
+    } else if (gl::PolygonOffset) {
+        gl::Disable(GL_POLYGON_OFFSET_FILL);
+    }
 
     // BYTE-EXACT save/restore of the camera matrices. Reconstructing them
     // afterwards is what caused the old camera-corruption bugs; this is the

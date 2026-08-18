@@ -289,6 +289,49 @@ void nwn_overlay_render(int viewportW, int viewportH, const NwnOverlayState& st)
                      "band at the border, and does the same at the far plane.\n\n"
                      "Larger = softer and shorter shadows; 0 = the hard cut.");
             }
+            if (st.localFov) {
+                ImGui::SliderFloat("Cone angle", st.localFov, 20.0f, 175.0f, "%.0f deg");
+                help("How wide the cone is that a local light's shadow map "
+                     "covers.\n\n"
+                     "One light gets ONE face aimed down, so this angle decides "
+                     "how far from directly beneath the lamp a shadow can still "
+                     "be cast. Wide (the 170 default) reaches almost to the "
+                     "horizon but spends its texels on a huge area, which both "
+                     "softens the result and stretches shadows at the rim -- a "
+                     "perspective cone spreads texels by roughly 1/cos^3 off "
+                     "axis.\n\n"
+                     "Narrow it to match the base game's shallower look and to "
+                     "concentrate the same resolution on the ground near the "
+                     "lamp. Too narrow and shadows stop abruptly partway across "
+                     "the floor -- Edge fade softens that boundary.");
+            }
+            if (st.localHeight) {
+                ImGui::SliderFloat("Lamp lift", st.localHeight, 0.0f, 20.0f, "%.1f units");
+                help("Raises the point a local shadow is CAST FROM, without "
+                     "moving the light itself.\n\n"
+                     "A wall torch is genuinely low, so a physically correct "
+                     "shadow map rakes a character's shadow a long way across "
+                     "the floor. The base game does not do that -- it behaves "
+                     "as though the light were higher, giving a shorter, "
+                     "steeper shadow. Raise this until the length matches.\n\n"
+                     "Only the shadow geometry changes: brightness, reach and "
+                     "falloff still come from the lamp's real position, so "
+                     "nothing about the lighting shifts. 0 = physically "
+                     "correct.");
+            }
+            if (st.localFalloff) {
+                ImGui::SliderFloat("Local falloff", st.localFalloff, 0.05f, 1.0f, "%.2f");
+                help("How fast a local shadow fades with distance from its "
+                     "lamp.\n\n"
+                     "At 1.00 a shadow's darkness follows the lamp's own "
+                     "brightness exactly, and that range is too wide to tune: "
+                     "shadows across a room are nearly invisible, while raising "
+                     "Local strength to reach them turns the ones at your feet "
+                     "black.\n\n"
+                     "Lower values lift the middle and far field and leave the "
+                     "near field alone. They still fade to nothing at the edge "
+                     "of the light's reach, so no hard ring appears.");
+            }
             if (st.localLift) {
                 ImGui::SliderFloat("Lifts sun shadow", st.localLift, 0.0f, 1.0f, "%.2f");
                 help("How much this light's illumination cancels the SUN's shadow "

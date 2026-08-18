@@ -165,6 +165,9 @@ static unsigned settings_table(SettingRef* out, unsigned max) {
     addf("local_bias",         &g_localLightBias);
     addf("local_lift",         &g_localLightLift);
     addf("local_edge_fade",    &g_localLightEdgeFade);
+    addf("local_falloff",      &g_localLightFalloff);
+    addf("local_fov",          &g_localLightFovDeg);
+    addf("local_height",       &g_localLightHeight);
     addf("local_soft",         &g_localLightSoft);
     addf("local_slope",        &g_localLightSlopeBias);
     addf("local_normal_bias",  &g_localLightNormalBias);
@@ -202,6 +205,9 @@ static void settings_reset_defaults() {
     g_localLightBias           = 0.0f;
     g_localLightLift           = 1.0f;
     g_localLightEdgeFade       = 0.0f;
+    g_localLightFalloff        = 0.50f;
+    g_localLightFovDeg         = 170.0f;
+    g_localLightHeight         = 0.0f;
     g_localLightSoft           = 0.51f;
     g_localLightSlopeBias      = 1.8f;
     g_localLightNormalBias     = 0.0f;

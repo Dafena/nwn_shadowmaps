@@ -33,6 +33,9 @@ struct NwnOverlayState {
     int*   maxLamps      = nullptr;   // how many lights feed the lift (engine allows 128)
     bool*  localDynOnly  = nullptr;   // local lights shadow only the dynamic buckets
     float* localEdgeFade = nullptr;   // fade band at the light frustum border
+    float* localFalloff  = nullptr;   // exponent on lamp attenuation -> shadow opacity
+    float* localFov      = nullptr;   // local shadow cone angle, degrees
+    float* localHeight   = nullptr;   // virtual lamp height for the projection
     float* localSoft     = nullptr;   // PCF radius for the local shadow
     float* localSlope    = nullptr;   // slope-scaled depth offset while filling
     float* localNormalBias= nullptr;  // normal-offset bias in texels

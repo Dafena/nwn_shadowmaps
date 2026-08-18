@@ -244,6 +244,9 @@ static void draw_shadow_overlay_imgui(void* scene) {
     st.localLift     = &g_localLightLift;
     st.localDynOnly  = &g_localLightDynamicOnly;
     st.localEdgeFade = &g_localLightEdgeFade;
+    st.localFalloff  = &g_localLightFalloff;
+    st.localFov      = &g_localLightFovDeg;
+    st.localHeight   = &g_localLightHeight;
     st.localSoft     = &g_localLightSoft;
     st.localSlope    = &g_localLightSlopeBias;
     st.localNormalBias= &g_localLightNormalBias;
@@ -1029,6 +1032,10 @@ static void draw_static_receiver(void* scene) {
                 const GLint se=gl::GetUniformLocation(g_staticReceiverProgram,"nwnLocalEdgeFade");
                 const GLint ss=gl::GetUniformLocation(g_staticReceiverProgram,"nwnLocalSoft");
                 if(se>=0) gl::Uniform1f(se,g_localLightEdgeFade);
+                const GLint sfo=gl::GetUniformLocation(g_staticReceiverProgram,"nwnLocalFalloff");
+                if(sfo>=0) gl::Uniform1f(sfo,g_localLightFalloff);
+                const GLint slf=gl::GetUniformLocation(g_staticReceiverProgram,"nwnLocalLift");
+                if(slf>=0) gl::Uniform1f(slf,g_localLightHeight);
                 if(ss>=0) gl::Uniform1f(ss,g_localLightSoft);
                 const GLint sn=gl::GetUniformLocation(g_staticReceiverProgram,"nwnLocalNormalBias");
                 if(sn>=0) gl::Uniform1f(sn,g_localLightNormalBias);

@@ -1,25 +1,9 @@
 # NWN:EE Linux shadow-map injector
 
-> **NOTE ON `run-shadowmap-*.sh` LAUNCHERS.** The phase-era diagnostic launchers
-> named throughout these documents are NOT included in this repository. They
-> were one-off scripts for specific investigations, most of which are finished,
-> and several drove code paths that no longer exist. The shipped launchers are
-> `run-dev.sh`, `run-nwn.sh`, `run-shadowmap-trace.sh` and `nwn-shadows.sh`;
-> everything the old ones did is reachable through the `NWN_SHADOWMAP_*`
-> environment variables they set.
-
-
-Shadow maps for Neverwinter Nights: Enhanced Edition, injected at runtime.
-Linux (`LD_PRELOAD`) and Windows (`version.dll` proxy) from one source tree.
-The game is not modified — nothing is patched on disk.
-
-Build and install instructions are in `BUILD.md`; third-party code and
-licences in `THIRD_PARTY.md`.
-
-**Status:** works, and is developed against a live game. Sun shadows use
-cascaded shadow maps; local lights get their own maps filled from inside the
-engine's own draw pass. See `CURRENT_TASK.md` for what is confirmed and what is
-still open.
+> **Active workspace:** `csm_claude/refactored/`. The modular build was
+> runtime-confirmed on 2026-08-13. Its exact post-refactor, pre-multilight
+> recovery snapshot is
+> `../savepoints/2026-08-13-refactored-single-light-runtime-confirmed`.
 
 `libnwn_shadowmap.so` is an experimental `LD_PRELOAD` injector for the Linux
 build of Neverwinter Nights: Enhanced Edition.  It intercepts the engine's
@@ -882,10 +866,7 @@ The Performance panel's **Injector shadow targets** value remains a conservative
 estimate for this injector's own shadow and screen-copy textures; it is not
 NWN's total process VRAM.
 
-## HISTORICAL -- Planned local point-light quality modes
-
-> **SUPERSEDED.** Superseded. Local lights use ONE downward face at 170 degrees, filled from inside the engine's own bucket pass. A 1/3/4-face ladder was built on 2026-08-15 and removed the same day in favour of a single face plus a high-resolution map.
-
+### Planned local point-light quality modes
 
 Local-light shadows currently use one wide, downward-facing depth map per
 shadowed light. It is the inexpensive **Contact** mode: useful for a floor
@@ -1229,10 +1210,7 @@ receiver rendering.  A successful test logs:
 [shadowmap] dynamic cascade layer 0 copied from validated primary light depth
 ```
 
-## HISTORICAL -- Next steps
-
-> **SUPERSEDED.** All four items are done. Cascades, the receiver and the caster split all shipped and are confirmed in game on both platforms.
-
+## Next steps
 
 1. Verify the scene-scoped fullscreen camera-inverse fix while orbiting,
    panning, and zooming.

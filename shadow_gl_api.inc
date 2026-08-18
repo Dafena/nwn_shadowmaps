@@ -74,6 +74,14 @@ typedef void          GLvoid;
 #define GL_READ_FRAMEBUFFER_BINDING    0x8CAA
 #define GL_DRAW_FRAMEBUFFER_BINDING    0x8CA6
 #define GL_SAMPLES                     0x80A9
+#define GL_POLYGON_OFFSET_FILL         0x8037
+#define GL_POLYGON_OFFSET_FACTOR       0x8038
+#define GL_POLYGON_OFFSET_UNITS        0x2A00
+#define GL_FRAMEBUFFER_ATTACHMENT_OBJECT_TYPE 0x8CD0
+#define GL_FRAMEBUFFER_ATTACHMENT_OBJECT_NAME 0x8CD1
+#define GL_RENDERBUFFER                0x8D41
+#define GL_TEXTURE                     0x1702
+#define GL_DEPTH                       0x1801
 #define GL_VERSION                     0x1F02
 #define GL_RENDERER                    0x1F01
 #define GL_VENDOR                      0x1F00
@@ -138,6 +146,7 @@ namespace gl {
     void     (*FramebufferTexture2D)(GLenum, GLenum, GLenum, GLuint, GLint)= nullptr;
     void     (*FramebufferTextureLayer)(GLenum, GLenum, GLuint, GLint, GLint)= nullptr;
     GLenum   (*CheckFramebufferStatus)(GLenum)                             = nullptr;
+    void     (*GetFramebufferAttachmentParameteriv)(GLenum,GLenum,GLenum,GLint*) = nullptr;
     // Occlusion queries -- the probe's cheap "did anything draw" instrument.
     void     (*GenQueries)(GLsizei, GLuint*)                               = nullptr;
     void     (*DeleteQueries)(GLsizei, const GLuint*)                      = nullptr;
@@ -180,6 +189,7 @@ static bool bind_gl() {
     GLBIND(GenFramebuffers); GLBIND(DeleteFramebuffers);
     GLBIND(BindFramebuffer); GLBIND(FramebufferTexture2D); GLBIND(FramebufferTextureLayer);
     GLBIND(CheckFramebufferStatus);
+    GLBIND(GetFramebufferAttachmentParameteriv);
     GLBIND(GenQueries);   GLBIND(DeleteQueries); GLBIND(BeginQuery);
     GLBIND(EndQuery);     GLBIND(GetQueryObjectuiv);
     GLBIND(ActiveTexture);GLBIND(GetUniformLocation);

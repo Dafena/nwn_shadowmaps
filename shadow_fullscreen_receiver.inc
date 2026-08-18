@@ -217,6 +217,35 @@ static bool capture_scene_depth(const GLint vp[4]) {
                 loggedPath = true;
                 GLint samples = 0;
                 gl::GetIntegerv(GL_SAMPLES, &samples);
+                // CAN THE PER-FRAME RESOLVE BE ELIMINATED?
+                //
+                // With MSAA on, this blit is a full-screen multisample DEPTH
+                // RESOLVE every frame, and it exists only when antialiasing and
+                // shadows are both on -- which is exactly the superlinear cost
+                // reported. If the depth the engine renders into is a TEXTURE,
+                // the receiver can bind it as GL_TEXTURE_2D_MULTISAMPLE and
+                // texelFetch sample 0 instead, and the resolve goes away
+                // entirely (one sample is ample for a low-frequency shadow
+                // term). If it is a RENDERBUFFER, it cannot be sampled and the
+                // resolve has to be made cheaper some other way. This one line
+                // decides which of those two jobs it is.
+                GLint objType = 0, objName = 0;
+                if (gl::GetFramebufferAttachmentParameteriv) {
+                    while (gl::GetError() != GL_NO_ERROR) {}
+                    gl::GetFramebufferAttachmentParameteriv(
+                        GL_READ_FRAMEBUFFER, GL_DEPTH_ATTACHMENT,
+                        GL_FRAMEBUFFER_ATTACHMENT_OBJECT_TYPE, &objType);
+                    if (gl::GetError() != GL_NO_ERROR) objType = 0;
+                    else gl::GetFramebufferAttachmentParameteriv(
+                        GL_READ_FRAMEBUFFER, GL_DEPTH_ATTACHMENT,
+                        GL_FRAMEBUFFER_ATTACHMENT_OBJECT_NAME, &objName);
+                }
+                fprintf(stderr, "[shadowmap][msaa] read-fbo depth attachment "
+                                "type=0x%x (%s) name=%d samples=%d\n",
+                        objType,
+                        objType == GL_TEXTURE      ? "TEXTURE -- resolve is removable"
+                      : objType == GL_RENDERBUFFER ? "RENDERBUFFER -- not samplable"
+                      : "none/unknown", objName, samples);
                 fprintf(stderr, "[shadowmap][static] scene depth via %s "
                                 "(fbo status 0x%x, blitErr 0x%x, %dx%d, samples=%d, "
                                 "vp origin %d,%d, readFbo=%d drawFbo=%d)\n",
@@ -359,6 +388,7 @@ static void build_static_receiver_program() {
         // Phase 7c: private six-face point-light cube receiver.  It is
         // deliberately separate from the established contact texture above;
         // the test launcher chooses which term is visible.
+        "uniform float nwnLocalFalloff, nwnLocalLift;"
         "uniform float nwnLocalEdgeFade, nwnLocalSoft, nwnLocalNormalBias, nwnLocalMinSep;\n"
         // tan(fov/2) of the capture cone. Was hardcoded 2.747, i.e. tan(70)
         // for the 140-degree default -- which silently became wrong the
@@ -497,7 +527,11 @@ static void build_static_receiver_program() {
         // units below convert against a frustum that was never rendered.
         "float rr=r2;"
         "float zni=max(0.05,min(0.5,rr*0.01));"
-        "float zfi=max(20.0,rr*2.0);"
+                // MIRRORS THE CAPTURE EXACTLY, lift included. The capture raises the
+        // apex by nwnLocalLift and extends its far plane by the same amount;
+        // leaving it out here converts world units against a frustum that was
+        // never rendered, which is what the note above warns about.
+        "float zfi=max(20.0,rr*2.0+max(0.0,nwnLocalLift));"
         "float dzdd=zni*zfi/max(1e-6,dist*dist*(zfi-zni));"
         "float need=nwnLocalLightBias+nwnLocalMinSep*dzdd;"
         "float lit=0.0;"
@@ -513,6 +547,10 @@ static void build_static_receiver_program() {
         "lit/=9.0;}"
         "float fa=d2/(r2*r2);"
         "float att=clamp((1.0-fa)/max(1e-4,nwnLampFalloff.x+nwnLampFalloff.y*fa),0.0,1.0);"
+        // Compress the intensity->opacity range. See g_localLightFalloff.
+        // NOTE this is the LOCAL shadow's att, not the sun-lift one further
+        // down -- that expression carries a DO-NOT-FIX note and is untouched.
+        "att=pow(att,max(0.05,nwnLocalFalloff));"
         "best=max(best,clamp(1.0-lit,0.0,1.0)*att*edge*nwnLocalSlotFade[sl]);}"
         "return vec2(best,cov);}\n"
         // Cube-specific diagnostic operands.  Do not reuse nwnLocalProbe:

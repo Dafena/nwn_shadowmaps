@@ -1,14 +1,5 @@
 # NWN:EE Linux shadow-map injector — implementation checkpoint
 
-> **NOTE ON `run-shadowmap-*.sh` LAUNCHERS.** The phase-era diagnostic launchers
-> named throughout these documents are NOT included in this repository. They
-> were one-off scripts for specific investigations, most of which are finished,
-> and several drove code paths that no longer exist. The shipped launchers are
-> `run-dev.sh`, `run-nwn.sh`, `run-shadowmap-trace.sh` and `nwn-shadows.sh`;
-> everything the old ones did is reachable through the `NWN_SHADOWMAP_*`
-> environment variables they set.
-
-
 ## Local light shadows now fade (2026-08-13, maintainer-confirmed)
 
 Three fades, three different causes, deliberately not merged:
@@ -1490,10 +1481,7 @@ expensive to rediscover.
 - Do not mutate NWN shader files or camera objects. The injector owns targets
   and receiver shader and restores engine state after private passes.
 
-## HISTORICAL -- Next implementation order
-
-> **SUPERSEDED.** The "open thread" here -- the local-light receiver returning lit for every covered texel -- was fixed long ago. Local shadows work on both platforms.
-
+## Next implementation order
 
 Steps 1-4 of the original local-light plan are DONE and validated (census,
 `PartLight` decode, single-light projection, caster capture). What remains:

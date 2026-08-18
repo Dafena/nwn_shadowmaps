@@ -288,6 +288,21 @@ static float    g_localLightLift         = 1.0f;
 // How wide a band at the shadow map's border fades out, in UV. The shadow used
 // to stop dead where the light's frustum ended.
 static float    g_localLightEdgeFade     = 0.0f;
+// LOCAL SHADOW FALLOFF CURVE. Exponent applied to the lamp's attenuation
+// BEFORE it scales the local shadow's opacity. 1.0 is the old behaviour.
+//
+// The local term is (1-lit) * att * edge * slotFade, and att is NWN's own point
+// light INTENSITY falloff. Tying opacity straight to intensity gives a range so
+// wide that no single strength setting works: at the default the shadows across
+// a room are nearly invisible, and turning strength up to compensate makes the
+// ones right next to a lamp (the player's own torch) far too dark.
+//
+// An exponent below 1 compresses that range -- it lifts the mid and far field
+// while leaving att==1 next to the lamp exactly where it was. A constant floor
+// was the obvious alternative and is WRONG: att reaching 0 at the lamp's radius
+// is what fades the shadow out smoothly, and a floor turns that into a hard
+// visible ring at every light's edge. pow() keeps 0 at 0 and 1 at 1.
+static float    g_localLightFalloff      = 0.50f;  // NWN_SHADOWMAP_LOCAL_FALLOFF
 // PCF radius in texels for the local shadow's own outline.
 static float    g_localLightSoft         = 0.51f;   // same default as the sun
 // Slope-scaled depth offset used while FILLING a local shadow map. Kills the
@@ -462,6 +477,20 @@ static int      g_receiverDebug          = 0;      // NWN_SHADOWMAP_RECEIVER_DEB
 // NWN_SHADOWMAP_LOCAL_LIGHT_DIR="x,y,z" / NWN_SHADOWMAP_LOCAL_LIGHT_FOV=deg.
 static float    g_localLightDir[3]       = { 0.0f, 0.0f, -1.0f };
 static float    g_localLightFovDeg       = 170.0f;
+// VIRTUAL LIGHT HEIGHT for the local shadow projection, in world units, 0 = off.
+//
+// A torch on a post is genuinely low, so a physically correct shadow map rakes
+// the caster's shadow a long way across the floor. The base game does not do
+// that -- it fakes a higher light and gets a shorter, steeper shadow. This
+// raises the point the shadow is CAST FROM without moving the light itself.
+//
+// Deliberately applied to the projection ONLY. g_localLightSlotPos keeps the
+// real position, so attenuation, radius culling and the falloff curve stay
+// physical; just the geometry of the shadow changes. The one knock-on is that
+// the receiver derives its bias texel size from the distance to the REAL light,
+// so a very large lift makes that estimate slightly optimistic -- re-check
+// slope bias if shadows start to shimmer after a big change here.
+static float    g_localLightHeight       = 0.0f;
 // NWN_SHADOWMAP_OVERLAY_LEGACY=1 restores the Phase 5b bitmap-font overlay
 // (kept only as an A/B reference; it toggles but has never been visible).
 static bool     g_overlayLegacy          = false;

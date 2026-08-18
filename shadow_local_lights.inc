@@ -560,14 +560,21 @@ static void capture_local_light_shadow(void* scene) {
     for (unsigned i = 0; i < slotCount && slot < (unsigned)kLocalLightFaces; ++i) {
         const float r  = slots[i].radius;
         const float zni = std::max(0.05f, std::min(0.5f, r * 0.01f));
-        const float zfi = std::max(kLocalLightMinRange, r * 2.0f);
+        // The lift extends the far plane too, or raising the light pushes the
+        // floor out of the frustum it is being rendered into.
+        const float zfi = std::max(kLocalLightMinRange,
+                                   r * 2.0f + std::max(0.0f, g_localLightHeight));
         for (int f = 0; f < faces && slot < (unsigned)kLocalLightFaces; ++f, ++slot) {
             float projI[16], viewI[16];
             build_perspective(faceFovY, 1.0f, zni, zfi, projI);
             float aim[3];
             local_face_dir(f, faces, aim);
             v_normalize(aim);
-            const Vec3f lp = { slots[i].pos[0], slots[i].pos[1], slots[i].pos[2], 1.0f };
+            // Cast from a VIRTUAL position raised along world up (NWN is Z-up).
+            // See g_localLightHeight: the light itself does not move, only the
+            // apex of the shadow projection, which is what shortens the shadow.
+            const Vec3f lp = { slots[i].pos[0], slots[i].pos[1],
+                               slots[i].pos[2] + g_localLightHeight, 1.0f };
             build_lookat(lp, aim, viewI);
             mat4_mul(projI, viewI, g_localLightFaceVP[slot]);
             std::memcpy(g_localVisibleView[slot], viewI, sizeof(viewI));
