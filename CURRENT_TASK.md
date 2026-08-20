@@ -1,5 +1,108 @@
 # Current task checkpoint
 
+## 2026-08-18 -- local-light look, and an audit of settings that never applied
+
+Maintainer-confirmed in game on both platforms.
+
+### Local light gained four controls, one of which already existed but did nothing
+
+- **Local falloff** (new, default 0.52). The local shadow term is
+  `(1-lit) * att * edge * slotFade`, and `att` is NWN's own point-light
+  INTENSITY falloff -- so shadow opacity was tied directly to lamp brightness
+  across a full 0..1 range. No single strength worked: at the default, shadows
+  across a room were nearly invisible, and raising strength to reach them
+  blackened the ones at the player's feet. An exponent below 1 compresses that
+  range. A constant floor was the obvious alternative and is WRONG -- `att`
+  reaching 0 at the radius is what fades the shadow out, and a floor turns that
+  into a hard ring at every light's edge. `pow()` keeps 0 at 0 and 1 at 1.
+- **Local slope bias WAS A DEAD CONTROL.** It was declared, persisted, reset to
+  1.8 and drawn in the panel -- and nothing ever read it. `glPolygonOffset` was
+  bound in the GL layer and never called anywhere. So the only way to kill
+  self-shadow acne was flat bias and minimum separation, which are exactly what
+  detaches a shadow from its caster's feet. It now applies a real polygon offset
+  at FILL time, which is what the slider's own help text always claimed.
+- **Cone angle** (new, default 150). 170 was hard-coded and the value was
+  neither persisted nor reachable, so it could not be tried in game.
+- **Lamp lift** (new, default 3.0). A wall torch is genuinely low, so a
+  physically correct shadow map rakes a character's shadow across the floor;
+  the base game fakes a higher light. This raises the apex the shadow is CAST
+  FROM without moving the light, so attenuation, radius culling and falloff stay
+  physical and only the shadow geometry changes.
+
+Defaults matched to the maintainer's in-game tuning: strength 0.77, edge fade
+0.05, falloff 0.52, cone 150, lift 3.0.
+
+### The bug class that dominated the day
+
+**A value duplicated in a second place that did not move when the first one
+did.** Six instances, four of them shipped:
+
+- The receiver rebuilds the light frustum to convert world units to depth and
+  carries an explicit warning that it must mirror the capture exactly. Lamp lift
+  extended the capture's far plane and the mirror was missed -- every bias and
+  separation conversion then ran against a frustum that was never rendered.
+  Position-dependent, and it looked like "the torch stopped lifting the sun's
+  shadow" because an inflated local term simply covered the lifted sun term.
+- `local_layer_accepts_caster()` (WINDOWS ONLY) duplicates that same far-plane
+  formula to cull casters, and did not gain the lift either. The platform split
+  hid it from Linux entirely.
+- `sanitize_local_shadow_map_size()` snapped to `{256,512,1024,2048,4096}` after
+  the panel's ladder became `{1024,2048,4096,8192}`, so choosing **Ultra (8192)
+  silently became 4096** and the top quality setting never did anything.
+- The local map default was 256, a size the ladder no longer offers: the combo's
+  match loop found no entry, fell through to index 0 and DISPLAYED "Low (1024)"
+  while capturing at 256. On Windows, where the control is hidden, a fresh
+  install ran at 256 forever.
+
+### Audit findings (see the 2026-08-18 section in AGENTS.md)
+
+- Settings table held 35 entries against a capacity of 32 hard-coded at three
+  call sites. Bound-checked, so no crash and no error -- `local_alpha_cast`,
+  `local_min_sep` and `local_dyn_only` were simply never saved or loaded.
+- `g_staticWorldEnabled` is declared true ("always on") but was read
+  presence-only, so `run-dev.sh` passing `=0` evaluated TRUE while a shipping
+  build got FALSE. **The world-anchored static map had never been enabled on
+  Windows.**
+- `csm_blend` / `csm_pcf` were declared 0.0 while run-dev.sh passed 0.75 and
+  "Restore defaults" set 0.75; `csm_composite`'s env read was unconditional so
+  its declared default could never apply. Fresh installs got hard cascade
+  boundaries and unfiltered edges, worst on Windows where all three are hidden.
+- "Day/night fade" was editable on both platforms and never registered, so it
+  reverted every launch.
+
+### OPEN: second-story tile flicker
+
+"Hide second story tiles = Auto" drops tiles from the engine's per-frame draw
+list as the player walks under them, and at the boundary that decision
+oscillates. Shadows are built from that same draw list, so they strobe.
+
+TWO APPROACHES WERE TRIED AND BOTH REVERTED -- do not repeat either:
+
+1. **Cast the hidden geometry anyway.** Measured with the full-BSP census:
+   `tri-candidates` stayed at 7669 for every frame of a run where the engine's
+   culled draw count swung 539..10582, so the geometry never leaves the BSP.
+   But `submit_full_bsp_part()` feeds the ENGINE's own mesh buckets, so granting
+   it per frame injected the whole unculled area into the live draw stream and
+   broke rendering. It is safe only as the one-off the world-map rebuild uses.
+2. **Hold the fill through a caster dropout, keyed on draw count.** Cannot work:
+   a whole wall is ~1 draw out of ~300, well inside normal frame-to-frame
+   variation. The maintainer's own debug-2 video already showed `300 draws`
+   constant while entire walls vanished.
+
+Agreed next attempt: cross-fade two static layer sets, triggered by the fill
+itself rather than by any draw-count proxy, entirely inside our own targets so
+the engine's draw stream is never touched.
+
+### Also reverted today
+
+`SetAreaLightDirection` support. `CNWCArea::GetGlobalLightDirection()` is a
+safe read-only query and `CNWCArea::Update(float)` interpolates transitions, so
+the approach is sound -- but the change broke shadows and the setter still did
+not move them. Tree is clean of it. Disassembly notes are in AGENTS.md if it is
+picked up again.
+
+---
+
 ## 2026-08-15 (final) -- CONFIRMED WORKING ON BOTH PLATFORMS
 
 Maintainer-confirmed on Windows AND Linux after this round.

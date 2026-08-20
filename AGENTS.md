@@ -454,6 +454,107 @@ done
 **glibc floor** (currently 2.43, from the build host) -- it is the most common
 reason the library silently does nothing on someone else's distribution.
 
+## MIRRORED VALUES DRIFT. CHECK FOR THE SECOND COPY. (2026-08-18)
+
+Six bugs in one day, all the same shape: a value or formula written down in two
+places, where changing one did not change the other. Nothing here was a hard
+problem -- every one was invisible because the duplicate looked plausible.
+
+Before changing any constant, formula or list, grep for a second copy:
+
+- The receiver rebuilds the local light's frustum (`zni`/`zfi`) to convert world
+  units into depth, and the code carries an explicit warning that it MUST mirror
+  the capture. "Lamp lift" extended the capture's far plane; the mirror was
+  missed, so every bias and separation conversion ran against a frustum that was
+  never rendered.
+- `local_layer_accepts_caster()` in shadow_shader_interposition.inc duplicates
+  that same far-plane formula for a WINDOWS-ONLY caster cull. It did not gain
+  the lift either, and the platform split hid the drift from Linux completely.
+  **Anything you change in the shared capture, grep for under
+  NWN_WIN_LOCAL_FASTPATH.**
+- `sanitize_local_shadow_map_size()` snapped to `{256,512,1024,2048,4096}` long
+  after the panel's ladder became `{1024,2048,4096,8192}`. Every selection goes
+  through it, so "Ultra (8192)" silently became 4096 -- the top quality option
+  did nothing at all. **A snapper must be kept in step with what the user was
+  offered.**
+- The local map default stayed 256 after the ladder dropped 256. The combo's
+  match loop found no entry, fell through to index 0, and DISPLAYED "Low (1024)"
+  while capturing at 256.
+- A default lives in TWO places: the static initialiser in nwn_shadowmap.cpp and
+  `settings_reset_defaults()`. The initialiser is what a fresh install actually
+  runs; the reset block is what the panel calls "default". They disagreed on
+  three settings. A mechanical check is cheap:
+
+      # declared initialiser vs settings_reset_defaults(), for every
+      # variable registered in the settings table
+      grep -oE 'add[fib]\("[a-z_0-9]+",\s*&g_\w+\)' shadow_diagnostics_settings.inc
+
+## SETTINGS: THE TABLE IS BOUND-CHECKED, SO OVERFLOW IS SILENT (2026-08-18)
+
+`settings_table()` fills a caller-provided array and its adders guard with
+`if (n<max)`. The list grew to 35 entries while three call sites still passed a
+hard-coded 32, so the last three settings -- `local_alpha_cast`,
+`local_min_sep`, `local_dyn_only` -- were never saved or loaded. No crash, no
+error, no log line; the controls just forgot themselves every launch.
+
+Capacity is now `kSettingsMax`, used by every call site, plus a startup tripwire
+that prints `TABLE FULL` if the list outgrows it. **Adding a setting means
+adding it to `settings_table()` AND to `settings_reset_defaults()`** -- a panel
+control that is exposed but unregistered silently reverts on every launch, which
+is what "Day/night fade" did.
+
+When a DEFAULT changes, bump `kSettingsVersion` and add the key to
+`settings_retuned()`. A saved .ini always wins over a compiled default, by
+design -- so without this, everyone who ever ran an older build keeps the old
+value forever and never sees the new one.
+
+## PRESENCE-ONLY ENV READS CANNOT EXPRESS A DEFAULT (2026-08-18)
+
+    g_flag = shadow_getenv("NWN_SHADOWMAP_X") != nullptr;   // WRONG for a default
+
+This form ignores the value, so `X=0` means ON, and absence means OFF no matter
+what the declaration says. `g_staticWorldEnabled` is declared `true` with the
+comment "always on" -- and `run-dev.sh` passed `NWN_SHADOWMAP_STATIC_WORLD=0`,
+which the presence test read as ON. Linux therefore ran with the world-anchored
+static map enabled while **a shipping build, which passes no environment at all,
+had it disabled -- it had never once been on for Windows.**
+
+Use the value-testing form for anything with a meaningful default:
+
+    if (const char* s = shadow_getenv("NWN_SHADOWMAP_X")) g_flag = (atoi(s) != 0);
+
+Diagnostics that default off are fine as presence tests. Anything a user's
+experience depends on is not.
+
+## A HIDDEN CONTROL MAKES ITS DEFAULT THE SHIPPED BEHAVIOUR (2026-08-18)
+
+Everything behind `#if !NWN_SHIP` is unreachable on Windows, always. So its
+compiled default IS the Windows behaviour, permanently, with no way for a user
+to discover or correct it. Three settings had defaults left at the opt-in values
+from when the feature was being trialled -- `csm_blend` 0.0, `csm_pcf` 0.0,
+`csm_composite` off -- while run-dev.sh passed 0.75/0.75/on and "Restore
+defaults" said 0.75/0.75/on. Linux development never once ran the compiled
+values. Fresh installs got hard cascade boundaries and unfiltered shadow edges.
+
+**When you hide a control, re-read its default and ask whether that is what you
+want to ship.**
+
+## VERIFY THE ARTIFACT THE USER RUNS, NOT THE ONE YOU BUILT (2026-08-18)
+
+A whole round was lost insisting Windows was up to date. The source was fine and
+`refactored/win/version.dll` was correct -- but the maintainer runs
+`bin/win32/version.dll`, which was three days stale, and a second decoy
+`csm_claude/win/version.dll` (Aug 13, built from the pre-refactor monolith) sat
+at the more obvious path. It has been renamed
+`version.dll.STALE-2026-08-13-DO-NOT-SHIP` so it fails loudly.
+
+Grepping a binary for a string proves the text compiled in. It proves nothing
+about which file is deployed, and nothing about a platform-only code path that
+duplicates a formula instead of sharing it.
+
+**Building Windows means copying to `bin/win32/version.dll` and confirming the
+checksum matches.**
+
 ## LOCAL SHADOW REACH IS THE CAPTURE CONE, NOT THE LIGHT RADIUS (2026-08-15)
 
 Symptom: local shadows formed a small disc around each light, far smaller than

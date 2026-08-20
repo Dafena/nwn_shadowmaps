@@ -857,14 +857,59 @@ no rendering effect.
 
 ### Scope boundary: scripted area-light direction
 
-`SetAreaLightDirection()` is intentionally outside this checkpoint. There is
-no setter hook, timed static-map rebuild, transition texture, or per-bucket
-moving-sun path. The implemented area support is limited to its existing
-directional policy: `SunShadows`, `MoonShadows`, and `ShadowOpacity`.
+`SetAreaLightDirection()` is still outside this checkpoint. There is no setter
+hook, timed static-map rebuild, transition texture, or per-bucket moving-sun
+path. The implemented area support is limited to its existing directional
+policy: `SunShadows`, `MoonShadows`, and `ShadowOpacity`.
+
+An attempt on 2026-08-18 was reverted: it broke shadows and the setter still did
+not move them. The disassembly from that attempt is worth keeping, since the
+approach itself looks sound -- `CNWCArea::GetGlobalLightDirection()` is a
+read-only query (it fetches the area's `CAurObject`, makes one virtual call and
+scales), `CNWCArea::Update(float)` is what interpolates a transition into it,
+and `which==1` selects the sun block. Note the getter's null-object path returns
+exactly `(0,0,1)`, which must be rejected rather than fitted to.
 
 The Performance panel's **Injector shadow targets** value remains a conservative
 estimate for this injector's own shadow and screen-copy textures; it is not
 NWN's total process VRAM.
+
+### Local light panel controls (2026-08-18)
+
+The Local light section is developer-facing and compiles out of shipping builds
+(`#if !NWN_SHIP`), so on Windows these are fixed at their defaults. That makes
+the compiled default the shipped behaviour -- see AGENTS.md.
+
+| Control | Default | What it does |
+| --- | --- | --- |
+| Local strength | 0.77 | Overall darkness of local-light shadows. |
+| Local falloff | 0.52 | Exponent on the lamp's attenuation before it scales shadow opacity. See below. |
+| Cone angle | 150 deg | Width of the single downward face each light captures. Narrower concentrates the same texels nearer the lamp. |
+| Lamp lift | 3.0 units | Raises the point the shadow is cast from, without moving the light. |
+| Local slope bias | 1.8 | Slope-scaled depth offset applied while filling the map. |
+| Edge fade | 0.05 | Softens the shadow at the border of the light's cone. |
+| No self-shadow | 0.30 | Minimum separation, in world units, before a surface shadows itself. |
+
+**Local falloff.** The local term is `(1-lit) * att * edge * slotFade`, where
+`att` is NWN's own point-light *intensity* falloff. Tying shadow opacity
+directly to lamp brightness spans a range too wide for one strength setting:
+shadows across a room are nearly invisible, while raising strength to reach them
+blackens the ones at the player's feet. An exponent below 1 compresses that.
+A constant floor would be wrong -- `att` reaching 0 at the lamp's radius is what
+fades the shadow out smoothly, and a floor turns that into a hard visible ring
+at every light's edge.
+
+**Lamp lift.** A wall torch is genuinely low, so a physically correct shadow map
+rakes a character's shadow a long way across the floor. The base game behaves as
+though the light were higher. This raises only the apex of the shadow
+projection: brightness, reach and falloff still come from the lamp's real
+position, so nothing about the lighting changes. `0` is physically correct.
+
+**Local slope bias** was a dead control until 2026-08-18 -- declared, persisted
+and drawn in the panel while nothing read it, and `glPolygonOffset` was bound in
+the GL layer and never called. Flat bias and separation were the only tools
+available, and those are exactly what detaches a shadow from its caster's feet.
+It now applies a real polygon offset at fill time.
 
 ### Planned local point-light quality modes
 
