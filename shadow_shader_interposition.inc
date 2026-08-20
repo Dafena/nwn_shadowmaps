@@ -412,7 +412,18 @@ static bool inject_oit_foliage_branch(std::string& source) {
         "uniform int nwnOitDepthPass;\n"
         "uniform int nwnOitOpaqueCore;\n"
         "uniform int nwnA2cPass;\n"
-        "uniform float nwnA2cMaxAlpha;";
+        "uniform sampler2DArrayShadow nwnA2cStaticDepth;\n"
+        "uniform sampler2DArrayShadow nwnA2cDynamicDepth;\n"
+        "uniform mat4 nwnA2cCameraVPInv;\n"
+        "uniform mat4 nwnA2cCameraView;\n"
+        "uniform mat4 nwnA2cLightVP[4];\n"
+        "uniform vec4 nwnA2cClipFar;\n"
+        "uniform vec4 nwnA2cViewport;\n"
+        "uniform int nwnA2cDynamicLayers;\n"
+        "uniform float nwnA2cShadowStrength;\n"
+        "uniform float nwnA2cShadowBias;\n"
+        "uniform float nwnA2cShadowBlend;\n"
+        "uniform float nwnA2cShadowPcf;";
     const size_t outputAt = patched.find(kOutput);
     if (outputAt == std::string::npos) return false;
     patched.replace(outputAt, std::strlen(kOutput), kOutputs);
@@ -461,13 +472,46 @@ static bool inject_oit_foliage_branch(std::string& source) {
         "        nwnOitSum = vec4(nwnOitAlpha, 0.0, 0.0, 1.0);\n"
         "        nwnOitTranslucence = vec4(0.0, 0.0, 0.0, 1.0 - nwnOitAlpha);\n"
         "    } else if (nwnA2cPass != 0) {\n"
-        "        float nwnA2cAlpha = clamp(gl_FragColor.a, 0.0, 1.0);\n"
-        "        if (nwnA2cAlpha < 0.99)\n"
-        "            gl_FragColor.a = min(nwnA2cAlpha, nwnA2cMaxAlpha);\n"
+        "        gl_FragColor.rgb *= nwnA2cDirectionalShadow();\n"
         "    } else if (nwnOitOpaqueCore != 0) {\n"
         "        gl_FragColor.a = 1.0;\n"
         "    }\n";
     patched.insert(close, kBody);
+
+    static const char* kA2cShadowHelpers =
+        "float nwnA2cLayerLit(int layer, vec4 worldPos) {\n"
+        "    vec4 lp = nwnA2cLightVP[layer] * worldPos;\n"
+        "    if (lp.w <= 0.0) return 1.0;\n"
+        "    vec3 s = lp.xyz / lp.w * 0.5 + 0.5;\n"
+        "    if (s.x <= 0.0 || s.x >= 1.0 || s.y <= 0.0 || s.y >= 1.0 || s.z <= 0.0 || s.z >= 1.0) return 1.0;\n"
+        "    vec2 texel = 1.0 / vec2(textureSize(nwnA2cStaticDepth, 0).xy);\n"
+        "    float total = 0.0;\n"
+        "    for (int y=-1; y<=1; ++y) for (int x=-1; x<=1; ++x) {\n"
+        "        vec2 uv = s.xy + vec2(float(x),float(y)) * texel * nwnA2cShadowPcf;\n"
+        "        float a = texture(nwnA2cStaticDepth, vec4(uv,float(layer),s.z-nwnA2cShadowBias));\n"
+        "        float b = layer < nwnA2cDynamicLayers ? texture(nwnA2cDynamicDepth, vec4(uv,float(layer),s.z-nwnA2cShadowBias)) : 1.0;\n"
+        "        total += min(a,b);\n"
+        "    }\n"
+        "    return total / 9.0;\n"
+        "}\n"
+        "float nwnA2cDirectionalShadow() {\n"
+        "    if (nwnA2cShadowStrength <= 0.0) return 1.0;\n"
+        "    vec2 uv = (gl_FragCoord.xy - nwnA2cViewport.xy) / nwnA2cViewport.zw;\n"
+        "    vec4 w = nwnA2cCameraVPInv * vec4(uv*2.0-1.0, gl_FragCoord.z*2.0-1.0, 1.0);\n"
+        "    if (abs(w.w) < 1e-6) return 1.0;\n"
+        "    w /= w.w;\n"
+        "    float z = -((nwnA2cCameraView*w).z);\n"
+        "    if (z <= 0.0 || z > nwnA2cClipFar.w) return 1.0;\n"
+        "    int layer = z <= nwnA2cClipFar.x ? 0 : (z <= nwnA2cClipFar.y ? 1 : (z <= nwnA2cClipFar.z ? 2 : 3));\n"
+        "    float lit = nwnA2cLayerLit(layer,w);\n"
+        "    if (nwnA2cShadowBlend > 0.0 && layer < 3) {\n"
+        "        float edge = layer==0 ? nwnA2cClipFar.x : (layer==1 ? nwnA2cClipFar.y : nwnA2cClipFar.z);\n"
+        "        float from = max(0.0, edge-nwnA2cShadowBlend);\n"
+        "        if (z > from) lit = mix(lit,nwnA2cLayerLit(layer+1,w),smoothstep(from,edge,z));\n"
+        "    }\n"
+        "    return 1.0 - nwnA2cShadowStrength * (1.0-lit);\n"
+        "}\n";
+    patched.insert(mainAt, kA2cShadowHelpers);
     source.swap(patched);
     return true;
 }

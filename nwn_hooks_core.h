@@ -134,3 +134,10 @@ void nwn_oit_note_texture_bind(unsigned int unit, const char* name);
 // recursion guards. OIT owns the surrounding GL target/state; this function
 // owns only the engine call and reports whether it returned safely.
 bool nwn_core_replay_bucket(void* scene, int bucket);
+
+// Bind/upload the current directional CSM state for one source-classified A2C
+// foliage draw. The shadow module owns the cascade textures and matrices; the
+// A2C module owns draw classification and brackets this call with the matching
+// end function so borrowed texture units are restored immediately.
+bool nwn_shadow_begin_a2c_receiver(unsigned int program);
+void nwn_shadow_end_a2c_receiver(void);

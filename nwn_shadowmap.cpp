@@ -1953,6 +1953,132 @@ static bool set_light_view_direct(const Vec3f& eye, const float dir[3]) {
 #include "shadow_trace_cascade.inc"
 #include "shadow_local_lights.inc"
 
+// ---------------------------------------------------------------------------
+// Direct CSM receiver for A2C foliage.
+//
+// The ordinary receiver reconstructs one surface from the engine's resolved
+// single-sample depth. That cannot represent an A2C pixel containing foliage
+// and background samples simultaneously. Source-classified foliage therefore
+// samples the same cascade arrays in its own fragment shader, before coverage
+// is resolved. The OIT/A2C module brackets exactly one native draw with these
+// calls; all borrowed texture state is restored immediately afterwards.
+// ---------------------------------------------------------------------------
+namespace {
+struct A2cShadowLocations {
+    GLuint program = 0;
+    GLint staticDepth = -1, dynamicDepth = -1;
+    GLint cameraVpInv = -1, cameraView = -1, lightVp = -1;
+    GLint clipFar = -1, viewport = -1, dynamicLayers = -1;
+    GLint strength = -1, bias = -1, blend = -1, pcf = -1;
+};
+A2cShadowLocations g_a2cShadowLocations[192] = {};
+unsigned g_a2cShadowLocationCount = 0;
+bool g_a2cShadowBorrowed = false;
+GLint g_a2cShadowOldActive = GL_TEXTURE0;
+GLint g_a2cShadowOldStatic = 0;
+GLint g_a2cShadowOldDynamic = 0;
+
+A2cShadowLocations* a2c_shadow_locations(GLuint program) {
+    for (unsigned i = 0; i < g_a2cShadowLocationCount; ++i)
+        if (g_a2cShadowLocations[i].program == program)
+            return &g_a2cShadowLocations[i];
+    if (g_a2cShadowLocationCount >=
+        sizeof(g_a2cShadowLocations) / sizeof(g_a2cShadowLocations[0]))
+        return nullptr;
+    A2cShadowLocations& l = g_a2cShadowLocations[g_a2cShadowLocationCount++];
+    l.program = program;
+    l.staticDepth   = gl::GetUniformLocation(program, "nwnA2cStaticDepth");
+    l.dynamicDepth  = gl::GetUniformLocation(program, "nwnA2cDynamicDepth");
+    l.cameraVpInv   = gl::GetUniformLocation(program, "nwnA2cCameraVPInv");
+    l.cameraView    = gl::GetUniformLocation(program, "nwnA2cCameraView");
+    l.lightVp       = gl::GetUniformLocation(program, "nwnA2cLightVP[0]");
+    l.clipFar       = gl::GetUniformLocation(program, "nwnA2cClipFar");
+    l.viewport      = gl::GetUniformLocation(program, "nwnA2cViewport");
+    l.dynamicLayers = gl::GetUniformLocation(program, "nwnA2cDynamicLayers");
+    l.strength      = gl::GetUniformLocation(program, "nwnA2cShadowStrength");
+    l.bias          = gl::GetUniformLocation(program, "nwnA2cShadowBias");
+    l.blend         = gl::GetUniformLocation(program, "nwnA2cShadowBlend");
+    l.pcf           = gl::GetUniformLocation(program, "nwnA2cShadowPcf");
+    return &l;
+}
+} // namespace
+
+bool nwn_shadow_begin_a2c_receiver(unsigned int rawProgram) {
+    const GLuint program = (GLuint)rawProgram;
+    if (!program || g_a2cShadowBorrowed || !g_receiverEnabled ||
+        !g_cascadeCompositeShadows || !g_cascadeCsmStaticReceiver ||
+        !g_cascadeTargetsUsable || !g_cascadeStaticTex ||
+        !g_shadowFrameContext.valid || !g_cascadeMath.valid ||
+        !gl::GetUniformLocation || !gl::Uniform1i || !gl::Uniform1f ||
+        !gl::Uniform4f || !gl::UniformMatrix4fv || !gl::ActiveTexture ||
+        !gl::BindTexture || !gl::GetIntegerv)
+        return false;
+
+    A2cShadowLocations* l = a2c_shadow_locations(program);
+    if (!l || l->staticDepth < 0 || l->cameraVpInv < 0 ||
+        l->cameraView < 0 || l->lightVp < 0 || l->clipFar < 0 ||
+        l->viewport < 0 || l->strength < 0)
+        return false;
+
+    constexpr int kDynamicUnit = 29;
+    constexpr int kStaticUnit = 30;
+    gl::GetIntegerv(GL_ACTIVE_TEXTURE, &g_a2cShadowOldActive);
+    gl::ActiveTexture(GL_TEXTURE0 + kStaticUnit);
+    gl::GetIntegerv(GL_TEXTURE_BINDING_2D_ARRAY, &g_a2cShadowOldStatic);
+    gl::BindTexture(GL_TEXTURE_2D_ARRAY, g_cascadeStaticTex);
+    gl::ActiveTexture(GL_TEXTURE0 + kDynamicUnit);
+    gl::GetIntegerv(GL_TEXTURE_BINDING_2D_ARRAY, &g_a2cShadowOldDynamic);
+    gl::BindTexture(GL_TEXTURE_2D_ARRAY, g_cascadeDynamicTex);
+    gl::ActiveTexture((GLenum)g_a2cShadowOldActive);
+    g_a2cShadowBorrowed = true;
+
+    gl::Uniform1i(l->staticDepth, kStaticUnit);
+    if (l->dynamicDepth >= 0) gl::Uniform1i(l->dynamicDepth, kDynamicUnit);
+    gl::UniformMatrix4fv(l->cameraVpInv, 1, GL_FALSE,
+                         g_shadowFrameContext.viewProjectionInverse);
+    gl::UniformMatrix4fv(l->cameraView, 1, GL_FALSE,
+                         g_shadowFrameContext.view);
+    gl::UniformMatrix4fv(l->lightVp, kCascadeCount, GL_FALSE,
+                         &g_cascadeMath.lightVP[0][0]);
+    gl::Uniform4f(l->clipFar, g_cascadeMath.clipFar[0],
+                  g_cascadeMath.clipFar[1], g_cascadeMath.clipFar[2],
+                  g_cascadeMath.clipFar[3]);
+    gl::Uniform4f(l->viewport,
+                  (GLfloat)g_shadowFrameContext.viewport[0],
+                  (GLfloat)g_shadowFrameContext.viewport[1],
+                  (GLfloat)g_shadowFrameContext.viewport[2],
+                  (GLfloat)g_shadowFrameContext.viewport[3]);
+    if (l->dynamicLayers >= 0)
+        gl::Uniform1i(l->dynamicLayers,
+                      g_cascadeCsmDynamicReceiver ? g_cascadeDynamicLayers : 0);
+    gl::Uniform1f(l->strength, effective_area_sun_strength());
+    if (l->bias >= 0)  gl::Uniform1f(l->bias, g_cascadeReceiverBias);
+    if (l->blend >= 0) gl::Uniform1f(l->blend, g_cascadeBlendWidth);
+    if (l->pcf >= 0)   gl::Uniform1f(l->pcf, g_cascadePcfRadius);
+
+    static bool reported = false;
+    if (!reported) {
+        reported = true;
+        fprintf(stderr, "[a2c][shadow] direct per-fragment CSM receiver active: "
+                        "program=%u static=%u dynamic=%u cascades=%d/%d\n",
+                program, g_cascadeStaticTex, g_cascadeDynamicTex,
+                g_cascadeActiveCount, g_cascadeDynamicLayers);
+    }
+    return true;
+}
+
+void nwn_shadow_end_a2c_receiver(void) {
+    if (!g_a2cShadowBorrowed || !gl::ActiveTexture || !gl::BindTexture) return;
+    constexpr int kDynamicUnit = 29;
+    constexpr int kStaticUnit = 30;
+    gl::ActiveTexture(GL_TEXTURE0 + kDynamicUnit);
+    gl::BindTexture(GL_TEXTURE_2D_ARRAY, (GLuint)g_a2cShadowOldDynamic);
+    gl::ActiveTexture(GL_TEXTURE0 + kStaticUnit);
+    gl::BindTexture(GL_TEXTURE_2D_ARRAY, (GLuint)g_a2cShadowOldStatic);
+    gl::ActiveTexture((GLenum)g_a2cShadowOldActive);
+    g_a2cShadowBorrowed = false;
+}
+
 bool nwn_core_replay_bucket(void* scene, int bucket) {
     if (!scene || !eng::SceneRenderDrawBucket) return false;
     const bool priorReplay = g_cascadeReplayActive;

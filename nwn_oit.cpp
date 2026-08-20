@@ -380,8 +380,7 @@ void read_settings() {
                 g_visibleFinalizeBucket);
     if (g_foliageA2c)
         fprintf(stderr, "[a2c] foliage alpha-to-coverage requested; it will "
-                        "activate only on a live framebuffer with samples>=2. "
-                        "Soft texels reserve one sample for later emitters.\n");
+                        "activate only on a live framebuffer with samples>=2.\n");
     if (!g_enabled) return;
     g_testAlpha = env_float("NWN_OIT_TEST_ALPHA", 0.35f);
     if (g_testAlpha < 0.0f) g_testAlpha = 0.0f;
@@ -684,7 +683,6 @@ struct FoliageProgram {
     GLint  oitDepthPassLoc;
     GLint  oitOpaqueCoreLoc;
     GLint  a2cPassLoc;
-    GLint  a2cMaxAlphaLoc;
     unsigned fragmentGeneration;
 };
 FoliageProgram g_foliagePrograms[192] = {};
@@ -771,7 +769,6 @@ FoliageProgram* foliage_program(GLuint program) {
         entry->oitDepthPassLoc = -1;
         entry->oitOpaqueCoreLoc = -1;
         entry->a2cPassLoc = -1;
-        entry->a2cMaxAlphaLoc = -1;
     }
     if (entry->fragment ||
         entry->fragmentGeneration == g_foliageFragmentCount)
@@ -801,8 +798,6 @@ FoliageProgram* foliage_program(GLuint program) {
                 ? g.GetUniformLocation(program, "nwnOitOpaqueCore") : -1;
             entry->a2cPassLoc = g.GetUniformLocation
                 ? g.GetUniformLocation(program, "nwnA2cPass") : -1;
-            entry->a2cMaxAlphaLoc = g.GetUniformLocation
-                ? g.GetUniformLocation(program, "nwnA2cMaxAlpha") : -1;
             fprintf(stderr, "[oit][foliage] program=%u joined to source-classified "
                             "fragment=%u cutoffLoc=%d oitPassLoc=%d\n",
                     (unsigned)program, (unsigned)entry->fragment,
@@ -902,8 +897,7 @@ void census_observe_draw() {
 
     if (g_foliageA2c && (bucket == 1 || bucket == 3) && foliage &&
         foliageProgram->alphaDiscardLoc >= 0 &&
-        foliageProgram->a2cPassLoc >= 0 &&
-        foliageProgram->a2cMaxAlphaLoc >= 0) {
+        foliageProgram->a2cPassLoc >= 0) {
         GLint samples = 0;
         g.GetIntegerv(GL_SAMPLES, &samples);
         static GLint reportedSamples = -1;
@@ -933,13 +927,8 @@ void census_observe_draw() {
                 g.Enable(GL_SAMPLE_ALPHA_TO_COVERAGE);
                 g_originalDepthOverride = true;
             }
-            // Preserve A2C depth against characters/static meshes, but keep one
-            // sample available for emitters behind genuinely soft texels. Fully
-            // opaque alpha remains 1.0 in the shader and still occludes all
-            // samples. At 8x this caps only soft coverage at 7/8.
-            g.Uniform1f(foliageProgram->a2cMaxAlphaLoc,
-                        1.0f - 1.0f / (float)samples);
             g.Uniform1i(foliageProgram->a2cPassLoc, 1);
+            nwn_shadow_begin_a2c_receiver((unsigned int)prog);
             g_originalA2cLoc = foliageProgram->a2cPassLoc;
         }
     } else if (g_foliageVisible && (bucket == 1 || bucket == 3) && foliage &&
@@ -1072,6 +1061,7 @@ void restore_original_draw_state() {
 }
 
 void census_observe_draw_after() {
+    nwn_shadow_end_a2c_receiver();
     restore_original_draw_state();
     g_immediateProgram = nullptr;
 }
