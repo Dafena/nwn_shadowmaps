@@ -1970,6 +1970,12 @@ struct A2cShadowLocations {
     GLint cameraVpInv = -1, cameraView = -1, lightVp = -1;
     GLint clipFar = -1, viewport = -1, dynamicLayers = -1;
     GLint strength = -1, bias = -1, blend = -1, pcf = -1;
+    GLint localDepth = -1, localVp = -1, localPos = -1;
+    GLint localRadius = -1, localFade = -1, localSlots = -1;
+    GLint localStrength = -1, localBias = -1, localEdgeFade = -1;
+    GLint localSoft = -1, localNormalBias = -1, localMinSep = -1;
+    GLint localTanHalfFov = -1, localLift = -1, localFalloff = -1;
+    GLint lampFalloff = -1;
 };
 A2cShadowLocations g_a2cShadowLocations[192] = {};
 unsigned g_a2cShadowLocationCount = 0;
@@ -1977,6 +1983,7 @@ bool g_a2cShadowBorrowed = false;
 GLint g_a2cShadowOldActive = GL_TEXTURE0;
 GLint g_a2cShadowOldStatic = 0;
 GLint g_a2cShadowOldDynamic = 0;
+GLint g_a2cShadowOldLocal = 0;
 
 A2cShadowLocations* a2c_shadow_locations(GLuint program) {
     for (unsigned i = 0; i < g_a2cShadowLocationCount; ++i)
@@ -1999,6 +2006,22 @@ A2cShadowLocations* a2c_shadow_locations(GLuint program) {
     l.bias          = gl::GetUniformLocation(program, "nwnA2cShadowBias");
     l.blend         = gl::GetUniformLocation(program, "nwnA2cShadowBlend");
     l.pcf           = gl::GetUniformLocation(program, "nwnA2cShadowPcf");
+    l.localDepth    = gl::GetUniformLocation(program, "nwnA2cLocalDepth");
+    l.localVp       = gl::GetUniformLocation(program, "nwnA2cLocalVP[0]");
+    l.localPos      = gl::GetUniformLocation(program, "nwnA2cLocalPos[0]");
+    l.localRadius   = gl::GetUniformLocation(program, "nwnA2cLocalRadius[0]");
+    l.localFade     = gl::GetUniformLocation(program, "nwnA2cLocalFade[0]");
+    l.localSlots    = gl::GetUniformLocation(program, "nwnA2cLocalSlots");
+    l.localStrength = gl::GetUniformLocation(program, "nwnA2cLocalStrength");
+    l.localBias     = gl::GetUniformLocation(program, "nwnA2cLocalBias");
+    l.localEdgeFade = gl::GetUniformLocation(program, "nwnA2cLocalEdgeFade");
+    l.localSoft     = gl::GetUniformLocation(program, "nwnA2cLocalSoft");
+    l.localNormalBias = gl::GetUniformLocation(program, "nwnA2cLocalNormalBias");
+    l.localMinSep   = gl::GetUniformLocation(program, "nwnA2cLocalMinSep");
+    l.localTanHalfFov = gl::GetUniformLocation(program, "nwnA2cLocalTanHalfFov");
+    l.localLift     = gl::GetUniformLocation(program, "nwnA2cLocalLift");
+    l.localFalloff  = gl::GetUniformLocation(program, "nwnA2cLocalFalloff");
+    l.lampFalloff   = gl::GetUniformLocation(program, "nwnA2cLampFalloff");
     return &l;
 }
 } // namespace
@@ -2020,6 +2043,7 @@ bool nwn_shadow_begin_a2c_receiver(unsigned int rawProgram) {
         l->viewport < 0 || l->strength < 0)
         return false;
 
+    constexpr int kLocalUnit = 28;
     constexpr int kDynamicUnit = 29;
     constexpr int kStaticUnit = 30;
     gl::GetIntegerv(GL_ACTIVE_TEXTURE, &g_a2cShadowOldActive);
@@ -2029,6 +2053,13 @@ bool nwn_shadow_begin_a2c_receiver(unsigned int rawProgram) {
     gl::ActiveTexture(GL_TEXTURE0 + kDynamicUnit);
     gl::GetIntegerv(GL_TEXTURE_BINDING_2D_ARRAY, &g_a2cShadowOldDynamic);
     gl::BindTexture(GL_TEXTURE_2D_ARRAY, g_cascadeDynamicTex);
+    gl::ActiveTexture(GL_TEXTURE0 + kLocalUnit);
+    gl::GetIntegerv(GL_TEXTURE_BINDING_2D_ARRAY, &g_a2cShadowOldLocal);
+    const bool localReady = g_localLightReceiver && g_localLightTargetUsable &&
+                            g_localLightDepthTex && g_haveLocalLightVP &&
+                            g_localDeselectFadeShown > 0.0005f;
+    gl::BindTexture(GL_TEXTURE_2D_ARRAY, localReady ? g_localLightDepthTex
+                                                    : g_cascadeStaticTex);
     gl::ActiveTexture((GLenum)g_a2cShadowOldActive);
     g_a2cShadowBorrowed = true;
 
@@ -2056,6 +2087,47 @@ bool nwn_shadow_begin_a2c_receiver(unsigned int rawProgram) {
     if (l->blend >= 0) gl::Uniform1f(l->blend, g_cascadeBlendWidth);
     if (l->pcf >= 0)   gl::Uniform1f(l->pcf, g_cascadePcfRadius);
 
+    if (l->localDepth >= 0) gl::Uniform1i(l->localDepth, kLocalUnit);
+    if (l->localVp >= 0)
+        gl::UniformMatrix4fv(l->localVp, kLocalLightFaces, GL_FALSE,
+                             &g_localLightFaceVP[0][0]);
+    float localPos[kLocalLightFaces * 4] = {};
+    float localRadius[kLocalLightFaces] = {};
+    float localFade[kLocalLightFaces] = {};
+    for (unsigned i = 0; i < (unsigned)kLocalLightFaces; ++i) {
+        localPos[i*4+0] = g_localLightSlotPos[i][0];
+        localPos[i*4+1] = g_localLightSlotPos[i][1];
+        localPos[i*4+2] = g_localLightSlotPos[i][2];
+        localPos[i*4+3] = 1.0f;
+        localRadius[i] = g_localLightSlotRadius[i];
+        localFade[i] = (g_localLightSlotFade[i] > 0.0f &&
+                        g_localLightSlotFade[i] <= 1.0f)
+                     ? g_localLightSlotFade[i] : 1.0f;
+    }
+    if (l->localPos >= 0 && gl::Uniform4fv)
+        gl::Uniform4fv(l->localPos, kLocalLightFaces, localPos);
+    if (l->localRadius >= 0 && gl::Uniform1fv)
+        gl::Uniform1fv(l->localRadius, kLocalLightFaces, localRadius);
+    if (l->localFade >= 0 && gl::Uniform1fv)
+        gl::Uniform1fv(l->localFade, kLocalLightFaces, localFade);
+    if (l->localSlots >= 0)
+        gl::Uniform1i(l->localSlots, localReady ? (GLint)g_localLightSlotCount : 0);
+    if (l->localStrength >= 0)
+        gl::Uniform1f(l->localStrength, localReady
+            ? g_localLightStrength * g_engineFadeLevel * g_localDeselectFadeShown : 0.0f);
+    if (l->localBias >= 0) gl::Uniform1f(l->localBias, g_localLightBias);
+    if (l->localEdgeFade >= 0) gl::Uniform1f(l->localEdgeFade, g_localLightEdgeFade);
+    if (l->localSoft >= 0) gl::Uniform1f(l->localSoft, g_localLightSoft);
+    if (l->localNormalBias >= 0) gl::Uniform1f(l->localNormalBias, g_localLightNormalBias);
+    if (l->localMinSep >= 0) gl::Uniform1f(l->localMinSep, g_localLightMinSep);
+    if (l->localTanHalfFov >= 0) gl::Uniform1f(l->localTanHalfFov,
+        (float)std::tan(local_face_fov_deg(local_source_faces()) * 3.14159265f / 360.0f));
+    if (l->localLift >= 0) gl::Uniform1f(l->localLift, g_localLightHeight);
+    if (l->localFalloff >= 0) gl::Uniform1f(l->localFalloff, g_localLightFalloff);
+    if (l->lampFalloff >= 0) gl::Uniform2f(l->lampFalloff,
+                                           g_lightMaxIntensityInv,
+                                           g_lightFalloffFactor);
+
     static bool reported = false;
     if (!reported) {
         reported = true;
@@ -2064,17 +2136,27 @@ bool nwn_shadow_begin_a2c_receiver(unsigned int rawProgram) {
                 program, g_cascadeStaticTex, g_cascadeDynamicTex,
                 g_cascadeActiveCount, g_cascadeDynamicLayers);
     }
+    static bool reportedLocal = false;
+    if (localReady && !reportedLocal) {
+        reportedLocal = true;
+        fprintf(stderr, "[a2c][shadow] direct per-fragment local receiver active: "
+                        "program=%u depth=%u slots=%u\n",
+                program, g_localLightDepthTex, g_localLightSlotCount);
+    }
     return true;
 }
 
 void nwn_shadow_end_a2c_receiver(void) {
     if (!g_a2cShadowBorrowed || !gl::ActiveTexture || !gl::BindTexture) return;
+    constexpr int kLocalUnit = 28;
     constexpr int kDynamicUnit = 29;
     constexpr int kStaticUnit = 30;
     gl::ActiveTexture(GL_TEXTURE0 + kDynamicUnit);
     gl::BindTexture(GL_TEXTURE_2D_ARRAY, (GLuint)g_a2cShadowOldDynamic);
     gl::ActiveTexture(GL_TEXTURE0 + kStaticUnit);
     gl::BindTexture(GL_TEXTURE_2D_ARRAY, (GLuint)g_a2cShadowOldStatic);
+    gl::ActiveTexture(GL_TEXTURE0 + kLocalUnit);
+    gl::BindTexture(GL_TEXTURE_2D_ARRAY, (GLuint)g_a2cShadowOldLocal);
     gl::ActiveTexture((GLenum)g_a2cShadowOldActive);
     g_a2cShadowBorrowed = false;
 }
