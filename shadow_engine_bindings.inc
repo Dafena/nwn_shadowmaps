@@ -47,6 +47,11 @@ namespace eng {
     // Windows: nwmain.exe exports all three but exports NOTHING of CNWCArea.
     using AurShadowToggle_t      = void (*)(void* aurObject);
     using AurSetDynProjLight_t   = void (*)(void* aurObject);
+#ifndef _WIN32
+    using AurTextureBindInUnit_t = void (*)(void* texture, unsigned int unit,
+                                            int controllerIndex);
+    using AurTextureGetName_t    = const char* (*)(void* texture);
+#endif
 
     SceneRender_t           SceneRender           = nullptr;
     ManageSceneBSP_t        ManageSceneBSP        = nullptr;
@@ -93,6 +98,10 @@ namespace eng {
     MtxPerspective_t        MtxPerspective        = nullptr;   // hooked
     AreaUpdateShadowingLights_t AreaUpdateShadowingLights = nullptr;
     AurShadowToggle_t       AurEnableShadowing    = nullptr;
+#ifndef _WIN32
+    AurTextureBindInUnit_t  AurTextureBindInUnit  = nullptr;
+    AurTextureGetName_t     AurTextureGetName     = nullptr;
+#endif
     AurShadowToggle_t       AurDisableShadowing   = nullptr;
     AurSetDynProjLight_t    AurSetDynProjLight    = nullptr;
     // GLRender::SetMatrixMode(Aurora::AuroraTransStates). The enum VALUES are
@@ -209,6 +218,10 @@ static const struct { const char* mangled; void** slot; bool required; } kBindin
     {"_Z10SetLightGLPK9PartLightif",           (void**)&eng::SetLightGL,           false},
     {"_Z22GetLightAdjustedRadiusPK9PartLight", (void**)&eng::GetLightAdjustedRadius, false},
     {"_Z17GetLightFadeSpeedPK9PartLight",      (void**)&eng::GetLightFadeSpeed,      false},
+#ifndef _WIN32
+    {"_ZN11CAurTexture10BindInUnitEji", (void**)&eng::AurTextureBindInUnit, false},
+    {"_ZN11CAurTexture7GetNameEv",      (void**)&eng::AurTextureGetName,    false},
+#endif
     {"SDL_PollEvent",                  (void**)&eng::SdlPollEventThunk,     false},
     // GLRender matrix entry points. Hooked to capture the renderer instance +
     // camera state; called directly to substitute the light's transform.
@@ -295,4 +308,3 @@ static const int    MTX_ENTRIES = 4;    // (m_nCurrentMatrix - m_aurMtxStack)/88
 static const size_t MTX_MAT_OFF = 24;
 static const int    MTX_PROJ    = 0;    // entry 0 held the 45deg/0.1/45 frustum
 static const int    MTX_VIEW    = 1;    // entry 1 held R*T(-eye)
-

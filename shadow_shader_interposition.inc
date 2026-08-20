@@ -390,14 +390,97 @@ static bool inject_marker(std::string& source) {
     return false;
 }
 
+// Add the accumulation side of the foliage experiment without activating it.
+// The stock fragment template has one compatibility output and centralises
+// alpha testing through ALPHA_DISCARD_VALUE, which gives us two stable source
+// anchors. nwnOitPass defaults to zero in OpenGL, so every ordinary camera and
+// shadow draw remains byte-for-byte equivalent until the future late replay
+// explicitly sets the uniform.
+static bool inject_oit_foliage_branch(std::string& source) {
+    if (!nwn_oit_wants_foliage_shader_branch()) return false;
+    std::string patched = source;
+
+    static const char* kOutput = "out vec4 compat_glFragColor;";
+    static const char* kOutputs =
+        "layout(location=0) out vec4 compat_glFragColor;\n"
+        "layout(location=1) out vec4 nwnOitSum;\n"
+        "layout(location=2) out vec4 nwnOitTranslucence;\n"
+        "uniform int nwnOitPass;\n"
+        "uniform int nwnOitFringeOnly;\n"
+        "uniform float nwnOitCutoff;\n"
+        "uniform float nwnOitAlphaGain;\n"
+        "uniform int nwnOitDepthPass;\n"
+        "uniform int nwnOitOpaqueCore;\n"
+        "uniform int nwnA2cPass;\n"
+        "uniform float nwnA2cMaxAlpha;";
+    const size_t outputAt = patched.find(kOutput);
+    if (outputAt == std::string::npos) return false;
+    patched.replace(outputAt, std::strlen(kOutput), kOutputs);
+
+    // The template is concatenated from guarded includes and can contain the
+    // same inactive definition more than once. Replace every exact definition;
+    // the preprocessor will still select the same one it selected originally.
+    static const char* kDiscard =
+        "#define ALPHA_DISCARD_VALUE fAlphaDiscardValue";
+    static const char* kOitDiscard =
+        "#define ALPHA_DISCARD_VALUE (((nwnOitPass != 0) || (nwnA2cPass != 0)) ? 0.01 : "
+        "((nwnOitDepthPass != 0) ? 0.25 : "
+        "((nwnOitOpaqueCore != 0) ? nwnOitCutoff : fAlphaDiscardValue)))";
+    size_t searchAt = 0;
+    unsigned discardDefinitions = 0;
+    while ((searchAt = patched.find(kDiscard, searchAt)) != std::string::npos) {
+        patched.replace(searchAt, std::strlen(kDiscard), kOitDiscard);
+        searchAt += std::strlen(kOitDiscard);
+        ++discardDefinitions;
+    }
+    if (!discardDefinitions) return false;
+
+    const size_t mainAt = patched.rfind("void main");
+    if (mainAt == std::string::npos) return false;
+    const size_t open = patched.find('{', mainAt);
+    if (open == std::string::npos) return false;
+    int braces = 0;
+    size_t close = std::string::npos;
+    for (size_t i = open; i < patched.size(); ++i) {
+        if (patched[i] == '{') ++braces;
+        else if (patched[i] == '}' && --braces == 0) {
+            close = i;
+            break;
+        }
+    }
+    if (close == std::string::npos) return false;
+
+    static const char* kBody =
+        "\n    // smooth-alpha MRT branch injected by libnwn_shadowmap.so\n"
+        "    if (nwnOitPass != 0) {\n"
+        "        float nwnOitAlpha = clamp(gl_FragColor.a, 0.0, 1.0);\n"
+        "        if (nwnOitAlpha <= 0.01) discard;\n"
+        "        nwnOitAlpha = 1.0 - pow(1.0 - nwnOitAlpha, max(nwnOitAlphaGain, 0.01));\n"
+        "        if (nwnOitFringeOnly != 0 && nwnOitAlpha >= nwnOitCutoff) discard;\n"
+        "        gl_FragColor = vec4(gl_FragColor.rgb * nwnOitAlpha, 1.0);\n"
+        "        nwnOitSum = vec4(nwnOitAlpha, 0.0, 0.0, 1.0);\n"
+        "        nwnOitTranslucence = vec4(0.0, 0.0, 0.0, 1.0 - nwnOitAlpha);\n"
+        "    } else if (nwnA2cPass != 0) {\n"
+        "        float nwnA2cAlpha = clamp(gl_FragColor.a, 0.0, 1.0);\n"
+        "        if (nwnA2cAlpha < 0.99)\n"
+        "            gl_FragColor.a = min(nwnA2cAlpha, nwnA2cMaxAlpha);\n"
+        "    } else if (nwnOitOpaqueCore != 0) {\n"
+        "        gl_FragColor.a = 1.0;\n"
+        "    }\n";
+    patched.insert(close, kBody);
+    source.swap(patched);
+    return true;
+}
+
 extern "C" void my_shader_source(GLuint shader, GLsizei count,
                                    const char* const* string, const GLint* length) {
     const bool dumpVertex = shadow_getenv("NWN_SHADOWMAP_DUMP_VERTEX") != nullptr;
     const bool dumpFragment = shadow_getenv("NWN_SHADOWMAP_DUMP_FRAGMENT") != nullptr;
     const bool staticAlphaProbe = g_cascadeStaticAlphaCapture ||
                                   g_cascadeStaticAlphaReceiver;
+    const bool oitFoliageProbe = nwn_oit_needs_shader_sources();
     if (!g_realShaderSource || (!g_injectTest && !dumpVertex && !dumpFragment &&
-                                !staticAlphaProbe) ||
+                                !staticAlphaProbe && !oitFoliageProbe) ||
         count <= 0 || !string) {
         if (g_realShaderSource) g_realShaderSource(shader, count, string, length);
         return;
@@ -412,16 +495,33 @@ extern "C" void my_shader_source(GLuint shader, GLsizei count,
     // `mzmap_006` has no custom shader; it selects NWN's compiled stock alpha
     // variant (`NO_DISCARD 0`) which exposes fAlphaDiscardValue. Persist only
     // the real fragment object identity; source and runtime shader stay intact.
-    if (staticAlphaProbe &&
+    const bool stockAlphaVariant =
         combined.find("#define NO_DISCARD 0") != std::string::npos &&
-        combined.find("fAlphaDiscardValue") != std::string::npos) {
-        bool seen = false;
-        for (GLuint id : g_cascadeStaticAlphaFragments)
-            if (id == shader) { seen = true; break; }
-        if (!seen) {
-            g_cascadeStaticAlphaFragments.push_back(shader);
-            fprintf(stderr, "[shadowmap][alpha] classified static AlphaDiscard fragment=%u\n",
-                    shader);
+        combined.find("fAlphaDiscardValue") != std::string::npos;
+    bool oitFoliageInjected = false;
+    if (stockAlphaVariant) {
+        if (staticAlphaProbe) {
+            bool seen = false;
+            for (GLuint id : g_cascadeStaticAlphaFragments)
+                if (id == shader) { seen = true; break; }
+            if (!seen) {
+                g_cascadeStaticAlphaFragments.push_back(shader);
+                fprintf(stderr, "[shadowmap][alpha] classified static AlphaDiscard fragment=%u\n",
+                        shader);
+            }
+        }
+        // The shadow classifier historically needed only the two stock-source
+        // markers above. Keep that accepted behaviour unchanged. OIT is more
+        // specific: its future MRT transform needs the ordinary fragment
+        // colour output, so do not register a vertex or non-colour stage that
+        // happens to carry the same preprocessor text.
+        if (oitFoliageProbe &&
+            combined.find("gl_FragColor") != std::string::npos) {
+            nwn_oit_note_foliage_fragment(shader);
+            oitFoliageInjected = inject_oit_foliage_branch(combined);
+            if (oitFoliageInjected)
+                fprintf(stderr, "[oit][foliage] injected inert MRT branch into "
+                                "fragment=%u\n", shader);
         }
     }
     // Static casters drift because their vertex transform is still unknown.
@@ -437,7 +537,7 @@ extern "C" void my_shader_source(GLuint shader, GLsizei count,
             dumped.push_back(shader);
             char path[96];
             snprintf(path, sizeof(path), "nwn_shadow_vertex_%u.glsl", shader);
-            FILE* fp = fopen(path, "wb");
+            FILE* fp = open_dump_file(path);
             if (fp) {
                 (void)fwrite(combined.data(), 1, combined.size(), fp);
                 fclose(fp);
@@ -457,7 +557,7 @@ extern "C" void my_shader_source(GLuint shader, GLsizei count,
             dumped.push_back(shader);
             char path[96];
             snprintf(path, sizeof(path), "nwn_shadow_fragment_%u.glsl", shader);
-            FILE* fp = fopen(path, "wb");
+            FILE* fp = open_dump_file(path);
             if (fp) {
                 (void)fwrite(combined.data(), 1, combined.size(), fp);
                 fclose(fp);
@@ -465,7 +565,8 @@ extern "C" void my_shader_source(GLuint shader, GLsizei count,
             }
         }
     }
-    if (!inject_marker(combined)) {
+    const bool markerInjected = inject_marker(combined);
+    if (!oitFoliageInjected && !markerInjected) {
         g_realShaderSource(shader, count, string, length);
         return;
     }
@@ -1633,7 +1734,8 @@ static void trace_normal_geometry_draw(GLsizei count, bool indexed) {
     // through glDrawRangeElements and glMultiDraw*. Deliberately ABOVE the
     // census early-outs below: an observer must see every engine draw, not only
     // the ones the bounded Phase 3e census happens to still be counting.
-    if (nwn_core::g_drawObserver && !nwn_core::g_ownedPass && !g_inOurPass)
+    if (nwn_core::g_drawObserver &&
+        (!nwn_core::g_ownedPass || nwn_oit_observes_owned_draws()) && !g_inOurPass)
         nwn_core::g_drawObserver();
     if (!g_cascadeGeometryTrace || !g_traceGeometryActive ||
         !g_traceFrameActive || g_traceGeometryBuckets >= g_traceGeometryMaxBuckets ||
@@ -1674,6 +1776,20 @@ static void trace_normal_geometry_draw(GLsizei count, bool indexed) {
     if (g_traceGeometryProgramCount < sizeof(g_traceGeometryPrograms) / sizeof(g_traceGeometryPrograms[0]))
         g_traceGeometryPrograms[g_traceGeometryProgramCount++] = (GLuint)program;
 }
+
+static inline void finish_observed_engine_draw() {
+    if (nwn_core::g_drawObserverAfter &&
+        (!nwn_core::g_ownedPass || nwn_oit_observes_owned_draws()) && !g_inOurPass)
+        nwn_core::g_drawObserverAfter();
+}
+
+#define DUPLICATE_OIT_FRINGE(drawCall)                                      \
+    do {                                                                    \
+        if (nwn_oit_begin_immediate_fringe()) {                             \
+            drawCall;                                                       \
+            nwn_oit_end_immediate_fringe();                                 \
+        }                                                                   \
+    } while (0)
 
 // Resolve the source-classified fragment against the program actually bound
 // immediately before this native draw. Shader/program IDs change per launch,
@@ -1860,6 +1976,9 @@ extern "C" void NWN_GL_INTERPOSE(glDrawElements)(GLenum mode, GLsizei count, GLe
     shadow_before_draw();
     trace_normal_geometry_draw(count, true);
     if (g_nextDrawElements) g_nextDrawElements(mode, count, type, indices);
+    if (g_nextDrawElements)
+        DUPLICATE_OIT_FRINGE(g_nextDrawElements(mode, count, type, indices));
+    finish_observed_engine_draw();
     note_cascade_replay_draws(1);
     note_local_light_draws(1);
     SavedState st;
@@ -1883,6 +2002,9 @@ extern "C" void NWN_GL_INTERPOSE(glDrawArrays)(GLenum mode, GLint first, GLsizei
     shadow_before_draw();
     trace_normal_geometry_draw(count, false);
     if (g_nextDrawArrays) g_nextDrawArrays(mode, first, count);
+    if (g_nextDrawArrays)
+        DUPLICATE_OIT_FRINGE(g_nextDrawArrays(mode, first, count));
+    finish_observed_engine_draw();
     note_cascade_replay_draws(1);
     note_local_light_draws(1);
     SavedState st;
@@ -1937,6 +2059,10 @@ extern "C" void my_draw_range_elements(GLenum mode, GLuint start, GLuint end,
     trace_normal_geometry_draw(count, true);
     if (g_realDrawRangeElements)
         g_realDrawRangeElements(mode, start, end, count, type, indices);
+    if (g_realDrawRangeElements)
+        DUPLICATE_OIT_FRINGE(g_realDrawRangeElements(mode, start, end, count,
+                                                      type, indices));
+    finish_observed_engine_draw();
     note_cascade_replay_draws(1);
     note_local_light_draws(1);
     SavedState st;
@@ -1958,6 +2084,9 @@ extern "C" void my_multi_draw_arrays(GLenum mode, const GLint* first,
         trace_normal_geometry_draw(count[i], false);
     if (g_realMultiDrawArrays)
         g_realMultiDrawArrays(mode, first, count, drawcount);
+    if (g_realMultiDrawArrays)
+        DUPLICATE_OIT_FRINGE(g_realMultiDrawArrays(mode, first, count, drawcount));
+    finish_observed_engine_draw();
     note_cascade_replay_draws((unsigned)std::max(0, drawcount));
     note_local_light_draws((unsigned)std::max(0, drawcount));
     SavedState st;
@@ -1980,6 +2109,10 @@ extern "C" void my_multi_draw_elements(GLenum mode, const GLsizei* count,
         trace_normal_geometry_draw(count[i], true);
     if (g_realMultiDrawElements)
         g_realMultiDrawElements(mode, count, type, indices, drawcount);
+    if (g_realMultiDrawElements)
+        DUPLICATE_OIT_FRINGE(g_realMultiDrawElements(mode, count, type, indices,
+                                                      drawcount));
+    finish_observed_engine_draw();
     note_cascade_replay_draws((unsigned)std::max(0, drawcount));
     note_local_light_draws((unsigned)std::max(0, drawcount));
     SavedState st;
@@ -2001,6 +2134,10 @@ extern "C" void my_draw_elements_base_vertex(GLenum mode, GLsizei count,
     trace_normal_geometry_draw(count, true);
     if (g_realDrawElementsBaseVertex)
         g_realDrawElementsBaseVertex(mode, count, type, indices, basevertex);
+    if (g_realDrawElementsBaseVertex)
+        DUPLICATE_OIT_FRINGE(g_realDrawElementsBaseVertex(mode, count, type,
+                                                          indices, basevertex));
+    finish_observed_engine_draw();
     note_cascade_replay_draws(1);
     note_local_light_draws(1);
     SavedState st;
@@ -2025,6 +2162,10 @@ extern "C" void my_draw_range_elements_base_vertex(GLenum mode, GLuint start,
     if (g_realDrawRangeElementsBaseVertex)
         g_realDrawRangeElementsBaseVertex(mode, start, end, count, type,
                                            indices, basevertex);
+    if (g_realDrawRangeElementsBaseVertex)
+        DUPLICATE_OIT_FRINGE(g_realDrawRangeElementsBaseVertex(
+            mode, start, end, count, type, indices, basevertex));
+    finish_observed_engine_draw();
     note_cascade_replay_draws(1);
     note_local_light_draws(1);
     SavedState st;
@@ -2049,6 +2190,10 @@ extern "C" void my_draw_elements_instanced(GLenum mode, GLsizei count,
     for (GLsizei i = 0; i < instances; ++i) trace_normal_geometry_draw(count, true);
     if (g_realDrawElementsInstanced)
         g_realDrawElementsInstanced(mode, count, type, indices, instances);
+    if (g_realDrawElementsInstanced)
+        DUPLICATE_OIT_FRINGE(g_realDrawElementsInstanced(
+            mode, count, type, indices, instances));
+    finish_observed_engine_draw();
     note_cascade_replay_draws((unsigned)std::max(0, instances));
     note_local_light_draws((unsigned)std::max(0, instances));
     SavedState st;
@@ -2072,6 +2217,10 @@ extern "C" void my_draw_elements_instanced_base_vertex(GLenum mode, GLsizei coun
     if (g_realDrawElementsInstancedBaseVertex)
         g_realDrawElementsInstancedBaseVertex(mode, count, type, indices,
                                                instances, basevertex);
+    if (g_realDrawElementsInstancedBaseVertex)
+        DUPLICATE_OIT_FRINGE(g_realDrawElementsInstancedBaseVertex(
+            mode, count, type, indices, instances, basevertex));
+    finish_observed_engine_draw();
     note_cascade_replay_draws((unsigned)std::max(0, instances));
     note_local_light_draws((unsigned)std::max(0, instances));
     SavedState st;
@@ -2090,10 +2239,12 @@ extern "C" void my_draw_elements_instanced_base_vertex(GLenum mode, GLsizei coun
                                                                              instances, basevertex), (void)0);
 }
 
-// This resolver hook is inert unless the explicit trace-only geometry census
-// is enabled. It catches direct GL function pointers at the time NWN asks the
-// driver for them and returns forwarding wrappers with exactly the requested
-// ABI. No renderer state is observed or changed here.
+#undef DUPLICATE_OIT_FRINGE
+
+// This resolver hook is inert unless the geometry census or another module's
+// draw observer needs it. It catches direct GL function pointers at the time
+// NWN asks the driver for them and returns forwarding wrappers with exactly the
+// requested ABI. No renderer state is observed or changed here.
 #ifndef _WIN32
 extern "C" void* glXGetProcAddressARB(const unsigned char* name) {
     if (!g_realGlXGetProcAddressARB)
@@ -2101,7 +2252,8 @@ extern "C" void* glXGetProcAddressARB(const unsigned char* name) {
             dlsym(RTLD_NEXT, "glXGetProcAddressARB");
     if (!g_realGlXGetProcAddressARB) return nullptr;
     void* real = g_realGlXGetProcAddressARB(name);
-    if (!g_cascadeGeometryTrace || !name || !real) return real;
+    if ((!g_cascadeGeometryTrace && !nwn_oit_needs_draw_observer()) ||
+        !name || !real) return real;
     static unsigned drawRequests = 0;
     if (std::strncmp((const char*)name, "glDraw", 6) == 0 && drawRequests++ < 48)
         fprintf(stderr, "[shadowmap][geom] resolver request %s -> %p\n", name, real);
@@ -2152,4 +2304,3 @@ extern "C" void* glXGetProcAddressARB(const unsigned char* name) {
     return real;
 }
 #endif
-

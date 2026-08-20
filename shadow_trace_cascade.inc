@@ -372,7 +372,8 @@ static void trace_scene_enter(void* scene) {
     install_light_vector_trace_patch();
     install_geometry_trace_patch();
     if (shadow_getenv("NWN_SHADOWMAP_DUMP_VERTEX") || shadow_getenv("NWN_SHADOWMAP_DUMP_FRAGMENT") ||
-        g_cascadeStaticAlphaCapture || g_cascadeStaticAlphaReceiver)
+        g_cascadeStaticAlphaCapture || g_cascadeStaticAlphaReceiver ||
+        nwn_oit_needs_shader_sources())
         install_shadersource_patch();
     if (g_cascadeMatrixTrace || g_cascadeLightCapture) install_uniform_matrix_patch();
 
@@ -745,6 +746,7 @@ extern "C" void SceneRenderDrawBucket_trace_detour(void* self, int bucket) {
     // their draws to an area bucket index would be worse than reporting none.
     const int priorBucket = nwn_core::g_currentBucket;
     if (self == g_areaScene) nwn_core::g_currentBucket = bucket;
+    if (self == g_areaScene) nwn_oit_bucket_begin(self, bucket);
     CALL_ORIGINAL(g_hookTraceBucket, eng::SceneRenderDrawBucket, self, bucket);
     nwn_core::g_currentBucket = priorBucket;
     g_cascadeCameraCaptureActive = false;
@@ -752,6 +754,7 @@ extern "C" void SceneRenderDrawBucket_trace_detour(void* self, int bucket) {
     g_cascadeDynamicTargetActive = false;
     g_cascadeDynamicAlphaTargetActive = false;
     g_cascadeStaticAlphaFilterActive = false;
+    if (self == g_areaScene) nwn_oit_bucket_complete(self, bucket);
     if (useBucketReplay) {
         const bool staticTarget = staticBucketCapture || staticAlphaBucketCapture;
         replay_bucket_into_cascade_layers(self, bucket, staticTarget);
@@ -959,7 +962,7 @@ extern "C" void* LightGetShadowLights_trace_detour(void* self, int mode) {
                 g_engineShadowLightKey = preferred.key;
                 g_haveEngineShadowLight = true;
                 if (changed)
-                    fprintf(stderr, "[shadowmap][local-cube] engine-priority shadow light=%p pos=(%.2f,%.2f,%.2f) r=%.2f\n",
+                    fprintf(stderr, "[shadowmap][local-light] engine-priority shadow light=%p pos=(%.2f,%.2f,%.2f) r=%.2f\n",
                             preferred.key, preferred.info.pos.x, preferred.info.pos.y,
                             preferred.info.pos.z, preferred.info.radius);
                 g_localLightSelected = (void*)preferred.key;

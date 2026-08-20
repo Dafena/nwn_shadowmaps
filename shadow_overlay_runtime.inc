@@ -1531,7 +1531,7 @@ static void install_light_vector_trace_patch() {
 // the populated ones and retry on later startup frames until GLEW is ready.
 // Every wrapper forwards the original call verbatim after recording it.
 static void install_geometry_trace_patch() {
-    if (!g_cascadeGeometryTrace) return;
+    if (!g_cascadeGeometryTrace && !nwn_oit_needs_draw_observer()) return;
     static bool rangeDone = false, arraysDone = false, elementsDone = false;
     auto install = [](void** slot, void* replacement, void** real,
                       bool& done, const char* label) {

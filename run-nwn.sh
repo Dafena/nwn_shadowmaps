@@ -6,11 +6,10 @@
 # The hook prints "[shadowmap] active." to stderr when it installs. Run from a
 # terminal the first time so you can see that line and the target status.
 #
-# Knobs (see nwn_shadowmap.cpp):
+# Common knobs (see the current source):
 #   NWN_SHADOWMAP_OFF=1        load but install nothing (A/B without rebuilding)
-#   NWN_SHADOWMAP_SIZE=2048    depth target resolution
-#   NWN_SHADOWMAP_VERBOSE=1    log every frame
-#   NWN_SHADOWMAP_DUMP=N       after N frames write shadowmap_dump.pgm
+#   NWN_SHADOWMAP_SIZE=2048    cascade target resolution
+#   NWN_SHADOWMAP_LOG=1        enable shipping logging
 
 set -euo pipefail
 

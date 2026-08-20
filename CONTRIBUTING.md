@@ -2,6 +2,10 @@
 
 ## The platform rule is absolute
 
+Until the Linux path is working, Linux is the priority target for every new
+feature. Work on Windows only when the maintainer explicitly requests a
+Windows-specific task.
+
 Linux and Windows share one source tree, and that sharing is deliberately
 one-directional:
 

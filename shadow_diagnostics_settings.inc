@@ -517,7 +517,7 @@ static void settings_tick() {
     // Reconcile a live combo-box edit immediately and reset the old capture
     // deadline when its cadence changes.
     apply_local_cube_runtime_settings(false, "panel");
-    static double last[32] = {};
+    static double last[kSettingsMax] = {};
     static bool primed = false;
     SettingRef table[kSettingsMax];
     const unsigned count = settings_table(table, kSettingsMax);

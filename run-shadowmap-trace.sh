@@ -1,14 +1,13 @@
 #!/usr/bin/env bash
-# Phase 1 only: record camera/scene/light ordering in a loaded area.  This
+# Record camera/scene/light ordering in a loaded area. This
 # intentionally disables every legacy target/replay/shader/receiver experiment,
 # so the game should look exactly like normal NWN while the trace is captured.
 
 set -o pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-# Locate the real linux-x86 game directory.  The refactored tree is nested as
-# linux-x86/csm_claude/refactored, while older standalone copies lived only one
-# level below linux-x86.  Prefer an explicit override, then support both layouts.
+# Locate the real game directory. Prefer an explicit override, then support the
+# repository beside the game or one directory below it.
 if [[ -n "${NWN_SHADOWMAP_GAME_DIR:-}" ]]; then
     GAME_DIR="$(cd "$NWN_SHADOWMAP_GAME_DIR" && pwd)"
 elif [[ -x "$HERE/../../nwmain-linux" ]]; then
@@ -28,14 +27,12 @@ fi
 # real game directory before exec so CWD matches the baseline exactly,
 # regardless of where the caller's shell happened to be.
 cd "$GAME_DIR"
-# ...but keep diagnostic output in THIS fork. The cd above changes the process
-# CWD, which is where the injector's PGM dumps would otherwise land -- i.e. in
-# the parent baseline directory, silently overwriting its artifacts.
+# Keep diagnostic output in this repository. The cd above changes the process
+# CWD, which is where injector PGM output would otherwise land.
 export NWN_SHADOWMAP_OUT_DIR="${NWN_SHADOWMAP_OUT_DIR:-$HERE}"
 LOG="${NWN_SHADOWMAP_LOG:-$HERE/shadowmap-phase1.log}"
-# Keep this non-rendering add-on explicit when the dedicated cascade launcher
-# delegates here.  `env` receives only explicitly supplied assignments below,
-# so an inherited value cannot be lost among the many legacy flag removals.
+# Keep optional non-rendering diagnostics explicit. `env` receives only the
+# assignments below, so an inherited value cannot be lost among the defaults.
 CASCADE_MATH_ARGS=()
 if [[ "${NWN_SHADOWMAP_CASCADE_MATH:-}" == "1" ]]; then
     CASCADE_MATH_ARGS+=(NWN_SHADOWMAP_CASCADE_MATH=1)
@@ -201,69 +198,69 @@ if [[ ! -f "$HERE/libnwn_shadowmap.so" ]]; then
 fi
 
 : > "$LOG"
-echo "[shadowmap] Phase 1 logging to $LOG" | tee -a "$LOG"
+echo "[shadowmap] scene trace logging to $LOG" | tee -a "$LOG"
 if [[ ${#CASCADE_MATH_ARGS[@]} -ne 0 ]]; then
-    echo "[shadowmap] Phase 3a cascade-math logging enabled (no rendering changes)" | tee -a "$LOG"
+    echo "[shadowmap] cascade-math logging enabled (no rendering changes)" | tee -a "$LOG"
 fi
 if [[ ${#LIGHT_VECTOR_ARGS[@]} -ne 0 ]]; then
-    echo "[shadowmap] Phase 3b light-vector logging enabled (no rendering changes)" | tee -a "$LOG"
+    echo "[shadowmap] light-vector logging enabled (no rendering changes)" | tee -a "$LOG"
 fi
 if [[ ${#LOCAL_LIGHT_TRACE_ARGS[@]} -ne 0 ]]; then
     echo "[shadowmap] local-light candidate census enabled (read-only; no rendering changes)" | tee -a "$LOG"
 fi
 if [[ ${#CASCADE_TARGET_VALIDATE_ARGS[@]} -ne 0 ]]; then
-    echo "[shadowmap] Phase 3c cascade-target validation enabled (allocation/completeness only)" | tee -a "$LOG"
+    echo "[shadowmap] cascade-target validation enabled (allocation/completeness only)" | tee -a "$LOG"
 fi
 if [[ ${#CASCADE_GEOMETRY_TRACE_ARGS[@]} -ne 0 ]]; then
-    echo "[shadowmap] Phase 3e in-sequence normal-geometry census enabled (no draw changes)" | tee -a "$LOG"
+    echo "[shadowmap] in-sequence normal-geometry census enabled (no draw changes)" | tee -a "$LOG"
 fi
 if [[ ${#CASTER_CULL_TRACE_ARGS[@]} -ne 0 ]]; then
-    echo "[shadowmap] Phase 4b post-BSP caster culling census enabled (read-only)" | tee -a "$LOG"
+    echo "[shadowmap] post-BSP caster-culling census enabled (read-only)" | tee -a "$LOG"
 fi
 if [[ ${#FULL_BSP_TRACE_ARGS[@]} -ne 0 ]]; then
-    echo "[shadowmap] Phase 4c full-BSP caster candidate census enabled (read-only)" | tee -a "$LOG"
+    echo "[shadowmap] full-BSP caster candidate census enabled (read-only)" | tee -a "$LOG"
 fi
 if [[ ${#FULL_BSP_NATIVE_SUBMIT_ARGS[@]} -ne 0 ]]; then
-    echo "[shadowmap] Phase 4d native full-BSP static submit enabled (private red diagnostic)" | tee -a "$LOG"
+    echo "[shadowmap] native full-BSP static submit enabled (private red diagnostic)" | tee -a "$LOG"
 fi
 if [[ ${#RELAX_AREA_VIEWPORT_ARGS[@]} -ne 0 ]]; then
     echo "[shadowmap] relaxed world-viewport selection enabled (diagnostic launcher only)" | tee -a "$LOG"
 fi
 if [[ ${#CASCADE_MATRIX_TRACE_ARGS[@]} -ne 0 ]]; then
-    echo "[shadowmap] Phase 3g normal matrix-uniform trace enabled (no draw changes)" | tee -a "$LOG"
+    echo "[shadowmap] normal matrix-uniform trace enabled (no draw changes)" | tee -a "$LOG"
 fi
 if [[ ${#CASCADE_CAMERA_CAPTURE_ARGS[@]} -ne 0 ]]; then
-    echo "[shadowmap] Phase 3f native camera-depth capture enabled (one private PGM; no visible change)" | tee -a "$LOG"
+    echo "[shadowmap] native camera-depth capture enabled (one private PGM; no visible change)" | tee -a "$LOG"
 fi
 if [[ ${#CASCADE_LIGHT_CAPTURE_ARGS[@]} -ne 0 ]]; then
-    echo "[shadowmap] Phase 3h native light-space depth capture enabled (one private PGM; no visible change)" | tee -a "$LOG"
+    echo "[shadowmap] native light-space depth capture enabled (one private PGM; no visible change)" | tee -a "$LOG"
 fi
 if [[ ${#STATIC_RECEIVER_ARGS[@]} -ne 0 ]]; then
-    echo "[shadowmap] Phase 3i static-only fullscreen receiver enabled (visible red diagnostic)" | tee -a "$LOG"
+    echo "[shadowmap] static-only fullscreen receiver enabled (visible red diagnostic)" | tee -a "$LOG"
 fi
 if [[ ${#DYNAMIC_RECEIVER_ARGS[@]} -ne 0 ]]; then
-    echo "[shadowmap] Phase 3l static+dynamic fullscreen receiver enabled (visible red diagnostic)" | tee -a "$LOG"
+    echo "[shadowmap] static+dynamic fullscreen receiver enabled (visible red diagnostic)" | tee -a "$LOG"
 fi
 if [[ ${#ALPHA_RECEIVER_ARGS[@]} -ne 0 ]]; then
-    echo "[shadowmap] Phase 3p static+dynamic+validated-alpha receiver enabled (visible red diagnostic)" | tee -a "$LOG"
+    echo "[shadowmap] static+dynamic+validated-alpha receiver enabled (visible red diagnostic)" | tee -a "$LOG"
 fi
 if [[ ${#STATIC_ALPHA_CAPTURE_ARGS[@]} -ne 0 ]]; then
-    echo "[shadowmap] Phase 3q source-classified static alpha capture enabled (private PGM only)" | tee -a "$LOG"
+    echo "[shadowmap] source-classified static-alpha capture enabled (private PGM only)" | tee -a "$LOG"
 fi
 if [[ ${#STATIC_ALPHA_RECEIVER_ARGS[@]} -ne 0 ]]; then
-    echo "[shadowmap] Phase 3r source-classified static alpha receiver enabled (visible red diagnostic)" | tee -a "$LOG"
+    echo "[shadowmap] source-classified static-alpha receiver enabled (visible red diagnostic)" | tee -a "$LOG"
 fi
 if [[ ${#MULTI_LAYER_CAPTURE_ARGS[@]} -ne 0 ]]; then
-    echo "[shadowmap] Phase 4a four-layer depth capture enabled (no visible receiver)" | tee -a "$LOG"
+    echo "[shadowmap] multi-layer depth capture enabled (no visible receiver)" | tee -a "$LOG"
 fi
 if [[ ${#DYNAMIC_CHARACTER_CAPTURE_ARGS[@]} -ne 0 ]]; then
-    echo "[shadowmap] Phase 3j dynamic-character capture enabled (private PGM; no visible change)" | tee -a "$LOG"
+    echo "[shadowmap] dynamic-character capture enabled (private PGM; no visible change)" | tee -a "$LOG"
 fi
 if [[ ${#DYNAMIC_BUCKET_CAPTURE_ARGS[@]} -ne 0 ]]; then
-    echo "[shadowmap] Phase 3k post-dynamic bucket capture enabled (private PGM; no visible change)" | tee -a "$LOG"
+    echo "[shadowmap] post-dynamic bucket capture enabled (private PGM; no visible change)" | tee -a "$LOG"
 fi
 if [[ ${#ALPHA_CARD_CAPTURE_ARGS[@]} -ne 0 ]]; then
-    echo "[shadowmap] Phase 3o enlarged alpha-card depth crop enabled (private PGM only)" | tee -a "$LOG"
+    echo "[shadowmap] enlarged alpha-card depth crop enabled (private PGM only)" | tee -a "$LOG"
 fi
 
 env -u NWN_SHADOWMAP_LIGHT \

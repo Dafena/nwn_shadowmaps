@@ -1,28 +1,16 @@
 #!/usr/bin/env bash
-# THE development launcher. Use this one.
+# Development launcher. Use this for the current development path.
 #
-# It replaces the pile that grew one script per phase:
-#
-#   run-shadowmap.sh                              sun only -- local lights were
-#                                                 commented out on 2026-08-10 and
-#                                                 never turned back on, which is
-#                                                 the trap this script exists to
-#                                                 remove
-#   run-shadowmap-local-light-shadows.sh          identical PLUS the three
-#                                                 LOCAL_LIGHT_* flags. That was
-#                                                 the ONLY difference between them
-#   run-shadowmap-full-bsp-csm-filtered-shadows*  older phase configs
-#   run-shadowmap-local-light-probe.sh            one-off probe
-#
-# Everything here is overridable from the environment, so a one-off experiment
-# needs no new script -- that is how the pile happened:
+# It enables the current sun/local-light capture path and diagnostics. One-off
+# experiments should override environment variables rather than create another
+# phase-specific launcher:
 #
 #   NWN_SHADOWMAP_CSM_DYNAMIC_CASCADES=1 ./run-dev.sh
 #   NWN_SHADOWMAP_LOCAL_LIGHT_RECEIVER=0 ./run-dev.sh      sun only
 #   NWN_DEV_NO_BUILD=1 ./run-dev.sh                        skip the rebuild
 #
-# EVERY diagnostic is ON here -- this is the development build and the whole
-# point of it. The shipping builds are the ones that turn this off.
+# Diagnostics are intentionally enabled here. Shipping builds carry their own
+# defaults and keep diagnostic work off unless explicitly requested.
 #
 # The log lands in shadowmap-phase1.log (run-shadowmap-trace.sh owns that).
 # Panel settings persist by default.  For a deliberately stateless A/B run,
@@ -61,17 +49,9 @@ WORLD_EXTENT="${NWN_SHADOWMAP_STATIC_WORLD_EXTENT:-128}"
 # Per-draw static capture is the alpha-safe diagnostic path. The world map is
 # a whole-bucket re-entry, so it must stay off while proving the fix.
 STATIC_WORLD="${NWN_SHADOWMAP_STATIC_WORLD:-1}"   # was 0, which the old presence-only read treated as ON
-# Static AlphaDiscard casters (foliage, transparent tile overlays).  Keep this
-# independently switchable: these are the materials that flicker under a
-# moving scripted sun, while opaque/static and character paths stay active.
-# Defaults restore the accepted complete caster set. Override either only for
-# a focused A/B, never as a workaround that silently drops foliage shadows.
+# Static AlphaDiscard casters (foliage, transparent tile overlays). Keep this
+# independently switchable for focused A/B runs.
 STATIC_ALPHA_RECEIVER="${NWN_SHADOWMAP_STATIC_ALPHA_RECEIVER:-1}"
-STATIC_CASTERS="${NWN_SHADOWMAP_STATIC_CASTERS:-1}"
-DYNAMIC_CASTERS="${NWN_SHADOWMAP_DYNAMIC_CASTERS:-0}"
-# Presentation-only A/B: 0 keeps every capture/replay path live while skipping
-# the fullscreen shadow composite itself.
-RECEIVER_DRAW="${NWN_SHADOWMAP_RECEIVER_DRAW:-1}"
 
 # --- local lights ----------------------------------------------------------
 # ON here, matching what both shipping builds default to. They were off in
@@ -111,24 +91,16 @@ TRACE_EVENTS="${NWN_SHADOWMAP_TRACE_EVENTS:-4096}"
 #                        draws nothing, not while looking at real shadows
 
 echo "[run-dev] cascades=$CASCADES (+$DYN_CASCADES moving)  cascade=${CASCADE_SIZE}^2" \
-     " world=$STATIC_WORLD:${WORLD_SIZE}^2/${WORLD_EXTENT}u  static=$STATIC_CASTERS alpha=$STATIC_ALPHA_RECEIVER dynamic=$DYNAMIC_CASTERS receiver=$RECEIVER_DRAW" \
+     " world=$STATIC_WORLD:${WORLD_SIZE}^2/${WORLD_EXTENT}u  alpha=$STATIC_ALPHA_RECEIVER" \
      " local-lights=$LOCAL_RECEIVER@${LOCAL_SIZE}^2  diagnostics=ALL"
 
-exec env -u NWN_SHADOWMAP_AREA_LIGHT_DIRECTION_APPLY \
-    -u NWN_SHADOWMAP_AREA_LIGHT_DIRECTION_STEP \
-    -u NWN_SHADOWMAP_AREA_LIGHT_DIRECTION_DELTA \
-    -u NWN_SHADOWMAP_AREA_LIGHT_DIRECTION_PROBE \
-    -u NWN_SHADOWMAP_RELEASE_TRANSITION_BUFFER \
-    NWN_SHADOWMAP_CASCADE_MATH=1 \
+exec env NWN_SHADOWMAP_CASCADE_MATH=1 \
     NWN_SHADOWMAP_LIGHT_VECTOR_TRACE=1 \
     NWN_SHADOWMAP_CASCADE_TARGET_VALIDATE=1 \
     NWN_SHADOWMAP_CASCADE_GEOMETRY_TRACE=1 \
     NWN_SHADOWMAP_CASCADE_LIGHT_CAPTURE=1 \
     NWN_SHADOWMAP_CASCADE_LIGHT_BUCKET=0 \
     NWN_SHADOWMAP_STATIC_RECEIVER=1 \
-    NWN_SHADOWMAP_STATIC_CASTERS="$STATIC_CASTERS" \
-    NWN_SHADOWMAP_DYNAMIC_CASTERS="$DYNAMIC_CASTERS" \
-    NWN_SHADOWMAP_RECEIVER_DRAW="$RECEIVER_DRAW" \
     NWN_SHADOWMAP_STATIC_ALPHA_RECEIVER="$STATIC_ALPHA_RECEIVER" \
     NWN_SHADOWMAP_STATIC_ALPHA_BUCKET=1 \
     NWN_SHADOWMAP_CASTER_FULL_BSP_NATIVE_SUBMIT=1 \
@@ -156,7 +128,6 @@ exec env -u NWN_SHADOWMAP_AREA_LIGHT_DIRECTION_APPLY \
     NWN_SHADOWMAP_LAMP_CENSUS="$LAMP_CENSUS" \
     NWN_SHADOWMAP_STENCIL_TRACE="$STENCIL_TRACE" \
     NWN_SHADOWMAP_LOCAL_LIGHT_DUMP="$LOCAL_LIGHT_DUMP" \
-    NWN_SHADOWMAP_AREA_SHADOW_PROBE=1 \
     NWN_SHADOWMAP_TRACE_FRAMES="$TRACE_FRAMES" \
     NWN_SHADOWMAP_TRACE_EVENTS="$TRACE_EVENTS" \
     "$HERE/run-shadowmap-trace.sh" "$@"

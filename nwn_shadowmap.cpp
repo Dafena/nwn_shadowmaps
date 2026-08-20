@@ -1344,6 +1344,7 @@ static bool    g_inOurPass    = false;     // re-entrancy guard for our own call
 bool nwn_core::g_ownedPass = false;
 int  nwn_core::g_currentBucket = -1;
 void (*nwn_core::g_drawObserver)() = nullptr;
+void (*nwn_core::g_drawObserverAfter)() = nullptr;
 static bool    g_viewInsideRender = false; // does the engine set it inside
                                            // Scene::Render()? (diagnostic)
 static bool    g_inSceneRender    = false;
@@ -1471,7 +1472,7 @@ static void shadow_prepass() {
         fprintf(stderr, "[shadowmap] prepass ok (frame %ld)\n", g_frames);
     } else if (!loggedOk) {
         fprintf(stderr, "[shadowmap] prepass ok, depth target bound and cleared "
-                        "cleanly. Phase 1 works.\n");
+                        "cleanly. The bucket probe is safe.\n");
         loggedOk = true;
     }
 }
@@ -1556,7 +1557,7 @@ static bool probe_finish(void* scene,
         "[shadowmap] Buckets:", winSide);
     for (int i : win) fprintf(stderr, " %d", i);
     fprintf(stderr, "\n[shadowmap] Open shadowmap_probe.pgm -- if that is a depth "
-                    "image of your\n[shadowmap] scene, Phase 3 (light matrices) is "
+                    "image of your\n[shadowmap] scene, the light-matrix diagnostic is "
                     "unblocked.\n");
     return true;
 }
@@ -1580,6 +1581,9 @@ static subhook_t g_hookTraceBucket = nullptr;
 static subhook_t g_hookTracePrioritizeShadow = nullptr;
 static subhook_t g_hookTraceGetShadowLights = nullptr;
 static subhook_t g_hookSetLightGL           = nullptr;
+#ifndef _WIN32
+static subhook_t g_hookAurTextureBind       = nullptr;
+#endif
 static bool      g_inStencilShadow = false;
 static GLuint    g_stencilPrograms[32] = {};
 static unsigned  g_stencilProgramCount = 0;
@@ -1610,6 +1614,21 @@ static int   g_traceCameraDepth = 0;
         fn(__VA_ARGS__);                                                      \
         if (hook) subhook_install(hook);                                      \
     } while (0)
+
+#ifndef _WIN32
+extern "C" void AurTextureBindInUnit_detour(void* texture, unsigned int unit,
+                                             int controllerIndex) {
+    if (eng::AurTextureGetName)
+        nwn_oit_note_texture_bind(unit, eng::AurTextureGetName(texture));
+    // This is intentionally diagnostic-only.  CAurTexture::BindInUnit has a
+    // prologue that subhook may expose as a nominal trampoline while still
+    // relocating it incorrectly, which corrupts texture/controller state and
+    // produces camera-dependent UV/checker garbage.  Always take the slower
+    // trampoline-free path here; normal OIT never installs this hook.
+    CALL_ORIGINAL(g_hookAurTextureBind, eng::AurTextureBindInUnit,
+                  texture, unit, controllerIndex);
+}
+#endif
 
 // CNWCArea owns these flags.  We read them only after the engine has updated
 // its own lighting state.  The offsets were live-verified on final Linux NWN:
@@ -1933,6 +1952,21 @@ static bool set_light_view_direct(const Vec3f& eye, const float dir[3]) {
 #include "shadow_overlay_runtime.inc"
 #include "shadow_trace_cascade.inc"
 #include "shadow_local_lights.inc"
+
+bool nwn_core_replay_bucket(void* scene, int bucket) {
+    if (!scene || !eng::SceneRenderDrawBucket) return false;
+    const bool priorReplay = g_cascadeReplayActive;
+    const int priorBucket = g_cascadeReplayBucket;
+    const char* priorLabel = g_faultLabel;
+    g_cascadeReplayActive = true;  // makes the bucket detour call only NWN
+    g_cascadeReplayBucket = bucket;
+    g_faultLabel = "OIT FOLIAGE REPLAY";
+    const bool ok = guarded_render_bucket(scene, bucket);
+    g_faultLabel = priorLabel;
+    g_cascadeReplayBucket = priorBucket;
+    g_cascadeReplayActive = priorReplay;
+    return ok;
+}
 // ===========================================================================
 //  The hook
 // ===========================================================================
@@ -1987,6 +2021,10 @@ extern "C" void SceneRender_detour(void* self) {
         }
     }
 
+    // OIT's read-only census must be armed before NWN submits this scene's
+    // geometry. This is a no-op unless an OIT/census environment switch is on.
+    nwn_oit_prepare();
+
     // Phase 1 has a deliberately separate path.  In particular, do not call
     // create_target(), install a GLEW patch, capture receiver uniforms, replay
     // buckets, or draw the legacy red/green fullscreen triangle.  The only
@@ -2000,14 +2038,14 @@ extern "C" void SceneRender_detour(void* self) {
                                                  (void*)LightGetShadowLights_trace_detour,
                                                  SUBHOOK_64BIT_OFFSET);
         if (!g_hookTraceGetShadowLights || subhook_install(g_hookTraceGetShadowLights) != 0) {
-            fprintf(stderr, "[shadowmap][local-cube] warning: engine shadow-light priority hook unavailable; "
+            fprintf(stderr, "[shadowmap][local-light] warning: engine shadow-light priority hook unavailable; "
                             "using census fallback\n");
             if (g_hookTraceGetShadowLights) {
                 subhook_free(g_hookTraceGetShadowLights);
                 g_hookTraceGetShadowLights = nullptr;
             }
         } else if (!g_traceEnabled) {
-            fprintf(stderr, "[shadowmap][local-cube] engine shadow-light priority hook active\n");
+            fprintf(stderr, "[shadowmap][local-light] engine shadow-light priority hook active\n");
         }
     }
 
@@ -2180,7 +2218,7 @@ extern "C" void SceneRender_detour(void* self) {
         // transparent layer then stacks -- five passes at alpha 0.35 composite
         // to 1-0.65^5 = 0.88 -- and it ran over the Load Game menu, where there
         // is no area at all. Same gate as the receiver and the overlay.
-        if (self == g_areaScene) nwn_oit_frame();
+        if (self == g_areaScene) nwn_oit_frame(self);
         // The overlay is intentionally later than the receiver so it is never
         // copied into the scene-depth texture or interpreted as a shadow
         // receiver.  It shares the same selected-area/FBO gate.
@@ -2220,7 +2258,7 @@ extern "C" void SceneRender_detour(void* self) {
 
     std::vector<int> before;
     if (doProbe) {
-        fprintf(stderr, "\n[shadowmap] ===== PHASE 2 PROBE attempt %d/%d "
+        fprintf(stderr, "\n[shadowmap] ===== bucket probe attempt %d/%d "
                         "(frame %ld) =====\n", g_probeAttempt, g_probeTries, g_frames);
         before = probe_side(self, "before");
     }
@@ -2249,6 +2287,7 @@ extern "C" void SceneRender_detour(void* self) {
     install_useprogram_patch();
     install_uniform_matrix_patch();
     install_shadersource_patch();
+    install_geometry_trace_patch();
     build_gpu_decode_program();
 
     {   // classify this Scene::Render invocation by viewport size
@@ -2313,7 +2352,7 @@ extern "C" void SceneRender_detour(void* self) {
 // ===========================================================================
 __attribute__((constructor))
 static void shadowmap_init() {
-    fprintf(stderr, "[shadowmap] loading (phase 2: bucket probe v2)...\n");
+    fprintf(stderr, "[shadowmap] loading current renderer hooks...\n");
 #ifndef _WIN32
     // WHO ELSE IS IN THIS PROCESS? The maintainer has a second injector for
     // this game (the alphasort/OIT experiment), and anything hooking the same
@@ -2381,7 +2420,7 @@ static void shadowmap_init() {
             g_localCubeUpdateSeconds = kLocalCubeCadenceSeconds[nearest];
         }
         else
-            fprintf(stderr, "[shadowmap][local-cube] ignoring NWN_SHADOWMAP_LOCAL_CUBE_UPDATE_MS=%s (16..2000)\n", s);
+            fprintf(stderr, "[shadowmap][local-light] ignoring NWN_SHADOWMAP_LOCAL_CUBE_UPDATE_MS=%s (16..2000)\n", s);
     }
     if (const char* s = shadow_getenv("NWN_SHADOWMAP_LOCAL_LIGHT_SIZE")) {
         int v = atoi(s);
@@ -3137,6 +3176,24 @@ static void shadowmap_init() {
         return;
     }
 
+#ifndef _WIN32
+    if (nwn_oit_needs_texture_tracking() && eng::AurTextureBindInUnit &&
+        eng::AurTextureGetName) {
+        g_hookAurTextureBind = subhook_new((void*)eng::AurTextureBindInUnit,
+                                           (void*)AurTextureBindInUnit_detour,
+                                           SUBHOOK_64BIT_OFFSET);
+        if (!g_hookAurTextureBind || subhook_install(g_hookAurTextureBind) != 0) {
+            fprintf(stderr, "[oit][texture] warning: CAurTexture bind census unavailable\n");
+            if (g_hookAurTextureBind) {
+                subhook_free(g_hookAurTextureBind);
+                g_hookAurTextureBind = nullptr;
+            }
+        } else {
+            fprintf(stderr, "[oit][texture] CAurTexture name tracking active\n");
+        }
+    }
+#endif
+
     if (g_areaShadowFlagsEnabled && eng::AreaUpdateShadowingLights) {
         g_hookAreaShadowFlags = subhook_new((void*)eng::AreaUpdateShadowingLights,
                                             (void*)AreaUpdateShadowingLights_detour,
@@ -3187,7 +3244,8 @@ static void shadowmap_init() {
         }
     }
 
-    if (g_traceEnabled) {
+    const bool oitNeedsBucketHook = nwn_oit_needs_bucket_hook();
+    if (g_traceEnabled || oitNeedsBucketHook) {
         auto install_trace = [](subhook_t& slot, void* target, void* detour,
                                 const char* name) {
             if (!target) {
@@ -3227,33 +3285,42 @@ static void shadowmap_init() {
                     subhook_get_trampoline(slot) ? "" : " -- remove/call/reinstall");
         };
 
-        fprintf(stderr, "[shadowmap][step] installing trace hooks\n");
-        install_trace(g_hookTraceCameraRender, (void*)eng::CameraRender,
-                      (void*)CameraRender_detour, "Camera::Render");
-        install_trace(g_hookTraceCameraScene, (void*)eng::CameraRenderScene,
-                      (void*)CameraRenderScene_detour, "Camera::RenderScene");
-        if (g_casterCullTrace || g_casterFullBspTrace || g_casterFullBspNativeSubmit)
-            install_trace(g_hookTraceManageSceneBSP, (void*)eng::ManageSceneBSP,
-                          (void*)ManageSceneBSP_detour, "ManageSceneBSP");
-        install_trace(g_hookTraceSceneSingle, (void*)eng::SceneRenderSinglePass,
-                      (void*)SceneRenderSinglePass_detour, "Scene::RenderSinglePass");
-        install_trace(g_hookTraceSceneDynamic, (void*)eng::SceneRenderDynamicGeometry,
-                      (void*)SceneRenderDynamicGeometry_detour, "Scene::RenderDynamicGeometry");
+        if (g_traceEnabled) {
+            fprintf(stderr, "[shadowmap][step] installing trace hooks\n");
+            install_trace(g_hookTraceCameraRender, (void*)eng::CameraRender,
+                          (void*)CameraRender_detour, "Camera::Render");
+            install_trace(g_hookTraceCameraScene, (void*)eng::CameraRenderScene,
+                          (void*)CameraRenderScene_detour, "Camera::RenderScene");
+            if (g_casterCullTrace || g_casterFullBspTrace || g_casterFullBspNativeSubmit)
+                install_trace(g_hookTraceManageSceneBSP, (void*)eng::ManageSceneBSP,
+                              (void*)ManageSceneBSP_detour, "ManageSceneBSP");
+            install_trace(g_hookTraceSceneSingle, (void*)eng::SceneRenderSinglePass,
+                          (void*)SceneRenderSinglePass_detour, "Scene::RenderSinglePass");
+            install_trace(g_hookTraceSceneDynamic, (void*)eng::SceneRenderDynamicGeometry,
+                          (void*)SceneRenderDynamicGeometry_detour, "Scene::RenderDynamicGeometry");
+        }
+        // OIT needs only the bucket identity. Installing this one hook does not
+        // turn on the shadow trace, targets, replay, or shader diagnostics.
         install_trace(g_hookTraceBucket, (void*)eng::SceneRenderDrawBucket,
                       (void*)SceneRenderDrawBucket_trace_detour, "Scene::RenderDrawBucket");
-        install_trace(g_hookTracePrioritizeShadow, (void*)eng::LightPrioritizeShadow,
-                      (void*)LightPrioritizeShadow_trace_detour, "LightManager::PrioritizeShadow");
-        if (!g_hookTraceGetShadowLights)
-            install_trace(g_hookTraceGetShadowLights, (void*)eng::LightGetShadowLights,
-                          (void*)LightGetShadowLights_trace_detour, "LightManager::GetShadowLights");
-        if (eng::SetLightGL)
-            install_trace(g_hookSetLightGL, (void*)eng::SetLightGL,
-                          (void*)SetLightGL_detour, "SetLightGL");
-        fprintf(stderr, "[shadowmap][step] trace hooks installed\n");
-        fprintf(stderr,
-                "[shadowmap][trace] PHASE 1 active: legacy targets/replay/shader injection/"
-                "fullscreen receiver are bypassed; recording up to %u area frames and %u events.\n",
-                g_traceFramesMax, g_traceEventsMax);
+        if (g_traceEnabled) {
+            install_trace(g_hookTracePrioritizeShadow, (void*)eng::LightPrioritizeShadow,
+                          (void*)LightPrioritizeShadow_trace_detour, "LightManager::PrioritizeShadow");
+            if (!g_hookTraceGetShadowLights)
+                install_trace(g_hookTraceGetShadowLights, (void*)eng::LightGetShadowLights,
+                              (void*)LightGetShadowLights_trace_detour, "LightManager::GetShadowLights");
+            if (eng::SetLightGL)
+                install_trace(g_hookSetLightGL, (void*)eng::SetLightGL,
+                              (void*)SetLightGL_detour, "SetLightGL");
+            fprintf(stderr, "[shadowmap][step] trace hooks installed\n");
+            fprintf(stderr,
+                    "[shadowmap][trace] scene-trace mode active: targets/replay/shader injection/"
+                    "fullscreen receiver are bypassed; recording up to %u area frames and %u events.\n",
+                    g_traceFramesMax, g_traceEventsMax);
+        } else {
+            fprintf(stderr, "[oit][foliage] bucket identity hook installed "
+                            "without enabling shadow trace mode\n");
+        }
     }
 
     // Phase 3: hook the matrix setters to capture a renderer instance and the
@@ -3316,7 +3383,7 @@ static void shadowmap_init() {
                     "defaults in effect\n", shadow_default_env_count());
 #endif
     if (g_lightPass) {
-        fprintf(stderr, "[shadowmap] PHASE 3 light pass ON: dir=(%.2f %.2f %.2f) "
+        fprintf(stderr, "[shadowmap] light pass ON: dir=(%.2f %.2f %.2f) "
                         "conv=%d extent=%.1f dist=%.1f when=%s buckets=",
                 g_lightDir[0], g_lightDir[1], g_lightDir[2], g_conv,
                 g_extent, g_dist, g_afterOrig ? "after" : "before");
