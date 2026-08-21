@@ -412,6 +412,11 @@ static bool inject_oit_foliage_branch(std::string& source) {
         "uniform int nwnOitDepthPass;\n"
         "uniform int nwnOitOpaqueCore;\n"
         "uniform int nwnA2cPass;\n"
+        "uniform int nwnA2cEmitterPass;\n"
+        "uniform sampler2DMS nwnA2cEmitterOpaqueDepth;\n"
+        "uniform vec4 nwnA2cEmitterViewport;\n"
+        "uniform float nwnA2cEmitterDepthBias;\n"
+        "uniform int nwnA2cEmitterSamples;\n"
         "uniform sampler2DArrayShadow nwnA2cStaticDepth;\n"
         "uniform sampler2DArrayShadow nwnA2cDynamicDepth;\n"
         "uniform mat4 nwnA2cCameraVPInv;\n"
@@ -479,7 +484,13 @@ static bool inject_oit_foliage_branch(std::string& source) {
 
     static const char* kBody =
         "\n    // smooth-alpha MRT branch injected by libnwn_shadowmap.so\n"
-        "    if (nwnOitPass != 0) {\n"
+        "    if (nwnA2cEmitterPass != 0) {\n"
+        "        ivec2 nwnEmitterPixel=ivec2(gl_FragCoord.xy-nwnA2cEmitterViewport.xy);\n"
+        "        float nwnOpaqueDepth=1.0;\n"
+        "        for(int nwnSample=0;nwnSample<nwnA2cEmitterSamples&&nwnSample<16;++nwnSample)\n"
+        "            nwnOpaqueDepth=min(nwnOpaqueDepth,texelFetch(nwnA2cEmitterOpaqueDepth,nwnEmitterPixel,nwnSample).r);\n"
+        "        if(gl_FragCoord.z>nwnOpaqueDepth+nwnA2cEmitterDepthBias) discard;\n"
+        "    } else if (nwnOitPass != 0) {\n"
         "        float nwnOitAlpha = clamp(gl_FragColor.a, 0.0, 1.0);\n"
         "        if (nwnOitAlpha <= 0.01) discard;\n"
         "        nwnOitAlpha = 1.0 - pow(1.0 - nwnOitAlpha, max(nwnOitAlphaGain, 0.01));\n"
@@ -582,6 +593,47 @@ static bool inject_oit_foliage_branch(std::string& source) {
     return true;
 }
 
+// Particle emitters use a different stock fragment family from alpha-discard
+// foliage. Give every ordinary scene-colour fragment a tiny, inert opaque-depth
+// branch; live draw classification still requires the selected area's measured
+// particle bucket/blend signature, so UI and non-particle materials never
+// activate it.
+static bool inject_a2c_emitter_branch(std::string& source) {
+    if (!nwn_oit_wants_a2c_emitter_shader_branch() ||
+        source.find("nwnA2cEmitterPass") != std::string::npos ||
+        source.find("gl_FragColor") == std::string::npos)
+        return false;
+    const size_t mainAt = source.rfind("void main");
+    if (mainAt == std::string::npos) return false;
+    static const char* declarations =
+        "uniform int nwnA2cEmitterPass;\n"
+        "uniform sampler2DMS nwnA2cEmitterOpaqueDepth;\n"
+        "uniform vec4 nwnA2cEmitterViewport;\n"
+        "uniform float nwnA2cEmitterDepthBias;\n"
+        "uniform int nwnA2cEmitterSamples;\n";
+    source.insert(mainAt, declarations);
+    const size_t shiftedMain = mainAt + std::strlen(declarations);
+    const size_t open = source.find('{', shiftedMain);
+    if (open == std::string::npos) return false;
+    int braces = 0;
+    size_t close = std::string::npos;
+    for (size_t i = open; i < source.size(); ++i) {
+        if (source[i] == '{') ++braces;
+        else if (source[i] == '}' && --braces == 0) { close = i; break; }
+    }
+    if (close == std::string::npos) return false;
+    static const char* body =
+        "\nif(nwnA2cEmitterPass!=0){\n"
+        " ivec2 p=ivec2(gl_FragCoord.xy-nwnA2cEmitterViewport.xy);\n"
+        " float d=1.0;\n"
+        " for(int s=0;s<nwnA2cEmitterSamples&&s<16;++s)\n"
+        "  d=min(d,texelFetch(nwnA2cEmitterOpaqueDepth,p,s).r);\n"
+        " if(gl_FragCoord.z>d+nwnA2cEmitterDepthBias) discard;\n"
+        "}\n";
+    source.insert(close, body);
+    return true;
+}
+
 extern "C" void my_shader_source(GLuint shader, GLsizei count,
                                    const char* const* string, const GLint* length) {
     const bool dumpVertex = shadow_getenv("NWN_SHADOWMAP_DUMP_VERTEX") != nullptr;
@@ -609,6 +661,7 @@ extern "C" void my_shader_source(GLuint shader, GLsizei count,
         combined.find("#define NO_DISCARD 0") != std::string::npos &&
         combined.find("fAlphaDiscardValue") != std::string::npos;
     bool oitFoliageInjected = false;
+    bool a2cEmitterInjected = false;
     if (stockAlphaVariant) {
         if (staticAlphaProbe) {
             bool seen = false;
@@ -633,6 +686,12 @@ extern "C" void my_shader_source(GLuint shader, GLsizei count,
                 fprintf(stderr, "[oit][foliage] injected inert MRT branch into "
                                 "fragment=%u\n", shader);
         }
+    }
+    if (oitFoliageProbe && !oitFoliageInjected &&
+        combined.find("gl_FragColor") != std::string::npos) {
+        a2cEmitterInjected = inject_a2c_emitter_branch(combined);
+        if (a2cEmitterInjected)
+            nwn_oit_note_emitter_fragment(shader);
     }
     // Static casters drift because their vertex transform is still unknown.
     // Dump only vertex-stage sources on explicit request; this is read-only
@@ -676,7 +735,7 @@ extern "C" void my_shader_source(GLuint shader, GLsizei count,
         }
     }
     const bool markerInjected = inject_marker(combined);
-    if (!oitFoliageInjected && !markerInjected) {
+    if (!oitFoliageInjected && !a2cEmitterInjected && !markerInjected) {
         g_realShaderSource(shader, count, string, length);
         return;
     }
@@ -1374,7 +1433,7 @@ static void local_visible_set_layer_transform(const NativeTransformSlot* slot,
 // attachment and the matrices change per light.
 static bool begin_local_visible_dynamic_pass(SavedState& st) {
     if (!g_localVisibleDynamicCaptureActive || !g_localLightTargetUsable ||
-        !g_localLightFbo || !g_localLightDepthTex || !gl::FramebufferTextureLayer)
+        !g_localLightFbo || !g_localLightWriteDepthTex || !gl::FramebufferTextureLayer)
         return false;
     st = bind_local_light_target();
     return true;
@@ -1395,7 +1454,7 @@ static bool local_visible_attach_layer(int layer) {
     // fluctuating -> a flat 50). On this driver binding a different FBO per
     // draw costs more than re-attaching to one already bound.
     gl::FramebufferTextureLayer(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT,
-                                g_localLightDepthTex, 0, layer);
+                                g_localLightWriteDepthTex, 0, layer);
     return true;
 }
 
@@ -1901,6 +1960,14 @@ static inline void finish_observed_engine_draw() {
         }                                                                   \
     } while (0)
 
+#define DUPLICATE_A2C_OPAQUE_DEPTH(drawCall)                                \
+    do {                                                                    \
+        if (nwn_oit_begin_opaque_depth_duplicate()) {                       \
+            drawCall;                                                       \
+            nwn_oit_end_opaque_depth_duplicate();                           \
+        }                                                                   \
+    } while (0)
+
 // Resolve the source-classified fragment against the program actually bound
 // immediately before this native draw. Shader/program IDs change per launch,
 // so neither is hard-coded in the foliage proof.
@@ -2088,6 +2155,8 @@ extern "C" void NWN_GL_INTERPOSE(glDrawElements)(GLenum mode, GLsizei count, GLe
     if (g_nextDrawElements) g_nextDrawElements(mode, count, type, indices);
     if (g_nextDrawElements)
         DUPLICATE_OIT_FRINGE(g_nextDrawElements(mode, count, type, indices));
+    if (g_nextDrawElements)
+        DUPLICATE_A2C_OPAQUE_DEPTH(g_nextDrawElements(mode, count, type, indices));
     finish_observed_engine_draw();
     note_cascade_replay_draws(1);
     note_local_light_draws(1);
@@ -2114,6 +2183,8 @@ extern "C" void NWN_GL_INTERPOSE(glDrawArrays)(GLenum mode, GLint first, GLsizei
     if (g_nextDrawArrays) g_nextDrawArrays(mode, first, count);
     if (g_nextDrawArrays)
         DUPLICATE_OIT_FRINGE(g_nextDrawArrays(mode, first, count));
+    if (g_nextDrawArrays)
+        DUPLICATE_A2C_OPAQUE_DEPTH(g_nextDrawArrays(mode, first, count));
     finish_observed_engine_draw();
     note_cascade_replay_draws(1);
     note_local_light_draws(1);
@@ -2172,6 +2243,9 @@ extern "C" void my_draw_range_elements(GLenum mode, GLuint start, GLuint end,
     if (g_realDrawRangeElements)
         DUPLICATE_OIT_FRINGE(g_realDrawRangeElements(mode, start, end, count,
                                                       type, indices));
+    if (g_realDrawRangeElements)
+        DUPLICATE_A2C_OPAQUE_DEPTH(g_realDrawRangeElements(mode, start, end, count,
+                                                            type, indices));
     finish_observed_engine_draw();
     note_cascade_replay_draws(1);
     note_local_light_draws(1);
@@ -2196,6 +2270,8 @@ extern "C" void my_multi_draw_arrays(GLenum mode, const GLint* first,
         g_realMultiDrawArrays(mode, first, count, drawcount);
     if (g_realMultiDrawArrays)
         DUPLICATE_OIT_FRINGE(g_realMultiDrawArrays(mode, first, count, drawcount));
+    if (g_realMultiDrawArrays)
+        DUPLICATE_A2C_OPAQUE_DEPTH(g_realMultiDrawArrays(mode, first, count, drawcount));
     finish_observed_engine_draw();
     note_cascade_replay_draws((unsigned)std::max(0, drawcount));
     note_local_light_draws((unsigned)std::max(0, drawcount));
@@ -2222,6 +2298,9 @@ extern "C" void my_multi_draw_elements(GLenum mode, const GLsizei* count,
     if (g_realMultiDrawElements)
         DUPLICATE_OIT_FRINGE(g_realMultiDrawElements(mode, count, type, indices,
                                                       drawcount));
+    if (g_realMultiDrawElements)
+        DUPLICATE_A2C_OPAQUE_DEPTH(g_realMultiDrawElements(mode, count, type,
+                                                            indices, drawcount));
     finish_observed_engine_draw();
     note_cascade_replay_draws((unsigned)std::max(0, drawcount));
     note_local_light_draws((unsigned)std::max(0, drawcount));
@@ -2247,6 +2326,9 @@ extern "C" void my_draw_elements_base_vertex(GLenum mode, GLsizei count,
     if (g_realDrawElementsBaseVertex)
         DUPLICATE_OIT_FRINGE(g_realDrawElementsBaseVertex(mode, count, type,
                                                           indices, basevertex));
+    if (g_realDrawElementsBaseVertex)
+        DUPLICATE_A2C_OPAQUE_DEPTH(g_realDrawElementsBaseVertex(mode, count, type,
+                                                                indices, basevertex));
     finish_observed_engine_draw();
     note_cascade_replay_draws(1);
     note_local_light_draws(1);
@@ -2274,6 +2356,9 @@ extern "C" void my_draw_range_elements_base_vertex(GLenum mode, GLuint start,
                                            indices, basevertex);
     if (g_realDrawRangeElementsBaseVertex)
         DUPLICATE_OIT_FRINGE(g_realDrawRangeElementsBaseVertex(
+            mode, start, end, count, type, indices, basevertex));
+    if (g_realDrawRangeElementsBaseVertex)
+        DUPLICATE_A2C_OPAQUE_DEPTH(g_realDrawRangeElementsBaseVertex(
             mode, start, end, count, type, indices, basevertex));
     finish_observed_engine_draw();
     note_cascade_replay_draws(1);
@@ -2303,6 +2388,9 @@ extern "C" void my_draw_elements_instanced(GLenum mode, GLsizei count,
     if (g_realDrawElementsInstanced)
         DUPLICATE_OIT_FRINGE(g_realDrawElementsInstanced(
             mode, count, type, indices, instances));
+    if (g_realDrawElementsInstanced)
+        DUPLICATE_A2C_OPAQUE_DEPTH(g_realDrawElementsInstanced(
+            mode, count, type, indices, instances));
     finish_observed_engine_draw();
     note_cascade_replay_draws((unsigned)std::max(0, instances));
     note_local_light_draws((unsigned)std::max(0, instances));
@@ -2330,6 +2418,9 @@ extern "C" void my_draw_elements_instanced_base_vertex(GLenum mode, GLsizei coun
     if (g_realDrawElementsInstancedBaseVertex)
         DUPLICATE_OIT_FRINGE(g_realDrawElementsInstancedBaseVertex(
             mode, count, type, indices, instances, basevertex));
+    if (g_realDrawElementsInstancedBaseVertex)
+        DUPLICATE_A2C_OPAQUE_DEPTH(g_realDrawElementsInstancedBaseVertex(
+            mode, count, type, indices, instances, basevertex));
     finish_observed_engine_draw();
     note_cascade_replay_draws((unsigned)std::max(0, instances));
     note_local_light_draws((unsigned)std::max(0, instances));
@@ -2350,6 +2441,7 @@ extern "C" void my_draw_elements_instanced_base_vertex(GLenum mode, GLsizei coun
 }
 
 #undef DUPLICATE_OIT_FRINGE
+#undef DUPLICATE_A2C_OPAQUE_DEPTH
 
 // This resolver hook is inert unless the geometry census or another module's
 // draw observer needs it. It catches direct GL function pointers at the time

@@ -1588,6 +1588,11 @@ static bool      g_inStencilShadow = false;
 static GLuint    g_stencilPrograms[32] = {};
 static unsigned  g_stencilProgramCount = 0;
 
+bool nwn_core::area_scene_draw_active() {
+    return g_inSceneRender && g_renderingScene == g_areaScene &&
+           !g_overlayPassActive && !g_inOurPass && !g_inStencilShadow;
+}
+
 // Phase 1 trace context. The render path is single-threaded, but nested camera
 // renders are possible (world, portrait, UI), so camera ownership is restored
 // on return instead of treated as one global forever.

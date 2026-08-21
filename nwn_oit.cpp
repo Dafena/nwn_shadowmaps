@@ -90,6 +90,7 @@ typedef char          GLchar;
 
 #define GL_FALSE                     0
 #define GL_TRUE                      1
+#define GL_NO_ERROR                  0
 #define GL_TRIANGLES            0x0004
 #define GL_DEPTH_TEST           0x0B71
 #define GL_DEPTH_WRITEMASK      0x0B72
@@ -102,6 +103,8 @@ typedef char          GLchar;
 #define GL_SCISSOR_TEST         0x0C11
 #define GL_COLOR_WRITEMASK      0x0C23
 #define GL_TEXTURE_2D           0x0DE1
+#define GL_TEXTURE_2D_MULTISAMPLE 0x9100
+#define GL_TEXTURE_BINDING_2D_MULTISAMPLE 0x9104
 #define GL_FLOAT                0x1406
 #define GL_UNSIGNED_INT         0x1405
 #define GL_RED                  0x1903
@@ -110,6 +113,7 @@ typedef char          GLchar;
 #define GL_COLOR                0x1800
 #define GL_ONE                       1
 #define GL_SRC_ALPHA            0x0302
+#define GL_ONE_MINUS_SRC_ALPHA  0x0303
 #define GL_LEQUAL               0x0203
 #define GL_LESS                 0x0201
 #define GL_ALWAYS               0x0207
@@ -123,6 +127,8 @@ typedef char          GLchar;
 #define GL_R16F                 0x822D
 #define GL_DEPTH_COMPONENT24    0x81A6
 #define GL_RGBA16F              0x881A
+#define GL_NONE                      0
+#define GL_DEPTH_BUFFER_BIT     0x00000100
 #define GL_TEXTURE0             0x84C0
 #define GL_ACTIVE_TEXTURE       0x84E0
 #define GL_FRAGMENT_SHADER      0x8B30
@@ -131,6 +137,8 @@ typedef char          GLchar;
 #define GL_LINK_STATUS          0x8B82
 #define GL_CURRENT_PROGRAM      0x8B8D
 #define GL_FRAMEBUFFER          0x8D40
+#define GL_READ_FRAMEBUFFER     0x8CA8
+#define GL_DRAW_FRAMEBUFFER     0x8CA9
 #define GL_FRAMEBUFFER_BINDING  0x8CA6
 #define GL_FRAMEBUFFER_COMPLETE 0x8CD5
 #define GL_COLOR_ATTACHMENT0    0x8CE0
@@ -150,6 +158,7 @@ namespace {
 //  module defers bind_gl to the first Scene::Render).
 // ---------------------------------------------------------------------------
 struct GL {
+    GLenum (*GetError)();
     void   (*GetIntegerv)(GLenum, GLint*);
     void   (*GetBooleanv)(GLenum, GLboolean*);
     GLboolean (*IsEnabled)(GLenum);
@@ -166,6 +175,8 @@ struct GL {
     void   (*BindTexture)(GLenum, GLuint);
     void   (*TexImage2D)(GLenum, GLint, GLint, GLsizei, GLsizei, GLint,
                          GLenum, GLenum, const void*);
+    void   (*TexImage2DMultisample)(GLenum, GLsizei, GLint, GLsizei, GLsizei,
+                                    GLboolean);
     void   (*TexParameteri)(GLenum, GLenum, GLint);
     void   (*CopyTexSubImage2D)(GLenum, GLint, GLint, GLint, GLint, GLint,
                                 GLsizei, GLsizei);
@@ -176,7 +187,11 @@ struct GL {
     void   (*FramebufferTexture2D)(GLenum, GLenum, GLenum, GLuint, GLint);
     GLenum (*CheckFramebufferStatus)(GLenum);
     void   (*DrawBuffers)(GLsizei, const GLenum*);
+    void   (*DrawBuffer)(GLenum);
     void   (*ReadBuffer)(GLenum);
+    void   (*BlitFramebuffer)(GLint, GLint, GLint, GLint,
+                              GLint, GLint, GLint, GLint,
+                              GLbitfield, GLenum);
     void   (*ReadPixels)(GLint, GLint, GLsizei, GLsizei, GLenum, GLenum, void*);
     GLuint (*CreateShader)(GLenum);
     void   (*ShaderSource)(GLuint, GLsizei, const GLchar* const*, const GLint*);
@@ -195,6 +210,7 @@ struct GL {
     void   (*GetAttachedShaders)(GLuint, GLsizei, GLsizei*, GLuint*);
     void   (*Uniform1i)(GLint, GLint);
     void   (*Uniform1f)(GLint, GLfloat);
+    void   (*Uniform4f)(GLint, GLfloat, GLfloat, GLfloat, GLfloat);
     void   (*DrawArrays)(GLenum, GLint, GLsizei);
 };
 GL g = {};
@@ -208,6 +224,7 @@ bool bind_gl() {
                  fprintf(stderr, "[oit] missing GL entry: %s\n", name);        \
                  ok = false; } } while (0)
     OITBIND(GetIntegerv,            "glGetIntegerv");
+    OITBIND(GetError,               "glGetError");
     OITBIND(GetBooleanv,            "glGetBooleanv");
     OITBIND(IsEnabled,              "glIsEnabled");
     OITBIND(Enable,                 "glEnable");
@@ -222,6 +239,7 @@ bool bind_gl() {
     OITBIND(DeleteTextures,         "glDeleteTextures");
     OITBIND(BindTexture,            "glBindTexture");
     OITBIND(TexImage2D,             "glTexImage2D");
+    OITBIND(TexImage2DMultisample,  "glTexImage2DMultisample");
     OITBIND(TexParameteri,          "glTexParameteri");
     OITBIND(CopyTexSubImage2D,      "glCopyTexSubImage2D");
     OITBIND(ActiveTexture,          "glActiveTexture");
@@ -231,7 +249,9 @@ bool bind_gl() {
     OITBIND(FramebufferTexture2D,   "glFramebufferTexture2D");
     OITBIND(CheckFramebufferStatus, "glCheckFramebufferStatus");
     OITBIND(DrawBuffers,            "glDrawBuffers");
+    OITBIND(DrawBuffer,             "glDrawBuffer");
     OITBIND(ReadBuffer,             "glReadBuffer");
+    OITBIND(BlitFramebuffer,        "glBlitFramebuffer");
     OITBIND(ReadPixels,             "glReadPixels");
     OITBIND(CreateShader,           "glCreateShader");
     OITBIND(ShaderSource,           "glShaderSource");
@@ -250,6 +270,7 @@ bool bind_gl() {
     OITBIND(GetAttachedShaders,     "glGetAttachedShaders");
     OITBIND(Uniform1i,              "glUniform1i");
     OITBIND(Uniform1f,              "glUniform1f");
+    OITBIND(Uniform4f,              "glUniform4f");
     #undef OITBIND
 
     // glDrawArrays is the ONE entry point resolved differently, and deliberately.
@@ -411,11 +432,24 @@ GLuint g_texTransl   = 0;      // R16F     prod(1-a)
 GLuint g_texDepth    = 0;      // copied completed scene depth for late replay
 int    g_w = 0, g_h = 0;
 
+// A2C emitter path. This depth image deliberately contains ordinary opaque
+// geometry but not alpha-to-coverage foliage. Additive emitters compare
+// against it in their own fragment shader, so foliage coverage cannot erase
+// fire while walls and character bodies still occlude it normally.
+GLuint g_a2cOpaqueDepthFbo = 0;
+GLuint g_a2cOpaqueDepthTex = 0;
+int    g_a2cOpaqueDepthW = 0, g_a2cOpaqueDepthH = 0;
+int    g_a2cOpaqueDepthSamples = 0;
+bool   g_a2cOpaqueDepthReady = false;
+bool   g_a2cOpaqueDuplicatePending = false;
+unsigned g_a2cOpaqueDuplicateDraws = 0;
+
 // Texture units this pass borrows. High on purpose: the shadow module owns low
 // ones, and every binding here is saved and restored anyway.
 const GLenum kUnitCombined = GL_TEXTURE0 + 12;
 const GLenum kUnitSum      = GL_TEXTURE0 + 13;
 const GLenum kUnitTransl   = GL_TEXTURE0 + 14;
+const GLenum kUnitA2cOpaqueDepth = GL_TEXTURE0 + 15;
 
 GLuint make_target(GLint internalFormat, GLenum format, GLenum type,
                    int w, int h) {
@@ -431,7 +465,7 @@ GLuint make_target(GLint internalFormat, GLenum format, GLenum type,
     return t;
 }
 
-void destroy_targets() {
+void destroy_accum_targets() {
     if (g_fbo)         { g.DeleteFramebuffers(1, &g_fbo);      g_fbo = 0; }
     if (g_texCombined) { g.DeleteTextures(1, &g_texCombined);  g_texCombined = 0; }
     if (g_texSum)      { g.DeleteTextures(1, &g_texSum);       g_texSum = 0; }
@@ -440,11 +474,71 @@ void destroy_targets() {
     g_w = g_h = 0;
 }
 
+void destroy_a2c_opaque_depth() {
+    if (g_a2cOpaqueDepthFbo) {
+        g.DeleteFramebuffers(1, &g_a2cOpaqueDepthFbo);
+        g_a2cOpaqueDepthFbo = 0;
+    }
+    if (g_a2cOpaqueDepthTex) {
+        g.DeleteTextures(1, &g_a2cOpaqueDepthTex);
+        g_a2cOpaqueDepthTex = 0;
+    }
+    g_a2cOpaqueDepthW = g_a2cOpaqueDepthH = 0;
+    g_a2cOpaqueDepthSamples = 0;
+    g_a2cOpaqueDepthReady = false;
+}
+
+void destroy_targets() {
+    destroy_accum_targets();
+    destroy_a2c_opaque_depth();
+}
+
+bool ensure_a2c_opaque_depth(int w, int h, int samples) {
+    if (g_a2cOpaqueDepthFbo && g_a2cOpaqueDepthTex &&
+        w == g_a2cOpaqueDepthW && h == g_a2cOpaqueDepthH &&
+        samples == g_a2cOpaqueDepthSamples)
+        return true;
+    if (g_a2cOpaqueDepthFbo) g.DeleteFramebuffers(1, &g_a2cOpaqueDepthFbo);
+    if (g_a2cOpaqueDepthTex) g.DeleteTextures(1, &g_a2cOpaqueDepthTex);
+    g_a2cOpaqueDepthFbo = g_a2cOpaqueDepthTex = 0;
+    g_a2cOpaqueDepthReady = false;
+    g_a2cOpaqueDepthSamples = 0;
+    if (w <= 0 || h <= 0 || samples < 2) return false;
+
+    g.ActiveTexture(kUnitA2cOpaqueDepth);
+    g.GenTextures(1, &g_a2cOpaqueDepthTex);
+    g.BindTexture(GL_TEXTURE_2D_MULTISAMPLE, g_a2cOpaqueDepthTex);
+    g.TexImage2DMultisample(GL_TEXTURE_2D_MULTISAMPLE, samples,
+                            GL_DEPTH_COMPONENT24, w, h, GL_TRUE);
+    g.GenFramebuffers(1, &g_a2cOpaqueDepthFbo);
+    if (!g_a2cOpaqueDepthTex || !g_a2cOpaqueDepthFbo) {
+        destroy_a2c_opaque_depth();
+        return false;
+    }
+    g.BindFramebuffer(GL_FRAMEBUFFER, g_a2cOpaqueDepthFbo);
+    g.FramebufferTexture2D(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT,
+                           GL_TEXTURE_2D_MULTISAMPLE,
+                           g_a2cOpaqueDepthTex, 0);
+    g.DrawBuffer(GL_NONE);
+    g.ReadBuffer(GL_NONE);
+    if (g.CheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE) {
+        fprintf(stderr, "[a2c][emitter] opaque-depth framebuffer incomplete\n");
+        destroy_a2c_opaque_depth();
+        return false;
+    }
+    g_a2cOpaqueDepthW = w;
+    g_a2cOpaqueDepthH = h;
+    g_a2cOpaqueDepthSamples = samples;
+    fprintf(stderr, "[a2c][emitter] opaque-only depth target ready: %dx%d D24, %dx MSAA\n",
+            w, h, samples);
+    return true;
+}
+
 // Creates or resizes the accumulation targets. Caller has already saved the
 // framebuffer binding and the texture binding on unit kUnitCombined.
 bool ensure_targets(int w, int h) {
     if (g_fbo && w == g_w && h == g_h) return true;
-    destroy_targets();
+    destroy_accum_targets();
     if (w <= 0 || h <= 0) return false;
 
     g.ActiveTexture(kUnitCombined);
@@ -455,12 +549,12 @@ bool ensure_targets(int w, int h) {
                                 GL_UNSIGNED_INT, w, h);
     if (!g_texCombined || !g_texSum || !g_texTransl || !g_texDepth) {
         fprintf(stderr, "[oit] target allocation failed at %dx%d\n", w, h);
-        destroy_targets();
+        destroy_accum_targets();
         return false;
     }
 
     g.GenFramebuffers(1, &g_fbo);
-    if (!g_fbo) { destroy_targets(); return false; }
+    if (!g_fbo) { destroy_accum_targets(); return false; }
     g.BindFramebuffer(GL_FRAMEBUFFER, g_fbo);
     g.FramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0 + 0, GL_TEXTURE_2D, g_texCombined, 0);
     g.FramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0 + 1, GL_TEXTURE_2D, g_texSum,      0);
@@ -476,7 +570,7 @@ bool ensure_targets(int w, int h) {
     if (status != GL_FRAMEBUFFER_COMPLETE) {
         fprintf(stderr, "[oit] MRT framebuffer incomplete (0x%04X) at %dx%d\n",
                 (unsigned)status, w, h);
-        destroy_targets();
+        destroy_accum_targets();
         return false;
     }
     g_w = w; g_h = h;
@@ -574,7 +668,7 @@ struct SavedState {
     GLint     viewport[4];
     GLint     program;
     GLint     activeTexture;
-    GLint     texCombined, texSum, texTransl;
+    GLint     texCombined, texSum, texTransl, texA2cOpaqueDepth;
     GLboolean depthMask;
     GLboolean depthTest;
     GLint     depthFunc;
@@ -604,9 +698,13 @@ void save_state(SavedState& s) {
     g.ActiveTexture(kUnitCombined); g.GetIntegerv(GL_TEXTURE_BINDING_2D, &s.texCombined);
     g.ActiveTexture(kUnitSum);      g.GetIntegerv(GL_TEXTURE_BINDING_2D, &s.texSum);
     g.ActiveTexture(kUnitTransl);   g.GetIntegerv(GL_TEXTURE_BINDING_2D, &s.texTransl);
+    g.ActiveTexture(kUnitA2cOpaqueDepth);
+    g.GetIntegerv(GL_TEXTURE_BINDING_2D_MULTISAMPLE, &s.texA2cOpaqueDepth);
 }
 
 void restore_state(const SavedState& s) {
+    g.ActiveTexture(kUnitA2cOpaqueDepth);
+    g.BindTexture(GL_TEXTURE_2D_MULTISAMPLE, (GLuint)s.texA2cOpaqueDepth);
     g.ActiveTexture(kUnitTransl);   g.BindTexture(GL_TEXTURE_2D, (GLuint)s.texTransl);
     g.ActiveTexture(kUnitSum);      g.BindTexture(GL_TEXTURE_2D, (GLuint)s.texSum);
     g.ActiveTexture(kUnitCombined); g.BindTexture(GL_TEXTURE_2D, (GLuint)s.texCombined);
@@ -664,7 +762,7 @@ unsigned    g_censusCount = 0;
 // Shader object IDs are valid only for this process. The stable identity is
 // the source signature detected by the existing glShaderSource interposer;
 // this bounded registry merely carries that identity to live draw programs.
-GLuint   g_foliageFragments[64] = {};
+GLuint   g_foliageFragments[256] = {};
 unsigned g_foliageFragmentCount = 0;
 
 // Programs are classified once and then reused by both the census and the
@@ -683,9 +781,14 @@ struct FoliageProgram {
     GLint  oitDepthPassLoc;
     GLint  oitOpaqueCoreLoc;
     GLint  a2cPassLoc;
+    GLint  a2cEmitterPassLoc;
+    GLint  a2cEmitterDepthLoc;
+    GLint  a2cEmitterViewportLoc;
+    GLint  a2cEmitterBiasLoc;
+    GLint  a2cEmitterSamplesLoc;
     unsigned fragmentGeneration;
 };
-FoliageProgram g_foliagePrograms[192] = {};
+FoliageProgram g_foliagePrograms[384] = {};
 unsigned       g_foliageProgramCount = 0;
 FoliageProgram* g_immediateProgram = nullptr;
 bool           g_immediatePrepared = false;
@@ -703,6 +806,7 @@ GLboolean      g_originalColorMask[4] = {GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE};
 GLboolean      g_originalBlend = GL_FALSE;
 GLboolean      g_originalCull = GL_FALSE;
 GLboolean      g_originalA2c = GL_FALSE;
+GLboolean      g_originalDepthTest = GL_TRUE;
 GLint          g_originalDepthFunc = GL_LESS;
 GLint          g_originalBlendSrcRGB = GL_ONE;
 GLint          g_originalBlendDstRGB = GL_ONE;
@@ -711,6 +815,10 @@ GLint          g_originalBlendDstAlpha = GL_ONE;
 unsigned       g_originalDepthlessDraws = 0;
 GLint          g_originalOpaqueCoreLoc = -1;
 GLint          g_originalA2cLoc = -1;
+GLint          g_originalEmitterPassLoc = -1;
+bool           g_emitterDepthBorrowed = false;
+GLint          g_emitterOldActiveTexture = GL_TEXTURE0;
+GLint          g_emitterOldDepthTexture = 0;
 char           g_boundTextureNames[32][128] = {};
 struct SeenTextureName { unsigned unit; char name[128]; };
 SeenTextureName g_seenTextureNames[256] = {};
@@ -769,6 +877,11 @@ FoliageProgram* foliage_program(GLuint program) {
         entry->oitDepthPassLoc = -1;
         entry->oitOpaqueCoreLoc = -1;
         entry->a2cPassLoc = -1;
+        entry->a2cEmitterPassLoc = -1;
+        entry->a2cEmitterDepthLoc = -1;
+        entry->a2cEmitterViewportLoc = -1;
+        entry->a2cEmitterBiasLoc = -1;
+        entry->a2cEmitterSamplesLoc = -1;
     }
     if (entry->fragment ||
         entry->fragmentGeneration == g_foliageFragmentCount)
@@ -798,6 +911,18 @@ FoliageProgram* foliage_program(GLuint program) {
                 ? g.GetUniformLocation(program, "nwnOitOpaqueCore") : -1;
             entry->a2cPassLoc = g.GetUniformLocation
                 ? g.GetUniformLocation(program, "nwnA2cPass") : -1;
+            entry->a2cEmitterPassLoc = g.GetUniformLocation
+                ? g.GetUniformLocation(program, "nwnA2cEmitterPass") : -1;
+            entry->a2cEmitterDepthLoc = g.GetUniformLocation
+                ? g.GetUniformLocation(program, "nwnA2cEmitterOpaqueDepth") : -1;
+            entry->a2cEmitterViewportLoc = g.GetUniformLocation
+                ? g.GetUniformLocation(program, "nwnA2cEmitterViewport") : -1;
+            entry->a2cEmitterBiasLoc = g.GetUniformLocation
+                ? g.GetUniformLocation(program, "nwnA2cEmitterDepthBias") : -1;
+            entry->a2cEmitterSamplesLoc = g.GetUniformLocation
+                ? g.GetUniformLocation(program, "nwnA2cEmitterSamples") : -1;
+            if (entry->a2cEmitterDepthLoc >= 0)
+                g.Uniform1i(entry->a2cEmitterDepthLoc, 15);
             fprintf(stderr, "[oit][foliage] program=%u joined to source-classified "
                             "fragment=%u cutoffLoc=%d oitPassLoc=%d\n",
                     (unsigned)program, (unsigned)entry->fragment,
@@ -837,8 +962,11 @@ const char* oit_verdict(GLboolean blend, GLint src, GLint dst) {
 
 void census_observe_draw() {
     const int bucket = nwn_core::g_currentBucket;
-    if (!g_glBound || (bucket < 0 && !g_privateReplayActive &&
-                       !g_privateDepthReplayActive)) return;
+    const bool areaDrawWithoutBucket = bucket < 0 &&
+                                       nwn_core::area_scene_draw_active();
+    if (!g_glBound || (bucket < 0 && !areaDrawWithoutBucket &&
+                       !g_privateReplayActive && !g_privateDepthReplayActive))
+        return;
 
     GLint prog = 0;
     g.GetIntegerv(GL_CURRENT_PROGRAM, &prog);
@@ -895,6 +1023,86 @@ void census_observe_draw() {
         return;
     }
 
+    // Keep the opaque-only depth image current after the static snapshot.
+    // Bucket 2 is the empirically proven dynamic opaque stage; duplicating its
+    // depth writes here adds characters to the private image without copying
+    // the bucket-1/3 A2C foliage that must remain transparent to emitters.
+    if (g_foliageA2c && g_a2cOpaqueDepthReady && bucket == 2) {
+        GLboolean depthMask = GL_FALSE;
+        g.GetBooleanv(GL_DEPTH_WRITEMASK, &depthMask);
+        g_a2cOpaqueDuplicatePending = depthMask && g.IsEnabled(GL_DEPTH_TEST) &&
+                                      !g.IsEnabled(GL_BLEND);
+    }
+
+    // NWNEE submits visible particle quads in bucket 6.  The torch flame uses
+    // ordinary source-over blending there (not the additive bucket previously
+    // inferred from an unrelated effect); some glow variants remain additive.
+    // Both use a stock scene-colour fragment with no live alpha-discard uniform.
+    // Route only those measured particle signatures. Their shader manually
+    // tests opaque-only depth while hardware depth is disabled, so A2C foliage
+    // cannot erase the effect and opaque geometry still can.
+    if (g_foliageA2c && g_a2cOpaqueDepthReady &&
+        (bucket == 6 || areaDrawWithoutBucket) && foliage &&
+        foliageProgram->alphaDiscardLoc < 0 &&
+        foliageProgram->a2cEmitterPassLoc >= 0 &&
+        foliageProgram->a2cEmitterDepthLoc >= 0 &&
+        foliageProgram->a2cEmitterViewportLoc >= 0 &&
+        g.IsEnabled(GL_BLEND)) {
+        GLint src = 0, dst = 0;
+        g.GetIntegerv(GL_BLEND_SRC_RGB, &src);
+        g.GetIntegerv(GL_BLEND_DST_RGB, &dst);
+        const bool sourceOver = src == GL_SRC_ALPHA &&
+                                dst == GL_ONE_MINUS_SRC_ALPHA;
+        const bool additive = dst == GL_ONE &&
+                              (src == GL_SRC_ALPHA || src == GL_ONE);
+        if (sourceOver || additive) {
+            if (!g_originalDepthOverride) {
+                g.GetBooleanv(GL_DEPTH_WRITEMASK, &g_originalDepthMask);
+                g.GetBooleanv(GL_COLOR_WRITEMASK, g_originalColorMask);
+                g.GetIntegerv(GL_DEPTH_FUNC, &g_originalDepthFunc);
+                g.GetIntegerv(GL_BLEND_SRC_RGB, &g_originalBlendSrcRGB);
+                g.GetIntegerv(GL_BLEND_DST_RGB, &g_originalBlendDstRGB);
+                g.GetIntegerv(GL_BLEND_SRC_ALPHA, &g_originalBlendSrcAlpha);
+                g.GetIntegerv(GL_BLEND_DST_ALPHA, &g_originalBlendDstAlpha);
+                g_originalBlend = g.IsEnabled(GL_BLEND);
+                g_originalCull = g.IsEnabled(GL_CULL_FACE);
+                g_originalDepthTest = g.IsEnabled(GL_DEPTH_TEST);
+                g_originalA2c = g.IsEnabled(GL_SAMPLE_ALPHA_TO_COVERAGE);
+                g_originalDepthOverride = true;
+            }
+            GLint vp[4] = {};
+            g.GetIntegerv(GL_VIEWPORT, vp);
+            g.GetIntegerv(GL_ACTIVE_TEXTURE, &g_emitterOldActiveTexture);
+            g.ActiveTexture(kUnitA2cOpaqueDepth);
+            g.GetIntegerv(GL_TEXTURE_BINDING_2D_MULTISAMPLE,
+                          &g_emitterOldDepthTexture);
+            g.BindTexture(GL_TEXTURE_2D_MULTISAMPLE, g_a2cOpaqueDepthTex);
+            g.ActiveTexture((GLenum)g_emitterOldActiveTexture);
+            g.Uniform1i(foliageProgram->a2cEmitterDepthLoc, 15);
+            g.Uniform4f(foliageProgram->a2cEmitterViewportLoc,
+                        (GLfloat)vp[0], (GLfloat)vp[1],
+                        (GLfloat)vp[2], (GLfloat)vp[3]);
+            if (foliageProgram->a2cEmitterBiasLoc >= 0)
+                g.Uniform1f(foliageProgram->a2cEmitterBiasLoc, 0.00001f);
+            if (foliageProgram->a2cEmitterSamplesLoc >= 0)
+                g.Uniform1i(foliageProgram->a2cEmitterSamplesLoc,
+                            g_a2cOpaqueDepthSamples);
+            g.Uniform1i(foliageProgram->a2cEmitterPassLoc, 1);
+            g_originalEmitterPassLoc = foliageProgram->a2cEmitterPassLoc;
+            g_emitterDepthBorrowed = true;
+            g.Disable(GL_DEPTH_TEST);
+            g.DepthMask(GL_FALSE);
+            static bool reportedEmitter = false;
+            if (!reportedEmitter) {
+                reportedEmitter = true;
+                fprintf(stderr, "[a2c][emitter] bucket-6 scene particles now test "
+                                "opaque-only depth; foliage coverage preserved "
+                                "(dynamic opaque duplicates=%u)\n",
+                        g_a2cOpaqueDuplicateDraws);
+            }
+        }
+    }
+
     if (g_foliageA2c && (bucket == 1 || bucket == 3) && foliage &&
         foliageProgram->alphaDiscardLoc >= 0 &&
         foliageProgram->a2cPassLoc >= 0) {
@@ -948,6 +1156,7 @@ void census_observe_draw() {
             g.GetIntegerv(GL_BLEND_DST_ALPHA, &g_originalBlendDstAlpha);
             g_originalBlend = g.IsEnabled(GL_BLEND);
             g_originalCull = g.IsEnabled(GL_CULL_FACE);
+            g_originalDepthTest = g.IsEnabled(GL_DEPTH_TEST);
             g.DepthMask(GL_TRUE);
             g.DepthFunc(GL_LESS);
             g.ColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
@@ -1036,6 +1245,17 @@ void census_observe_draw() {
 }
 
 void restore_original_draw_state() {
+    if (g_originalEmitterPassLoc >= 0) {
+        g.Uniform1i(g_originalEmitterPassLoc, 0);
+        g_originalEmitterPassLoc = -1;
+    }
+    if (g_emitterDepthBorrowed) {
+        g.ActiveTexture(kUnitA2cOpaqueDepth);
+        g.BindTexture(GL_TEXTURE_2D_MULTISAMPLE,
+                      (GLuint)g_emitterOldDepthTexture);
+        g.ActiveTexture((GLenum)g_emitterOldActiveTexture);
+        g_emitterDepthBorrowed = false;
+    }
     if (g_originalA2cLoc >= 0) {
         g.Uniform1i(g_originalA2cLoc, 0);
         g_originalA2cLoc = -1;
@@ -1055,6 +1275,7 @@ void restore_original_draw_state() {
                         (GLenum)g_originalBlendDstAlpha);
     if (g_originalBlend) g.Enable(GL_BLEND); else g.Disable(GL_BLEND);
     if (g_originalCull) g.Enable(GL_CULL_FACE); else g.Disable(GL_CULL_FACE);
+    if (g_originalDepthTest) g.Enable(GL_DEPTH_TEST); else g.Disable(GL_DEPTH_TEST);
     if (g_originalA2c) g.Enable(GL_SAMPLE_ALPHA_TO_COVERAGE);
     else g.Disable(GL_SAMPLE_ALPHA_TO_COVERAGE);
     g_originalDepthOverride = false;
@@ -1080,6 +1301,8 @@ void reset_foliage_pass_uniforms(GLuint restoreProgram) {
             g.Uniform1i(entry.oitOpaqueCoreLoc, 0);
         if (entry.a2cPassLoc >= 0)
             g.Uniform1i(entry.a2cPassLoc, 0);
+        if (entry.a2cEmitterPassLoc >= 0)
+            g.Uniform1i(entry.a2cEmitterPassLoc, 0);
     }
     g.UseProgram(restoreProgram);
 }
@@ -1205,6 +1428,11 @@ bool nwn_oit_wants_foliage_shader_branch(void) {
     return g_foliageShader;
 }
 
+bool nwn_oit_wants_a2c_emitter_shader_branch(void) {
+    read_settings();
+    return g_foliageA2c;
+}
+
 bool nwn_oit_observes_owned_draws(void) {
     return g_privateReplayActive || g_privateDepthReplayActive;
 }
@@ -1227,6 +1455,26 @@ void nwn_oit_note_foliage_fragment(unsigned int shader) {
     g_foliageFragments[g_foliageFragmentCount++] = (GLuint)shader;
     fprintf(stderr, "[oit][foliage] source-classified fragment=%u "
                     "(NO_DISCARD=0 + fAlphaDiscardValue)\n", shader);
+}
+
+void nwn_oit_note_emitter_fragment(unsigned int shader) {
+    read_settings();
+    if (!g_foliageA2c || shader == 0) return;
+    for (unsigned i = 0; i < g_foliageFragmentCount; ++i)
+        if (g_foliageFragments[i] == (GLuint)shader) return;
+    if (g_foliageFragmentCount >=
+        sizeof(g_foliageFragments) / sizeof(g_foliageFragments[0])) {
+        static bool warned = false;
+        if (!warned) {
+            warned = true;
+            fprintf(stderr, "[a2c][emitter] fragment registry full; later "
+                            "particle shaders cannot be routed\n");
+        }
+        return;
+    }
+    g_foliageFragments[g_foliageFragmentCount++] = (GLuint)shader;
+    fprintf(stderr, "[a2c][emitter] generic scene-colour fragment=%u instrumented\n",
+            shader);
 }
 
 void nwn_oit_note_texture_bind(unsigned int unit, const char* name) {
@@ -1289,13 +1537,54 @@ void nwn_oit_prepare(void) {
 
 void nwn_oit_bucket_begin(void* scene, int bucket) {
     read_settings();
-    if (!g_foliageVisible || g_failed || !scene ||
+    if ((!g_foliageVisible && !g_foliageA2c) || g_failed || !scene ||
         (bucket != 1 && bucket != 3)) return;
     nwn_oit_prepare();
     if (!g_glBound) return;
 
     SavedState st;
     save_state(st);
+
+    if (g_foliageA2c && bucket == 1) {
+        g_a2cOpaqueDepthReady = false;
+        g_a2cOpaqueDuplicatePending = false;
+        g_a2cOpaqueDuplicateDraws = 0;
+        GLint samples = 0;
+        g.GetIntegerv(GL_SAMPLES, &samples);
+        if (ensure_a2c_opaque_depth(st.viewport[2], st.viewport[3], samples)) {
+            for (unsigned drained = 0;
+                 drained < 32 && g.GetError() != GL_NO_ERROR; ++drained) {}
+            g.BindFramebuffer(GL_READ_FRAMEBUFFER, (GLuint)st.fbo);
+            g.BindFramebuffer(GL_DRAW_FRAMEBUFFER, g_a2cOpaqueDepthFbo);
+            g.BlitFramebuffer(st.viewport[0], st.viewport[1],
+                              st.viewport[0] + st.viewport[2],
+                              st.viewport[1] + st.viewport[3],
+                              0, 0, st.viewport[2], st.viewport[3],
+                              GL_DEPTH_BUFFER_BIT, GL_NEAREST);
+            g_a2cOpaqueDepthReady = g.GetError() == GL_NO_ERROR;
+            static bool reportedSnapshot = false;
+            if (g_a2cOpaqueDepthReady && !reportedSnapshot) {
+                reportedSnapshot = true;
+                fprintf(stderr, "[a2c][emitter] captured pre-foliage opaque depth; "
+                                "dynamic opaque bucket 2 will extend it\n");
+            } else if (!g_a2cOpaqueDepthReady) {
+                static bool reportedFailure = false;
+                if (!reportedFailure) {
+                    reportedFailure = true;
+                    fprintf(stderr, "[a2c][emitter] opaque-depth MSAA blit failed; "
+                                    "native emitter depth retained\n");
+                }
+            }
+        }
+        restore_state(st);
+        if (!g_foliageVisible) return;
+        save_state(st);
+    }
+
+    if (!g_foliageVisible) {
+        restore_state(st);
+        return;
+    }
     if (!ensure_targets(st.viewport[2], st.viewport[3])) {
         restore_state(st);
         g_failed = true;
@@ -1332,6 +1621,34 @@ void nwn_oit_bucket_begin(void* scene, int bucket) {
     g_visibleAccumFbo = st.fbo;
     g_immediatePrepared = true;
     restore_state(st);
+}
+
+static SavedState g_a2cOpaqueDuplicateState = {};
+static bool g_a2cOpaqueDuplicateActive = false;
+
+bool nwn_oit_begin_opaque_depth_duplicate(void) {
+    const bool pending = g_a2cOpaqueDuplicatePending;
+    g_a2cOpaqueDuplicatePending = false;
+    if (!pending || !g_foliageA2c || !g_a2cOpaqueDepthReady ||
+        g_a2cOpaqueDuplicateActive)
+        return false;
+    save_state(g_a2cOpaqueDuplicateState);
+    g.BindFramebuffer(GL_FRAMEBUFFER, g_a2cOpaqueDepthFbo);
+    g.Viewport(0, 0, g_a2cOpaqueDepthW, g_a2cOpaqueDepthH);
+    g.Disable(GL_SCISSOR_TEST);
+    g.ColorMask(GL_FALSE, GL_FALSE, GL_FALSE, GL_FALSE);
+    g.Disable(GL_BLEND);
+    g.Enable(GL_DEPTH_TEST);
+    g.DepthMask(GL_TRUE);
+    g_a2cOpaqueDuplicateActive = true;
+    return true;
+}
+
+void nwn_oit_end_opaque_depth_duplicate(void) {
+    if (!g_a2cOpaqueDuplicateActive) return;
+    restore_state(g_a2cOpaqueDuplicateState);
+    g_a2cOpaqueDuplicateActive = false;
+    ++g_a2cOpaqueDuplicateDraws;
 }
 
 bool nwn_oit_begin_immediate_fringe(void) {

@@ -88,7 +88,12 @@ static double        g_localJoinLast = 0.0;
 // Level for each published slot this capture, in slot order.
 static float         g_localJoinLevel[kLocalSlotsMax] = {};
 
-static GLuint g_localLightDepthTex     = 0;
+// Double-buffered local depth. Receivers sample only DepthTex (the last
+// completed generation); in-band bucket replays fill WriteDepthTex. Publishing
+// swaps the names after bucket 3, so A2C foliage never samples a texture that
+// bucket 0 has just cleared and only partially refilled.
+static GLuint g_localLightDepthTex      = 0;
+static GLuint g_localLightWriteDepthTex = 0;
 static bool   g_localLightTargetUsable = false;
 // SUN-PATH state. capture_local_light_shadow() publishes the slots and sets
 // these; replay_bucket_into_local_light_layers() consumes them from inside the
@@ -322,7 +327,10 @@ static double injector_target_mib() {
     if (g_sceneDepthTex)     bytes += (double)g_sceneDepthW * g_sceneDepthH * depth24;
     if (g_localLightDepthTex)
         bytes += (double)g_localLightCaptureSize * g_localLightCaptureSize *
-                 kLocalLightFaces * depth24;
+                 g_localLightLayers * depth24;
+    if (g_localLightWriteDepthTex)
+        bytes += (double)g_localLightCaptureSize * g_localLightCaptureSize *
+                 g_localLightLayers * depth24;
     return bytes / (1024.0 * 1024.0);
 }
 

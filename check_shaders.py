@@ -88,6 +88,14 @@ def injected_foliage_shader():
             "  gl_FragColor=vec4(0.6,0.7,0.8,0.5);\n" + body + "\n}\n")
 
 
+def injected_emitter_shader():
+    path = "shadow_shader_interposition.inc"
+    declarations = named_string(path, "declarations")
+    body = named_string(path, "body")
+    return ("#version 330 compatibility\n" + declarations +
+            "\nvoid main(){ gl_FragColor=vec4(1.0);\n" + body + "\n}\n")
+
+
 def main():
     if not shutil.which("glslangValidator"):
         print("glslangValidator not found (install `glslang`)", file=sys.stderr)
@@ -130,6 +138,21 @@ def main():
             failures += 1
     except Exception as exc:
         print(f"FAIL  a2c foliage injection extraction: {exc}")
+        failures += 1
+    try:
+        src = injected_emitter_shader()
+        tmp = "/tmp/nwn_shadow_emitter_check.frag"
+        open(tmp, "w").write(src)
+        res = subprocess.run(["glslangValidator", tmp],
+                             capture_output=True, text=True)
+        if res.returncode == 0:
+            print(f"ok    {'a2c emitter injection':22s} {len(src):6d} bytes")
+        else:
+            print("FAIL  a2c emitter injection")
+            print(res.stdout.strip() or res.stderr.strip())
+            failures += 1
+    except Exception as exc:
+        print(f"FAIL  a2c emitter injection assembly: {exc}")
         failures += 1
     return 1 if failures else 0
 

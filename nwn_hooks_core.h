@@ -81,6 +81,7 @@ extern void (*g_drawObserver)();
 // Optional companion invoked immediately after the native draw. A module that
 // temporarily changes per-draw GL state in g_drawObserver restores it here.
 extern void (*g_drawObserverAfter)();
+bool area_scene_draw_active();
 
 }   // namespace nwn_core
 
@@ -97,6 +98,8 @@ void nwn_oit_bucket_begin(void* scene, int bucket);
 void nwn_oit_bucket_complete(void* scene, int bucket);
 bool nwn_oit_begin_immediate_fringe(void);
 void nwn_oit_end_immediate_fringe(void);
+bool nwn_oit_begin_opaque_depth_duplicate(void);
+void nwn_oit_end_opaque_depth_duplicate(void);
 
 // Called at Scene::Render entry, once a GL context is current. It installs
 // read-only observers before the engine issues this frame's draws. No targets
@@ -121,6 +124,7 @@ bool nwn_oit_needs_draw_observer(void);
 bool nwn_oit_needs_bucket_hook(void);
 bool nwn_oit_needs_texture_tracking(void);
 bool nwn_oit_wants_foliage_shader_branch(void);
+bool nwn_oit_wants_a2c_emitter_shader_branch(void);
 bool nwn_oit_observes_owned_draws(void);
 
 // Called only for a stable stock fragment-source signature
@@ -128,6 +132,7 @@ bool nwn_oit_observes_owned_draws(void);
 // are never persisted; the OIT module joins them to the currently bound
 // program with glGetAttachedShaders at draw time.
 void nwn_oit_note_foliage_fragment(unsigned int shader);
+void nwn_oit_note_emitter_fragment(unsigned int shader);
 void nwn_oit_note_texture_bind(unsigned int unit, const char* name);
 
 // Re-enter one native bucket through the shadow module's proven fault and
