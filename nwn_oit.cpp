@@ -304,6 +304,7 @@ bool  g_census    = false;      // NWN_OIT_CENSUS -- Phase 2a, see below
 bool  g_foliageCensus = false;  // source-classified foliage only; read-only
 bool  g_materialModeCensus = false; // explicit MTR NWN_ALPHA_MODE; read-only
 bool  g_materialIdentityCensus = false; // stock Material + texture identity
+bool  g_materialModeRouting = false; // fail-closed authored mode dispatch
 bool  g_textureCensus = false;  // explicit, slow CAurTexture bind-name diagnostic
 bool  g_foliageShader = false;  // compile an inert MRT branch into stock alpha shaders
 bool  g_foliageReplay = false;  // private late bucket-1 accumulation proof
@@ -346,6 +347,9 @@ void read_settings() {
     g_materialIdentityCensus = (materialIdentityCensus &&
                                 *materialIdentityCensus &&
                                 *materialIdentityCensus != '0');
+    const char* materialModeRouting = getenv("NWN_ALPHA_MODE_ROUTING");
+    g_materialModeRouting = (materialModeRouting && *materialModeRouting &&
+                             *materialModeRouting != '0');
     const char* textureCensus = getenv("NWN_OIT_TEXTURE_CENSUS");
     g_textureCensus = (textureCensus && *textureCensus && *textureCensus != '0');
     const char* foliageShader = getenv("NWN_OIT_FOLIAGE_SHADER");
@@ -362,6 +366,11 @@ void read_settings() {
     g_foliageVisible = (foliageVisible && *foliageVisible && *foliageVisible != '0');
     const char* foliageA2c = getenv("NWN_A2C_FOLIAGE");
     g_foliageA2c = (foliageA2c && *foliageA2c && *foliageA2c != '0');
+    if (g_materialModeRouting && g_foliageA2c) {
+        g_foliageA2c = false;
+        fprintf(stderr, "[oit][mode-route] NWN_A2C_FOLIAGE ignored because "
+                        "strict material routing is enabled\n");
+    }
     g_alphaGain = env_float("NWN_OIT_ALPHA_GAIN", 1.0f);
     if (g_alphaGain < 0.25f) g_alphaGain = 0.25f;
     if (g_alphaGain > 8.0f) g_alphaGain = 8.0f;
@@ -377,6 +386,7 @@ void read_settings() {
         g_foliageShader = true;
     }
     if (g_foliageA2c) g_foliageShader = true;
+    if (g_materialModeRouting) g_foliageShader = true;
     if (g_foliageReplay) g_foliageShader = true;
     if (g_census)
         fprintf(stderr, "[oit] Phase 2a census enabled: reports blend/depth/cull "
@@ -393,6 +403,10 @@ void read_settings() {
     if (g_materialIdentityCensus)
         fprintf(stderr, "[oit][material-identity] stock-path census enabled. "
                         "Read-only; native shader selection and draw state remain intact.\n");
+    if (g_materialModeRouting)
+        fprintf(stderr, "[oit][mode-route] strict material routing enabled: "
+                        "mode 2 may use A2C; every other/unknown/excluded mode "
+                        "remains native. Emitters and OIT are unchanged.\n");
     if (g_textureCensus)
         fprintf(stderr, "[oit][texture] explicit bind-name census enabled. "
                         "Diagnostic only; the texture hook uses a slow, "
@@ -852,6 +866,9 @@ struct MaterialResourceIdentity {
     void* material;
     void* sharedMaterial;
     int mode;
+    int sampleFramebuffer;
+    bool transparency;
+    bool volumetric;
     char name[128];
 };
 MaterialResourceIdentity g_materialResources[4096] = {};
@@ -860,15 +877,18 @@ unsigned g_materialResourceCount = 0;
 struct SharedMaterialMode {
     void* sharedMaterial;
     int mode;
+    int sampleFramebuffer;
+    bool transparency;
+    bool volumetric;
 };
 SharedMaterialMode g_sharedMaterialModes[4096] = {};
 unsigned g_sharedMaterialModeCount = 0;
 
-int shared_material_mode(void* sharedMaterial) {
+const SharedMaterialMode* shared_material_route(void* sharedMaterial) {
     for (unsigned i = 0; i < g_sharedMaterialModeCount; ++i)
         if (g_sharedMaterialModes[i].sharedMaterial == sharedMaterial)
-            return g_sharedMaterialModes[i].mode;
-    return 0;
+            return &g_sharedMaterialModes[i];
+    return nullptr;
 }
 
 const char* material_resource_name(void* material) {
@@ -883,6 +903,14 @@ int material_resource_mode(void* material) {
         if (g_materialResources[i].material == material)
             return g_materialResources[i].mode;
     return 0;
+}
+
+const MaterialResourceIdentity* material_resource(void* material, int bucket) {
+    if (!material || g_currentMaterialBucket != bucket) return nullptr;
+    for (unsigned i = 0; i < g_materialResourceCount; ++i)
+        if (g_materialResources[i].material == material)
+            return &g_materialResources[i];
+    return nullptr;
 }
 
 struct SeenMaterialIdentity {
@@ -945,6 +973,41 @@ void report_material_identity(int bucket, GLuint program, bool foliage) {
             materialName[0] ? materialName : "<unknown>", materialMode,
             (unsigned)texture0,
             g_currentMaterialTexture0[0] ? g_currentMaterialTexture0 : "<none>");
+}
+
+struct SeenModeRoute {
+    void* material;
+    int bucket;
+    char action[48];
+};
+SeenModeRoute g_seenModeRoutes[512] = {};
+unsigned g_seenModeRouteCount = 0;
+
+void report_mode_route(const MaterialResourceIdentity* route, int bucket,
+                       GLuint program, int samples, const char* action) {
+    if (!g_materialModeRouting || !route || !action) return;
+    for (unsigned i = 0; i < g_seenModeRouteCount; ++i) {
+        const SeenModeRoute& seen = g_seenModeRoutes[i];
+        if (seen.material == route->material && seen.bucket == bucket &&
+            std::strcmp(seen.action, action) == 0)
+            return;
+    }
+    if (g_seenModeRouteCount >=
+        sizeof(g_seenModeRoutes) / sizeof(g_seenModeRoutes[0]))
+        return;
+    SeenModeRoute& seen = g_seenModeRoutes[g_seenModeRouteCount++];
+    seen.material = route->material;
+    seen.bucket = bucket;
+    std::strncpy(seen.action, action, sizeof(seen.action) - 1);
+    seen.action[sizeof(seen.action) - 1] = '\0';
+    fprintf(stderr,
+            "[oit][mode-route] mtr=%s mode=%d bucket=%d program=%u "
+            "transparency=%d sampleFramebuffer=%d volumetric=%d samples=%d "
+            "action=%s\n",
+            route->name[0] ? route->name : "<unknown>", route->mode,
+            bucket, (unsigned)program, route->transparency ? 1 : 0,
+            route->sampleFramebuffer, route->volumetric ? 1 : 0,
+            samples, action);
 }
 
 void report_foliage_texture_names(int bucket, GLuint program) {
@@ -1195,6 +1258,53 @@ void census_observe_draw() {
         return;
     }
 
+    const MaterialResourceIdentity* materialRoute =
+        material_resource(g_currentMaterial, bucket);
+    bool strictA2cDraw = false;
+    if (g_materialModeRouting && materialRoute && foliage &&
+        (bucket == 1 || bucket == 3)) {
+        GLint samples = 0;
+        g.GetIntegerv(GL_SAMPLES, &samples);
+        const char* action = "native-non-a2c-mode";
+        if (materialRoute->mode == 2) {
+            if (!materialRoute->transparency)
+                action = "native-excluded-not-transparent";
+            else if (materialRoute->sampleFramebuffer != 0)
+                action = "native-excluded-framebuffer-sampling";
+            else if (materialRoute->volumetric)
+                action = "native-excluded-volumetric";
+            else if (!foliageProgram || foliageProgram->alphaDiscardLoc < 0 ||
+                     foliageProgram->a2cPassLoc < 0)
+                action = "native-excluded-shader-variant";
+            else {
+                GLfloat alphaDiscard = -1.0f;
+                if (g.GetUniformfv)
+                    g.GetUniformfv((GLuint)prog,
+                                   foliageProgram->alphaDiscardLoc,
+                                   &alphaDiscard);
+                GLint src = 0, dst = 0;
+                const bool blend = g.IsEnabled(GL_BLEND);
+                if (blend) {
+                    g.GetIntegerv(GL_BLEND_SRC_RGB, &src);
+                    g.GetIntegerv(GL_BLEND_DST_RGB, &dst);
+                }
+                const bool ordinaryBlend = !blend ||
+                    (src == GL_SRC_ALPHA && dst == GL_ONE_MINUS_SRC_ALPHA);
+                if (alphaDiscard < 0.0f || alphaDiscard > 1.0f)
+                    action = "native-excluded-inactive-alpha-discard";
+                else if (!ordinaryBlend)
+                    action = "native-excluded-blend-signature";
+                else if (samples < 2)
+                    action = "native-no-msaa";
+                else {
+                    strictA2cDraw = true;
+                    action = "a2c-mode-2";
+                }
+            }
+        }
+        report_mode_route(materialRoute, bucket, (GLuint)prog, samples, action);
+    }
+
     // Keep the opaque-only depth image current after the static snapshot.
     // Bucket 2 is the empirically proven dynamic opaque stage; duplicating its
     // depth writes here adds characters to the private image without copying
@@ -1275,7 +1385,8 @@ void census_observe_draw() {
         }
     }
 
-    if (g_foliageA2c && (bucket == 1 || bucket == 3) && foliage &&
+    if ((g_foliageA2c || strictA2cDraw) &&
+        (bucket == 1 || bucket == 3) && foliage &&
         foliageProgram->alphaDiscardLoc >= 0 &&
         foliageProgram->a2cPassLoc >= 0) {
         GLint samples = 0;
@@ -1298,6 +1409,7 @@ void census_observe_draw() {
                 g.GetIntegerv(GL_BLEND_DST_ALPHA, &g_originalBlendDstAlpha);
                 g_originalBlend = g.IsEnabled(GL_BLEND);
                 g_originalCull = g.IsEnabled(GL_CULL_FACE);
+                g_originalDepthTest = g.IsEnabled(GL_DEPTH_TEST);
                 g_originalA2c = g.IsEnabled(GL_SAMPLE_ALPHA_TO_COVERAGE);
                 g.DepthMask(GL_TRUE);
                 g.DepthFunc(GL_LESS);
@@ -1587,8 +1699,8 @@ bool nwn_oit_needs_shader_sources(void) {
 bool nwn_oit_needs_draw_observer(void) {
     read_settings();
     return g_census || g_foliageCensus || g_materialModeCensus ||
-           g_materialIdentityCensus || g_foliageReplay || g_foliageDepthless ||
-           g_foliageA2c;
+           g_materialIdentityCensus || g_materialModeRouting ||
+           g_foliageReplay || g_foliageDepthless || g_foliageA2c;
 }
 
 bool nwn_oit_needs_bucket_hook(void) {
@@ -1602,7 +1714,7 @@ bool nwn_oit_needs_texture_tracking(void) {
 
 bool nwn_oit_needs_material_identity_tracking(void) {
     read_settings();
-    return g_materialIdentityCensus;
+    return g_materialIdentityCensus || g_materialModeRouting;
 }
 
 bool nwn_oit_wants_material_mode_census(void) {
@@ -1692,18 +1804,34 @@ bool ascii_token_equal(const char* a, const char* b) {
 
 void nwn_oit_note_shared_material_field(void* sharedMaterial,
                                         const char* field) {
-    if (!g_materialIdentityCensus || !sharedMaterial || !field) return;
+    if ((!g_materialIdentityCensus && !g_materialModeRouting) ||
+        !sharedMaterial || !field)
+        return;
     char directive[32] = {};
     char type[32] = {};
     char name[128] = {};
-    int mode = 0;
+    int value = 0;
+    enum ParsedField { None, Mode, Transparency, SampleFramebuffer, Volumetric };
+    ParsedField parsed = None;
     if (std::sscanf(field, "%31s %31s %127s %d",
-                    directive, type, name, &mode) != 4 ||
-        !ascii_token_equal(directive, "parameter") ||
-        !ascii_token_equal(type, "int") ||
-        !ascii_token_equal(name, "NWN_ALPHA_MODE") ||
-        mode < 0 || mode > 4)
-        return;
+                    directive, type, name, &value) == 4 &&
+        ascii_token_equal(directive, "parameter") &&
+        ascii_token_equal(type, "int") &&
+        ascii_token_equal(name, "NWN_ALPHA_MODE") &&
+        value >= 0 && value <= 4) {
+        parsed = Mode;
+    } else if (std::sscanf(field, "%31s %d", directive, &value) == 2) {
+        if (ascii_token_equal(directive, "transparency") &&
+            (value == 0 || value == 1))
+            parsed = Transparency;
+        else if (ascii_token_equal(directive, "sample_framebuffer") &&
+                 value >= 0 && value <= 2)
+            parsed = SampleFramebuffer;
+        else if (ascii_token_equal(directive, "volumetric") &&
+                 (value == 0 || value == 1))
+            parsed = Volumetric;
+    }
+    if (parsed == None) return;
 
     SharedMaterialMode* entry = nullptr;
     for (unsigned i = 0; i < g_sharedMaterialModeCount; ++i) {
@@ -1719,12 +1847,16 @@ void nwn_oit_note_shared_material_field(void* sharedMaterial,
         entry = &g_sharedMaterialModes[g_sharedMaterialModeCount++];
         entry->sharedMaterial = sharedMaterial;
     }
-    entry->mode = mode;
+    if (parsed == Mode) entry->mode = value;
+    else if (parsed == Transparency) entry->transparency = value != 0;
+    else if (parsed == SampleFramebuffer) entry->sampleFramebuffer = value;
+    else if (parsed == Volumetric) entry->volumetric = value != 0;
 }
 
 void nwn_oit_note_material_resource(void* material, void* sharedMaterial,
                                     const char* materialName) {
-    if (!g_materialIdentityCensus || !material || !materialName ||
+    if ((!g_materialIdentityCensus && !g_materialModeRouting) ||
+        !material || !materialName ||
         !*materialName)
         return;
     const size_t length = strnlen(materialName,
@@ -1757,13 +1889,23 @@ void nwn_oit_note_material_resource(void* material, void* sharedMaterial,
         entry->material = material;
     }
     entry->sharedMaterial = sharedMaterial;
-    entry->mode = shared_material_mode(sharedMaterial);
+    if (const SharedMaterialMode* route = shared_material_route(sharedMaterial)) {
+        entry->mode = route->mode;
+        entry->sampleFramebuffer = route->sampleFramebuffer;
+        entry->transparency = route->transparency;
+        entry->volumetric = route->volumetric;
+    } else {
+        entry->mode = 0;
+        entry->sampleFramebuffer = 0;
+        entry->transparency = false;
+        entry->volumetric = false;
+    }
     std::memcpy(entry->name, materialName, length);
     entry->name[length] = '\0';
 }
 
 void nwn_oit_note_material_bind(void* material, const char* texture0Name) {
-    if (!g_materialIdentityCensus) return;
+    if (!g_materialIdentityCensus && !g_materialModeRouting) return;
     g_currentMaterial = material;
     g_currentMaterialBucket = nwn_core::g_currentBucket;
     ++g_currentMaterialSerial;
@@ -1791,7 +1933,8 @@ void nwn_oit_shutdown(void) {
 void nwn_oit_prepare(void) {
     read_settings();
     if ((!g_enabled && !g_census && !g_foliageCensus && !g_materialModeCensus &&
-         !g_materialIdentityCensus && !g_foliageReplay &&
+         !g_materialIdentityCensus && !g_materialModeRouting &&
+         !g_foliageReplay &&
          !g_foliageDepthless && !g_foliageA2c) ||
         g_failed) return;
 
@@ -1811,7 +1954,7 @@ void nwn_oit_prepare(void) {
     // before Scene::Render starts. The callback itself is read-only. Refuse to
     // replace another module's observer if the shared slot is already owned.
     if (g_census || g_foliageCensus || g_materialModeCensus ||
-        g_materialIdentityCensus || g_foliageReplay ||
+        g_materialIdentityCensus || g_materialModeRouting || g_foliageReplay ||
         g_foliageDepthless || g_foliageA2c) {
         if (!nwn_core::g_drawObserver) {
             nwn_core::g_drawObserver = census_observe_draw;
@@ -1830,7 +1973,7 @@ void nwn_oit_prepare(void) {
 
 void nwn_oit_bucket_begin(void* scene, int bucket) {
     read_settings();
-    if (g_materialIdentityCensus) {
+    if (g_materialIdentityCensus || g_materialModeRouting) {
         g_currentMaterial = nullptr;
         g_currentMaterialTexture0[0] = '\0';
         g_currentMaterialBucket = -1;

@@ -1,6 +1,6 @@
 # Transparency modes and Linux evidence
 
-Updated 2026-08-21. This is the canonical record for the transparency work.
+Updated 2026-08-22. This is the canonical record for the transparency work.
 It separates observed NWN behaviour from injector experiments and future
 design. The Linux client is the only runtime authority until the maintainer
 explicitly requests Windows work.
@@ -28,16 +28,15 @@ The provisional values are:
 | `3` | Weighted blended OIT |
 | `4` | Conventional source-over blending |
 
-These rendering values are not routed yet. A read-only uniform census behind
-`NWN_ALPHA_MODE_CENSUS=1` proved that NWN uploads distinct values when an MTR
-explicitly selects custom shaders. Requiring that selection changed the
-foliage's rendering, however, so the final selector still needs a non-invasive
-transport on the engine-selected stock path. Do not infer a requested mode
-from texture names, camera angle, or bucket alone.
+The stock-path parser/bind census proved a non-invasive selector transport and
+saved it at `56068d9`. A strict Linux router is now built for runtime testing:
+mode 2 alone may select A2C, while every other, unknown, or excluded case stays
+native. Do not infer a requested mode from texture names, camera angle, or
+bucket alone.
 
 ## Current experimental baseline
 
-The local branch contains four unpushed transparency commits after
+The local branch contains five unpushed transparency commits after
 `origin/main`:
 
 ```text
@@ -45,6 +44,7 @@ The local branch contains four unpushed transparency commits after
 af01bc0 A2C: receive directional cascade shadows per fragment
 bca4c63 A2C: receive local-light shadows per fragment
 147ffe0 Savepoint: A2C particles and local-shadow ping-pong
+56068d9 Savepoint: prove stock-path material transparency modes
 ```
 
 They are local savepoints, not a claim that every interaction is solved. The
@@ -133,14 +133,23 @@ native meanings. They are not surrogate selectors for injector modes.
    shaders propagated default `0` and marked values `2` and `3` without
    leakage. The forced standard shader pair visibly changed the material, so
    that transport is evidence only and is not accepted for production.
-2. **Strict routing:** distinguish regular alpha, framebuffer 1/2, volumetric,
-   emitters, water, UI, replays, and injector passes. Unknown means native.
-3. **A2C opt-in:** move the existing foliage A2C path behind mode 2, detect the
-   live MSAA sample count, and provide a native fallback.
-4. **A2C shadows:** receive directional and local shadows in the material draw
-   and preserve alpha-aware caster capture.
-5. **Emitter transmittance:** record foliage transmittance and apply it to a
-   late emitter composite. Do not make particles unconditionally depthless.
+2. **Strict routing:** complete. Regular
+   mode-2 alpha may enter A2C. Framebuffer 1/2, volumetric, non-foliage,
+   non-alpha buckets, unusual blends, and unknown identities remain native.
+3. **A2C opt-in:** complete for the initial foliage proof. At 8x MSAA, mode 0
+   and mode 3 remained native while mode 2 alone selected A2C, all on stock
+   program 152. The live sample count must be at least 2 or the draw remains
+   native. Evidence is preserved in `census-mode-routing.txt`.
+4. **A2C shadows:** functionally complete. Directional and one-slot local-light
+   receivers both activated on stock program 152, shadows were visible on
+   mode-2 foliage, and source-classified alpha/card casters remained present.
+   Dark shadows expose A2C's discrete sample mask; this is documented as a
+   mode-2 limitation rather than treated as a shadow failure. Evidence:
+   `census-mode2-shadow-routing.txt` and the focused visual test.
+5. **Emitter transmittance:** active. First record mode-2 foliage transmittance
+   in a private target and prove it without changing the frame. Only then apply
+   it to a depth-aware late emitter composite. Do not make particles
+   unconditionally depthless.
 6. **Weighted OIT opt-in:** accumulate and resolve only mode-3 draws. Keep the
    native draw visible until private accumulation, resolve, camera stability,
    fog, and water ordering are proven.
@@ -310,3 +319,70 @@ rg '\[oit\]\[material-identity' shadowmap-phase1.log \
   | sort -u \
   > census-material-identity.txt
 ```
+
+### Strict mode-routing proof
+
+Run this checkpoint with 8x MSAA and every legacy transparency experiment
+disabled:
+
+```bash
+cd "/run/media/fede/SSD_SATA/Games/nwn-shadowmap"
+env -u NWN_OIT \
+  -u NWN_A2C_FOLIAGE \
+  -u NWN_OIT_FOLIAGE_VISIBLE \
+  -u NWN_OIT_FOLIAGE_CENSUS \
+  -u NWN_OIT_TEXTURE_CENSUS \
+  -u NWN_ALPHA_MODE_CENSUS \
+  -u NWN_ALPHA_IDENTITY_CENSUS \
+  NWN_ALPHA_MODE_ROUTING=1 \
+  NWN_DEV_NO_BUILD=1 \
+  ./run-dev.sh
+```
+
+Expected decisions for the three stock-shader test materials are:
+
+```text
+tcm02_leaves04   mode=0 action=native-non-a2c-mode
+tcm02_leaves04_1 mode=2 action=a2c-mode-2
+tcm02_leaves04_2 mode=3 action=native-non-a2c-mode
+```
+
+Visually, only `_1` should gain A2C. The base control and `_2` must retain
+their native appearance; UI, water, emitters, and unrelated geometry must be
+unchanged. Preserve the decisions before another launch:
+
+```bash
+rg '\[oit\]\[mode-route\]' shadowmap-phase1.log \
+  | sort -u \
+  > census-mode-routing.txt
+```
+
+### Mode-2 shadow checkpoint
+
+Use the same strict-routing launch at 8x MSAA. In the test area, inspect only
+the mode-2 material under these conditions:
+
+1. a character or opaque level object casts the directional shadow onto it;
+2. the mode-2 foliage casts its cutout-shaped directional shadow onto opaque
+   ground;
+3. a known working local shadow light casts onto the mode-2 material;
+4. rotate and zoom the camera while checking all three;
+5. verify the mode-0 and mode-3 controls remain native.
+
+The receiver must darken the covered A2C samples rather than darkening the
+resolved background behind transparent texels. Its caster silhouette may use
+the stock alpha-discard threshold; it must not become a solid card/quad.
+
+After the run, preserve the relevant bounded log evidence:
+
+```bash
+rg '\[a2c\]\[shadow\]|\[oit\]\[mode-route\]|\[shadowmap\]\[static\].*alpha' \
+  shadowmap-phase1.log \
+  | sort -u \
+  > census-mode2-shadow-runtime.txt
+```
+
+Directional success should include `direct per-fragment CSM receiver active`.
+A valid local-light scene should additionally include
+`direct per-fragment local receiver active`. Absence of the latter means the
+local checkpoint was not exercised, not that it passed.

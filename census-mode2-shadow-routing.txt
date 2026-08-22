@@ -1,0 +1,4 @@
+[a2c][shadow] direct per-fragment CSM receiver active: program=152 static=92 dynamic=93 cascades=3/3
+[a2c][shadow] direct per-fragment local receiver active: program=152 depth=43 slots=1
+[shadowmap][static] receiver drew frame=301 static-draws=96 dynamic-draws=24 (body=21 alpha=3) | ms recv=0.22 world=0.00 replay=0.00 copy=0.00 enginedraws=142 worldmap=8192^2 cascademap=2048^2 | csm=depth-selected output=dark strength=0.42 bias=0.00250 blend=0.750 pcf=0.75 buckets=0+2+3+static-alpha:1
+# Visual follow-up: the local shadow was visible on mode-2 foliage. Dark regions exposed the discrete A2C sample mask; this is a mode limitation, not a receiver failure.

@@ -1,15 +1,17 @@
 # Current task checkpoint
 
-Updated 2026-08-21. The active work is a Linux-first, material-selectable
+Updated 2026-08-22. The active work is a Linux-first, material-selectable
 transparency system. Documentation has been reconciled before the next code
 change. The canonical evidence and roadmap are in
 [TRANSPARENCY_MODES.md](TRANSPARENCY_MODES.md).
 
-## Immediate checkpoint: strict fail-closed mode routing
+## Immediate checkpoint: private emitter transmittance
 
-The read-only implementation is now built. It injects an active integer uniform
-into the source-classified stock alpha shader and reports unique
-`(bucket, program, mode)` tuples:
+The non-invasive stock-path selector is proven and saved at `56068d9`. The
+strict Linux implementation has now also passed its first runtime test. With
+`NWN_ALPHA_MODE_ROUTING=1`, it routes only explicitly marked mode-2 ordinary
+alpha foliage to the existing A2C draw treatment. It reports each unique
+material/bucket decision as `[oit][mode-route]`.
 
 ```mtr
 parameter int NWN_ALPHA_MODE 2
@@ -110,11 +112,40 @@ Linux. Pointer, program, and GL IDs remain process-local and must never be
 persisted. Unknown, missing, stale, invalid, or cross-bucket identity remains
 native.
 
-The next implementation slice is strict routing only: mode 0 remains native;
-mode 2 may select the existing A2C path when every pass/material exclusion and
-MSAA requirement is satisfied; mode 3 remains native until the separate OIT
-checkpoint. Stop after proving routing—do not combine it with further shadow or
-emitter changes.
+This implementation is fail-closed. Mode 0, mode 1, mode 3, mode 4, unknown
+materials, non-foliage shader families, non-alpha buckets, framebuffer-sampling
+materials, volumetrics, inactive alpha-discard variants, unusual blend modes,
+and draws without live MSAA remain native. The legacy global
+`NWN_A2C_FOLIAGE` switch is ignored when strict routing is enabled. Emitter and
+OIT behaviour is intentionally unchanged at this checkpoint.
+
+The 8x-MSAA runtime proof reported all three materials on stock program 152:
+mode 0 remained native, mode 2 selected `a2c-mode-2`, and mode 3 remained
+native. The visual result independently matched the log: two native controls
+and one A2C material. Evidence is preserved in `census-mode-routing.txt`.
+
+Strict routing and A2C opt-in are therefore accepted.
+
+The routing run already proved the code-side directional handoff. On the first
+frame after cascade allocation, the explicitly routed mode-2 draw activated
+the direct per-fragment CSM receiver on stock program 152. The static cascade
+also continued to report source-classified alpha/card casters from bucket 1,
+so routing did not remove alpha-aware caster capture. This evidence is saved in
+`census-mode2-shadow-routing.txt`.
+
+The focused follow-up confirmed local-light reception as well: program 152
+reported `direct per-fragment local receiver active` with one live slot, and
+the shadow was visible on mode-2 foliage. The shadowed foliage exposed the same
+discrete coverage pattern seen around emitters. This is an inherent A2C
+representation limit: covered samples are opaque and uncovered samples retain
+the background. It is not a failed shadow lookup and will not be hidden by
+further shadow-equation tuning.
+
+Checkpoint 4 is accepted as functionally complete with that documented visual
+limitation. The active work is checkpoint 5: accumulate mode-2 foliage
+transmittance privately, prove it without touching the visible frame, then use
+it for a depth-aware late emitter path. Native emitters remain authoritative
+until the private proof is complete.
 
 ## Verified native MTR routing
 
@@ -139,13 +170,14 @@ process-local.
 
 ## Current experimental implementation
 
-The local branch is four commits ahead of `origin/main`:
+The local branch is five commits ahead of `origin/main`:
 
 ```text
 249ddff Savepoint: working Linux A2C foliage baseline
 af01bc0 A2C: receive directional cascade shadows per fragment
 bca4c63 A2C: receive local-light shadows per fragment
 147ffe0 Savepoint: A2C particles and local-shadow ping-pong
+56068d9 Savepoint: prove stock-path material transparency modes
 ```
 
 Nothing has been pushed. The current tree contains experimental A2C, particle,
