@@ -31,7 +31,9 @@ code:
 - `shadow_config.{h,cpp}` — memoized environment lookup and shipping defaults;
 - `shadow_math.{h,cpp}` — pure vector/matrix/projection helpers;
 - `nwn_overlay_imgui.cpp` — the only file allowed to include Dear ImGui;
-- `nwn_oit.cpp` — an opt-in, separate transparency experiment;
+- `nwn_oit.cpp` — opt-in transparency census, source/program classification,
+  and experimental A2C/OIT mechanics; its accepted contract is documented in
+  `TRANSPARENCY_MODES.md`;
 - `nwn_platform_win.cpp` — Windows proxy and platform mechanics.
 
 ## Build dependencies
@@ -59,4 +61,5 @@ glibc/glibc++ floor suitable for distribution.
 
 The current implementation and active blocker are documented in
 [SHADOWMAP_STATUS.md](SHADOWMAP_STATUS.md) and
-[CURRENT_TASK.md](CURRENT_TASK.md).
+[CURRENT_TASK.md](CURRENT_TASK.md). Transparency evidence and mode ownership
+are documented in [TRANSPARENCY_MODES.md](TRANSPARENCY_MODES.md).

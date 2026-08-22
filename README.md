@@ -3,8 +3,8 @@
 This repository contains an experimental renderer injector for Neverwinter
 Nights: Enhanced Edition. It intercepts the game's OpenGL renderer and builds
 injector-owned shadow targets from NWN's own rendering decisions. It does not
-modify `nwmain`, game shaders, `.mtr` files, `.shd` files, modules, or hak
-content.
+modify `nwmain`, `.mtr` files, `.shd` files, modules, hak content, or game
+assets on disk. It does intercept and extend selected shader sources at runtime.
 
 The Linux target is `libnwn_shadowmap.so`, loaded with `LD_PRELOAD`. The
 Windows target is `win/version.dll`, a proxy DLL loaded beside `nwmain.exe`.
@@ -12,7 +12,7 @@ Both targets are built from the same renderer source.
 
 ## Current state
 
-As of 2026-08-20:
+As of 2026-08-21:
 
 - Directional sun shadows use cascaded, injector-owned depth arrays and a
   fullscreen composite. Static world geometry can use a world-anchored map;
@@ -30,6 +30,16 @@ As of 2026-08-20:
 - The repository has a Windows build. Windows-specific local-light fast paths
   are isolated behind `NWN_WIN_LOCAL_FASTPATH`; shared Linux behaviour must not
   be changed to solve a Windows-only problem.
+- The local Linux branch also contains an experimental foliage A2C path. A2C
+  is the preferred foliage baseline because it remains stable under camera
+  rotation, but shadow reception and emitter visibility through multiple
+  layers are not complete. It is not yet a shipping feature.
+- A native MTR census proved that ordinary transparency, framebuffer sampling,
+  and volumetric rendering use materially different routes. Future alpha modes
+  are planned around an explicit `NWN_ALPHA_MODE` material parameter, but the
+  initial custom-shader transport changed foliage rendering and is not accepted
+  as the final mechanism. Framebuffer and volumetric flags retain their native
+  meanings.
 
 This remains a prototype rather than a complete replacement for NWN's shadow
 system. The most important open visual issue is flicker when NWN's
@@ -42,6 +52,10 @@ Other known limitations include the contact-shaped local-light projection,
 camera-frustum-limited caster submission, and an unverified Windows
 `lightpriority` field offset. The Windows priority sort is therefore disabled
 until that field is identified.
+
+The active transparency design, native bucket evidence, rejected global OIT
+path, and regression matrix are in
+[TRANSPARENCY_MODES.md](TRANSPARENCY_MODES.md).
 
 ## Repository map
 
@@ -65,6 +79,7 @@ ABI:
 | `shadow_math.{h,cpp}` | Pure matrix, vector, and projection helpers |
 | `nwn_overlay.{h,cpp}` | Overlay contract and Dear ImGui implementation |
 | `nwn_platform.{h,cpp}` | Linux/Windows platform mechanics |
+| `nwn_oit.cpp` | Opt-in transparency census and experimental A2C/OIT mechanics |
 
 The source is the authority for supported diagnostics and exact environment
 keys. Use `rg -n 'shadow_getenv|NWN_SHADOWMAP_' nwn_shadowmap.cpp shadow_*.inc`
@@ -153,6 +168,7 @@ shipping defaults and writes no log unless `NWN_SHADOWMAP_LOG=1` is set. See
 ## Documentation map
 
 - [CURRENT_TASK.md](CURRENT_TASK.md) — authoritative active checkpoint
+- [TRANSPARENCY_MODES.md](TRANSPARENCY_MODES.md) — transparency evidence, mode contract, and roadmap
 - [SHADOWMAP_STATUS.md](SHADOWMAP_STATUS.md) — current implementation status
 - [AGENTS.md](AGENTS.md) — stable engineering rules for future work
 - [LINUX_RENDERER_MAP.md](LINUX_RENDERER_MAP.md) — current Linux engine map

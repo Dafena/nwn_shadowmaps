@@ -206,6 +206,7 @@ struct GL {
     void   (*GetProgramInfoLog)(GLuint, GLsizei, GLsizei*, GLchar*);
     void   (*UseProgram)(GLuint);
     GLint  (*GetUniformLocation)(GLuint, const GLchar*);
+    void   (*GetUniformiv)(GLuint, GLint, GLint*);
     void   (*GetUniformfv)(GLuint, GLint, GLfloat*);
     void   (*GetAttachedShaders)(GLuint, GLsizei, GLsizei*, GLuint*);
     void   (*Uniform1i)(GLint, GLint);
@@ -266,6 +267,7 @@ bool bind_gl() {
     OITBIND(GetProgramInfoLog,      "glGetProgramInfoLog");
     OITBIND(UseProgram,             "glUseProgram");
     OITBIND(GetUniformLocation,     "glGetUniformLocation");
+    OITBIND(GetUniformiv,           "glGetUniformiv");
     OITBIND(GetUniformfv,           "glGetUniformfv");
     OITBIND(GetAttachedShaders,     "glGetAttachedShaders");
     OITBIND(Uniform1i,              "glUniform1i");
@@ -300,6 +302,8 @@ bool bind_gl() {
 bool  g_enabled   = false;
 bool  g_census    = false;      // NWN_OIT_CENSUS -- Phase 2a, see below
 bool  g_foliageCensus = false;  // source-classified foliage only; read-only
+bool  g_materialModeCensus = false; // explicit MTR NWN_ALPHA_MODE; read-only
+bool  g_materialIdentityCensus = false; // stock Material + texture identity
 bool  g_textureCensus = false;  // explicit, slow CAurTexture bind-name diagnostic
 bool  g_foliageShader = false;  // compile an inert MRT branch into stock alpha shaders
 bool  g_foliageReplay = false;  // private late bucket-1 accumulation proof
@@ -335,6 +339,13 @@ void read_settings() {
     g_census = (cen && *cen && *cen != '0');
     const char* foliage = getenv("NWN_OIT_FOLIAGE_CENSUS");
     g_foliageCensus = (foliage && *foliage && *foliage != '0');
+    const char* materialModeCensus = getenv("NWN_ALPHA_MODE_CENSUS");
+    g_materialModeCensus = (materialModeCensus && *materialModeCensus &&
+                            *materialModeCensus != '0');
+    const char* materialIdentityCensus = getenv("NWN_ALPHA_IDENTITY_CENSUS");
+    g_materialIdentityCensus = (materialIdentityCensus &&
+                                *materialIdentityCensus &&
+                                *materialIdentityCensus != '0');
     const char* textureCensus = getenv("NWN_OIT_TEXTURE_CENSUS");
     g_textureCensus = (textureCensus && *textureCensus && *textureCensus != '0');
     const char* foliageShader = getenv("NWN_OIT_FOLIAGE_SHADER");
@@ -375,6 +386,13 @@ void read_settings() {
         fprintf(stderr, "[oit][foliage] source-classified census enabled. "
                         "Read-only -- normal foliage colour/depth and the OIT "
                         "targets are untouched.\n");
+    if (g_materialModeCensus)
+        fprintf(stderr, "[oit][material-mode] NWN_ALPHA_MODE census enabled. "
+                        "Valid non-negative modes are read-only; no draw is "
+                        "redirected, suppressed, replayed or restated.\n");
+    if (g_materialIdentityCensus)
+        fprintf(stderr, "[oit][material-identity] stock-path census enabled. "
+                        "Read-only; native shader selection and draw state remain intact.\n");
     if (g_textureCensus)
         fprintf(stderr, "[oit][texture] explicit bind-name census enabled. "
                         "Diagnostic only; the texture hook uses a slow, "
@@ -774,6 +792,7 @@ struct FoliageProgram {
     GLuint program;
     GLuint fragment;
     GLint  alphaDiscardLoc;
+    GLint  materialModeLoc;
     GLint  oitPassLoc;
     GLint  oitFringeOnlyLoc;
     GLint  oitCutoffLoc;
@@ -824,6 +843,110 @@ struct SeenTextureName { unsigned unit; char name[128]; };
 SeenTextureName g_seenTextureNames[256] = {};
 unsigned        g_seenTextureNameCount = 0;
 
+void*           g_currentMaterial = nullptr;
+char            g_currentMaterialTexture0[128] = {};
+unsigned long long g_currentMaterialSerial = 0;
+int             g_currentMaterialBucket = -1;
+
+struct MaterialResourceIdentity {
+    void* material;
+    void* sharedMaterial;
+    int mode;
+    char name[128];
+};
+MaterialResourceIdentity g_materialResources[4096] = {};
+unsigned g_materialResourceCount = 0;
+
+struct SharedMaterialMode {
+    void* sharedMaterial;
+    int mode;
+};
+SharedMaterialMode g_sharedMaterialModes[4096] = {};
+unsigned g_sharedMaterialModeCount = 0;
+
+int shared_material_mode(void* sharedMaterial) {
+    for (unsigned i = 0; i < g_sharedMaterialModeCount; ++i)
+        if (g_sharedMaterialModes[i].sharedMaterial == sharedMaterial)
+            return g_sharedMaterialModes[i].mode;
+    return 0;
+}
+
+const char* material_resource_name(void* material) {
+    for (unsigned i = 0; i < g_materialResourceCount; ++i)
+        if (g_materialResources[i].material == material)
+            return g_materialResources[i].name;
+    return "";
+}
+
+int material_resource_mode(void* material) {
+    for (unsigned i = 0; i < g_materialResourceCount; ++i)
+        if (g_materialResources[i].material == material)
+            return g_materialResources[i].mode;
+    return 0;
+}
+
+struct SeenMaterialIdentity {
+    int bucket;
+    GLuint program;
+    GLuint texture0;
+    void* material;
+    int mode;
+    char materialName[128];
+    char name[128];
+};
+SeenMaterialIdentity g_seenMaterialIdentities[512] = {};
+unsigned g_seenMaterialIdentityCount = 0;
+
+void report_material_identity(int bucket, GLuint program, bool foliage) {
+    if (!g_materialIdentityCensus || !foliage ||
+        (bucket != 1 && bucket != 3) || !g_currentMaterial ||
+        g_currentMaterialBucket != bucket)
+        return;
+
+    GLint oldActive = GL_TEXTURE0;
+    GLint texture0 = 0;
+    g.GetIntegerv(GL_ACTIVE_TEXTURE, &oldActive);
+    g.ActiveTexture(GL_TEXTURE0);
+    g.GetIntegerv(GL_TEXTURE_BINDING_2D, &texture0);
+    g.ActiveTexture((GLenum)oldActive);
+    const char* materialName = material_resource_name(g_currentMaterial);
+    const int materialMode = material_resource_mode(g_currentMaterial);
+
+    for (unsigned i = 0; i < g_seenMaterialIdentityCount; ++i) {
+        const SeenMaterialIdentity& seen = g_seenMaterialIdentities[i];
+        if (seen.bucket == bucket && seen.program == program &&
+            seen.texture0 == (GLuint)texture0 &&
+            seen.material == g_currentMaterial &&
+            seen.mode == materialMode &&
+            std::strcmp(seen.materialName, materialName) == 0 &&
+            std::strcmp(seen.name, g_currentMaterialTexture0) == 0)
+            return;
+    }
+    if (g_seenMaterialIdentityCount >=
+        sizeof(g_seenMaterialIdentities) / sizeof(g_seenMaterialIdentities[0]))
+        return;
+
+    SeenMaterialIdentity& entry =
+        g_seenMaterialIdentities[g_seenMaterialIdentityCount++];
+    entry.bucket = bucket;
+    entry.program = program;
+    entry.texture0 = (GLuint)texture0;
+    entry.material = g_currentMaterial;
+    entry.mode = materialMode;
+    std::memset(entry.materialName, 0, sizeof(entry.materialName));
+    std::memcpy(entry.materialName, materialName,
+                strnlen(materialName, sizeof(entry.materialName) - 1));
+    std::memcpy(entry.name, g_currentMaterialTexture0, sizeof(entry.name));
+    fprintf(stderr,
+            "[oit][material-identity-census] bucket=%d program=%u material=%p "
+            "serial=%llu mtr=%s mode=%d texture0=%u name=%s\n",
+            bucket, (unsigned)program, g_currentMaterial,
+            g_currentMaterialSerial,
+            materialName[0] ? materialName : "<unknown>", materialMode,
+            (unsigned)texture0,
+            g_currentMaterialTexture0[0] ? g_currentMaterialTexture0 : "<none>");
+}
+
 void report_foliage_texture_names(int bucket, GLuint program) {
     if (!g_textureCensus || bucket != 1) return;
     for (unsigned unit = 0; unit < 32; ++unit) {
@@ -870,6 +993,7 @@ FoliageProgram* foliage_program(GLuint program) {
         entry = &g_foliagePrograms[g_foliageProgramCount++];
         entry->program = program;
         entry->alphaDiscardLoc = -1;
+        entry->materialModeLoc = -1;
         entry->oitPassLoc = -1;
         entry->oitFringeOnlyLoc = -1;
         entry->oitCutoffLoc = -1;
@@ -897,6 +1021,8 @@ FoliageProgram* foliage_program(GLuint program) {
             entry->fragment = attached[i];
             entry->alphaDiscardLoc = g.GetUniformLocation
                 ? g.GetUniformLocation(program, "fAlphaDiscardValue") : -1;
+            entry->materialModeLoc = g.GetUniformLocation
+                ? g.GetUniformLocation(program, "NWN_ALPHA_MODE") : -1;
             entry->oitPassLoc = g.GetUniformLocation
                 ? g.GetUniformLocation(program, "nwnOitPass") : -1;
             entry->oitFringeOnlyLoc = g.GetUniformLocation
@@ -924,13 +1050,57 @@ FoliageProgram* foliage_program(GLuint program) {
             if (entry->a2cEmitterDepthLoc >= 0)
                 g.Uniform1i(entry->a2cEmitterDepthLoc, 15);
             fprintf(stderr, "[oit][foliage] program=%u joined to source-classified "
-                            "fragment=%u cutoffLoc=%d oitPassLoc=%d\n",
+                            "fragment=%u cutoffLoc=%d materialModeLoc=%d "
+                            "oitPassLoc=%d\n",
                     (unsigned)program, (unsigned)entry->fragment,
-                    (int)entry->alphaDiscardLoc, (int)entry->oitPassLoc);
+                    (int)entry->alphaDiscardLoc, (int)entry->materialModeLoc,
+                    (int)entry->oitPassLoc);
             return entry;
         }
     }
     return entry;
+}
+
+struct MaterialModeCensusEntry {
+    int bucket;
+    GLuint program;
+    GLint mode;
+};
+MaterialModeCensusEntry g_materialModeCensusSeen[256] = {};
+unsigned g_materialModeCensusCount = 0;
+
+void report_material_mode_census(int bucket, GLuint program,
+                                 FoliageProgram* foliageProgram) {
+    if (!g_materialModeCensus || !foliageProgram || !g.GetUniformiv) return;
+
+    GLint mode = 0;
+    const GLint location = foliageProgram->materialModeLoc;
+    if (location >= 0) g.GetUniformiv(program, location, &mode);
+
+    for (unsigned i = 0; i < g_materialModeCensusCount; ++i) {
+        const MaterialModeCensusEntry& seen = g_materialModeCensusSeen[i];
+        if (seen.bucket == bucket && seen.program == program && seen.mode == mode)
+            return;
+    }
+    if (g_materialModeCensusCount >=
+        sizeof(g_materialModeCensusSeen) / sizeof(g_materialModeCensusSeen[0]))
+        return;
+    g_materialModeCensusSeen[g_materialModeCensusCount++] =
+        {bucket, program, mode};
+
+    GLfloat alphaDiscard = -9999.0f;
+    if (foliageProgram->alphaDiscardLoc >= 0 && g.GetUniformfv)
+        g.GetUniformfv(program, foliageProgram->alphaDiscardLoc, &alphaDiscard);
+    const char* route = (bucket == 1 || bucket == 3)
+        ? "ordinary-alpha-candidate"
+        : "late-or-auxiliary-observation-only";
+    fprintf(stderr,
+            "[oit][material-mode-census] bucket=%d program=%u fragment=%u "
+            "location=%d mode=%d alphaDiscard=%s%.4f route=%s\n",
+            bucket, (unsigned)program, (unsigned)foliageProgram->fragment,
+            (int)location, (int)mode,
+            foliageProgram->alphaDiscardLoc < 0 ? "missing/" : "",
+            alphaDiscard, route);
 }
 
 const char* blend_factor_name(GLint f) {
@@ -976,6 +1146,8 @@ void census_observe_draw() {
     const bool foliage = foliageProgram && foliageProgram->fragment != 0;
     if (!g_privateReplayActive && !g_privateDepthReplayActive && foliage)
         report_foliage_texture_names(bucket, (GLuint)prog);
+    if (!g_privateReplayActive && !g_privateDepthReplayActive)
+        report_material_identity(bucket, (GLuint)prog, foliage);
     if (g_privateDepthReplayActive) {
         const bool eligible = foliage && foliageProgram->alphaDiscardLoc >= 0 &&
                               foliageProgram->oitDepthPassLoc >= 0;
@@ -1180,6 +1352,8 @@ void census_observe_draw() {
         }
         ++g_originalDepthlessDraws;
     }
+
+    report_material_mode_census(bucket, (GLuint)prog, foliageProgram);
 
     for (unsigned i = 0; i < g_censusCount; ++i)
         if (g_censusSeen[i].bucket == bucket && g_censusSeen[i].program == (GLuint)prog)
@@ -1405,13 +1579,16 @@ bool nwn_oit_active(void) { return g_enabled && !g_failed && g_program != 0; }
 
 bool nwn_oit_needs_shader_sources(void) {
     read_settings();
-    return g_foliageCensus || g_foliageShader || g_foliageDepthless;
+    return g_foliageCensus || g_materialModeCensus || g_materialIdentityCensus ||
+           g_foliageShader ||
+           g_foliageDepthless;
 }
 
 bool nwn_oit_needs_draw_observer(void) {
     read_settings();
-    return g_census || g_foliageCensus || g_foliageReplay ||
-           g_foliageDepthless || g_foliageA2c;
+    return g_census || g_foliageCensus || g_materialModeCensus ||
+           g_materialIdentityCensus || g_foliageReplay || g_foliageDepthless ||
+           g_foliageA2c;
 }
 
 bool nwn_oit_needs_bucket_hook(void) {
@@ -1421,6 +1598,16 @@ bool nwn_oit_needs_bucket_hook(void) {
 bool nwn_oit_needs_texture_tracking(void) {
     read_settings();
     return g_textureCensus;
+}
+
+bool nwn_oit_needs_material_identity_tracking(void) {
+    read_settings();
+    return g_materialIdentityCensus;
+}
+
+bool nwn_oit_wants_material_mode_census(void) {
+    read_settings();
+    return g_materialModeCensus;
 }
 
 bool nwn_oit_wants_foliage_shader_branch(void) {
@@ -1439,7 +1626,9 @@ bool nwn_oit_observes_owned_draws(void) {
 
 void nwn_oit_note_foliage_fragment(unsigned int shader) {
     read_settings();
-    if ((!g_foliageCensus && !g_foliageShader && !g_foliageDepthless) || shader == 0) return;
+    if ((!g_foliageCensus && !g_materialModeCensus &&
+         !g_materialIdentityCensus && !g_foliageShader &&
+         !g_foliageDepthless) || shader == 0) return;
     for (unsigned i = 0; i < g_foliageFragmentCount; ++i)
         if (g_foliageFragments[i] == (GLuint)shader) return;
     if (g_foliageFragmentCount >=
@@ -1489,6 +1678,108 @@ void nwn_oit_note_texture_bind(unsigned int unit, const char* name) {
     g_boundTextureNames[unit][length] = '\0';
 }
 
+bool ascii_token_equal(const char* a, const char* b) {
+    if (!a || !b) return false;
+    while (*a && *b) {
+        unsigned char ca = (unsigned char)*a++;
+        unsigned char cb = (unsigned char)*b++;
+        if (ca >= 'A' && ca <= 'Z') ca = (unsigned char)(ca - 'A' + 'a');
+        if (cb >= 'A' && cb <= 'Z') cb = (unsigned char)(cb - 'A' + 'a');
+        if (ca != cb) return false;
+    }
+    return *a == '\0' && *b == '\0';
+}
+
+void nwn_oit_note_shared_material_field(void* sharedMaterial,
+                                        const char* field) {
+    if (!g_materialIdentityCensus || !sharedMaterial || !field) return;
+    char directive[32] = {};
+    char type[32] = {};
+    char name[128] = {};
+    int mode = 0;
+    if (std::sscanf(field, "%31s %31s %127s %d",
+                    directive, type, name, &mode) != 4 ||
+        !ascii_token_equal(directive, "parameter") ||
+        !ascii_token_equal(type, "int") ||
+        !ascii_token_equal(name, "NWN_ALPHA_MODE") ||
+        mode < 0 || mode > 4)
+        return;
+
+    SharedMaterialMode* entry = nullptr;
+    for (unsigned i = 0; i < g_sharedMaterialModeCount; ++i) {
+        if (g_sharedMaterialModes[i].sharedMaterial == sharedMaterial) {
+            entry = &g_sharedMaterialModes[i];
+            break;
+        }
+    }
+    if (!entry) {
+        if (g_sharedMaterialModeCount >=
+            sizeof(g_sharedMaterialModes) / sizeof(g_sharedMaterialModes[0]))
+            return;
+        entry = &g_sharedMaterialModes[g_sharedMaterialModeCount++];
+        entry->sharedMaterial = sharedMaterial;
+    }
+    entry->mode = mode;
+}
+
+void nwn_oit_note_material_resource(void* material, void* sharedMaterial,
+                                    const char* materialName) {
+    if (!g_materialIdentityCensus || !material || !materialName ||
+        !*materialName)
+        return;
+    const size_t length = strnlen(materialName,
+                                  sizeof(g_materialResources[0].name));
+    if (length == 0 || length >= sizeof(g_materialResources[0].name)) return;
+    for (size_t i = 0; i < length; ++i) {
+        const unsigned char c = (unsigned char)materialName[i];
+        if (c < 0x20 || c > 0x7e) return;
+    }
+
+    MaterialResourceIdentity* entry = nullptr;
+    for (unsigned i = 0; i < g_materialResourceCount; ++i) {
+        if (g_materialResources[i].material == material) {
+            entry = &g_materialResources[i];
+            break;
+        }
+    }
+    if (!entry) {
+        if (g_materialResourceCount >=
+            sizeof(g_materialResources) / sizeof(g_materialResources[0])) {
+            static bool warned = false;
+            if (!warned) {
+                warned = true;
+                fprintf(stderr, "[oit][material-identity] material resource "
+                                "registry full; later identities stay native\n");
+            }
+            return;
+        }
+        entry = &g_materialResources[g_materialResourceCount++];
+        entry->material = material;
+    }
+    entry->sharedMaterial = sharedMaterial;
+    entry->mode = shared_material_mode(sharedMaterial);
+    std::memcpy(entry->name, materialName, length);
+    entry->name[length] = '\0';
+}
+
+void nwn_oit_note_material_bind(void* material, const char* texture0Name) {
+    if (!g_materialIdentityCensus) return;
+    g_currentMaterial = material;
+    g_currentMaterialBucket = nwn_core::g_currentBucket;
+    ++g_currentMaterialSerial;
+    g_currentMaterialTexture0[0] = '\0';
+    if (!texture0Name || !*texture0Name) return;
+    const size_t length = strnlen(texture0Name,
+                                  sizeof(g_currentMaterialTexture0));
+    if (length == 0 || length >= sizeof(g_currentMaterialTexture0)) return;
+    for (size_t i = 0; i < length; ++i) {
+        const unsigned char c = (unsigned char)texture0Name[i];
+        if (c < 0x20 || c > 0x7e) return;
+    }
+    std::memcpy(g_currentMaterialTexture0, texture0Name, length);
+    g_currentMaterialTexture0[length] = '\0';
+}
+
 void nwn_oit_shutdown(void) {
     if (!g_glBound) return;
     destroy_targets();
@@ -1499,7 +1790,8 @@ void nwn_oit_shutdown(void) {
 
 void nwn_oit_prepare(void) {
     read_settings();
-    if ((!g_enabled && !g_census && !g_foliageCensus && !g_foliageReplay &&
+    if ((!g_enabled && !g_census && !g_foliageCensus && !g_materialModeCensus &&
+         !g_materialIdentityCensus && !g_foliageReplay &&
          !g_foliageDepthless && !g_foliageA2c) ||
         g_failed) return;
 
@@ -1518,7 +1810,8 @@ void nwn_oit_prepare(void) {
     // The census observes the engine's own draws and must therefore be present
     // before Scene::Render starts. The callback itself is read-only. Refuse to
     // replace another module's observer if the shared slot is already owned.
-    if (g_census || g_foliageCensus || g_foliageReplay ||
+    if (g_census || g_foliageCensus || g_materialModeCensus ||
+        g_materialIdentityCensus || g_foliageReplay ||
         g_foliageDepthless || g_foliageA2c) {
         if (!nwn_core::g_drawObserver) {
             nwn_core::g_drawObserver = census_observe_draw;
@@ -1537,6 +1830,11 @@ void nwn_oit_prepare(void) {
 
 void nwn_oit_bucket_begin(void* scene, int bucket) {
     read_settings();
+    if (g_materialIdentityCensus) {
+        g_currentMaterial = nullptr;
+        g_currentMaterialTexture0[0] = '\0';
+        g_currentMaterialBucket = -1;
+    }
     if ((!g_foliageVisible && !g_foliageA2c) || g_failed || !scene ||
         (bucket != 1 && bucket != 3)) return;
     nwn_oit_prepare();

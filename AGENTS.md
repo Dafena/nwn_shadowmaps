@@ -103,14 +103,31 @@ Do not confuse a source build with a copied game-directory artifact.
 
 ## Current open work
 
-The active task is a Linux-first smooth-alpha transparency experiment. Start
-with stock foliage in static alpha bucket 1, using the source-classified
-`NO_DISCARD 0` + `fAlphaDiscardValue` shader family. The proven live baseline
-uses source-over blending, cutoff `0.2000`, depth testing, and depth writes.
-The inert accumulation shader branch is available through
-`NWN_OIT_FOLIAGE_SHADER=1` and has linked successfully on Linux. The next slice
-is a private late replay of bucket 1 against copied scene depth; do not suppress
-the engine draw until late replay and resolve are proven.
+The active task is a Linux-first, material-selectable transparency system. The
+immediate checkpoint is a read-only census proving that an explicit MTR
+`NWN_ALPHA_MODE` integer reaches the injected stock alpha shader. It must not
+change a pixel or suppress/replay an engine draw.
+
+The current local A2C branch is the preferred foliage baseline because it is
+stable under camera motion, but its shadow and multi-layer emitter interaction
+is not complete. The earlier global weighted-OIT replay is rejected as a
+baseline because it disappeared at some camera angles and disturbed opaque
+geometry, textures, UI, fog, and water. Weighted OIT may return only as a
+separate explicit material mode.
+
+Native MTR evidence is now binding:
+
+- ordinary `transparency 1` used bucket 1;
+- `sample_framebuffer 1` used bucket 5;
+- `sample_framebuffer 2` used bucket 6 and visually erased emitters behind it;
+- `volumetric 1` produced two passes in buckets 1 and 5;
+- all observed transparent paths retained depth testing and depth writes.
+
+Do not use `sample_framebuffer` or `volumetric` as surrogate injector mode
+selectors. Preserve those materials natively. Bucket 6 is heterogeneous and
+must not be classified wholesale as an emitter pass. Unknown or unmarked
+materials remain native. The complete evidence and ordered checkpoints are in
+[TRANSPARENCY_MODES.md](TRANSPARENCY_MODES.md).
 
 Second-story tile flicker is deferred. With NWN's automatic second-story
 hiding, the engine's visible bucket contents change at an overhang boundary.
@@ -139,6 +156,8 @@ Other known limitations:
 - Windows priority ordering remains disabled pending field-offset evidence;
 - legacy stencil suppression and the final lighting integration still require
   care before this can be called a replacement system.
+- A2C particles behind several alpha layers need explicit foliage
+  transmittance; do not “fix” them by making all emitters depthless.
 
 ## Source map
 
@@ -158,6 +177,7 @@ Other known limitations:
 | `shadow_config.{h,cpp}` | Environment lookup and shipping defaults |
 | `shadow_math.{h,cpp}` | Pure math helpers |
 | `nwn_platform.{h,cpp}` | Platform-specific mechanics |
+| `nwn_oit.cpp` | Transparency census and experimental A2C/OIT mechanics |
 
 Useful narrow searches:
 

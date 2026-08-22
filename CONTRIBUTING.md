@@ -41,6 +41,19 @@ Runtime-built GLSL can be validated without launching the game:
 python3 check_shaders.py
 ```
 
+## Transparency changes
+
+Read [TRANSPARENCY_MODES.md](TRANSPARENCY_MODES.md) before changing
+`nwn_oit.cpp` or alpha-related shader injection. Transparency modes are
+material opt-ins, not bucket-wide policies. Preserve framebuffer-sampling,
+volumetric, emitter, water, UI, replay, injector-owned, and unmarked draws.
+Program IDs are process-local and cannot identify a material across runs.
+
+Do not suppress a native draw in the same checkpoint that first introduces its
+replacement. Prove private output and camera/pass stability first. A2C testing
+must record the actual MSAA sample count; weighted OIT testing must include fog,
+water, emitters, and camera rotation.
+
 ## Verify in-engine
 
 This is a renderer injector. Written-correct is not the bar — the graphics

@@ -8,6 +8,11 @@ source as the Linux injector. It is always a shipping build.
 Linux is the default development target until the Linux injector is working.
 Windows changes are made only when explicitly requested by the maintainer.
 
+The material-selectable transparency work is currently Linux-only runtime
+research. Its A2C/OIT behaviour and MTR census are not validated on Windows and
+must not drive shared renderer changes. See `../TRANSPARENCY_MODES.md` for the
+Linux evidence; do not port it without an explicit maintainer request.
+
 If a behaviour works on Linux and fails on Windows, repair it in a Windows-only
 path. Do not change shared C++ or GLSL to solve a Windows-only symptom. The
 platform mechanics live in `nwn_platform.h` and the Windows local-light

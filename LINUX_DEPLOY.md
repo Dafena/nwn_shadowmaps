@@ -73,6 +73,12 @@ The shipping defaults are compiled into the library. Environment variables can
 still override them for a controlled A/B test. The most useful first checks are
 `NWN_SHADOWMAP_LOG=1` and `NWN_SHADOWMAP_OFF=1`.
 
+The material-selectable A2C/OIT work described in
+[TRANSPARENCY_MODES.md](TRANSPARENCY_MODES.md) is experimental development
+work, not a supported shipping feature. Do not enable its diagnostic
+environment switches in tester packages unless the test explicitly targets
+that work.
+
 ## Requirements
 
 - native Linux NWN:EE (`nwmain-linux`);

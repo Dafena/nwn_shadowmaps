@@ -51,6 +51,12 @@ namespace eng {
     using AurTextureBindInUnit_t = void (*)(void* texture, unsigned int unit,
                                             int controllerIndex);
     using AurTextureGetName_t    = const char* (*)(void* texture);
+    using MaterialBindAllStandardTextures_t = void (*)(void* material);
+    using MaterialGetTexture_t = void* (*)(void* material, int index);
+    using MaterialInitSharedMaterial_t = void* (*)(void* material,
+                                                    const char* name);
+    using SharedMaterialParseField_t = void (*)(void* sharedMaterial,
+                                                const char* field);
 #endif
 
     SceneRender_t           SceneRender           = nullptr;
@@ -101,6 +107,10 @@ namespace eng {
 #ifndef _WIN32
     AurTextureBindInUnit_t  AurTextureBindInUnit  = nullptr;
     AurTextureGetName_t     AurTextureGetName     = nullptr;
+    MaterialBindAllStandardTextures_t MaterialBindAllStandardTextures = nullptr;
+    MaterialGetTexture_t    MaterialGetTexture    = nullptr;
+    MaterialInitSharedMaterial_t MaterialInitSharedMaterial = nullptr;
+    SharedMaterialParseField_t SharedMaterialParseField = nullptr;
 #endif
     AurShadowToggle_t       AurDisableShadowing   = nullptr;
     AurSetDynProjLight_t    AurSetDynProjLight    = nullptr;
@@ -221,6 +231,13 @@ static const struct { const char* mangled; void** slot; bool required; } kBindin
 #ifndef _WIN32
     {"_ZN11CAurTexture10BindInUnitEji", (void**)&eng::AurTextureBindInUnit, false},
     {"_ZN11CAurTexture7GetNameEv",      (void**)&eng::AurTextureGetName,    false},
+    {"_ZN8Material23BindAllStandardTexturesEv",
+                              (void**)&eng::MaterialBindAllStandardTextures, false},
+    {"_ZN8Material10GetTextureEi",      (void**)&eng::MaterialGetTexture, false},
+    {"_ZN8Material18InitSharedMaterialEPKc",
+                              (void**)&eng::MaterialInitSharedMaterial, false},
+    {"_ZN14SharedMaterial10ParseFieldEPKc",
+                              (void**)&eng::SharedMaterialParseField, false},
 #endif
     {"SDL_PollEvent",                  (void**)&eng::SdlPollEventThunk,     false},
     // GLRender matrix entry points. Hooked to capture the renderer instance +

@@ -1,6 +1,6 @@
 # Implementation status
 
-Updated 2026-08-20. This file describes the current tree only. It is not a
+Updated 2026-08-21. This file describes the current tree only. It is not a
 phase history and it does not describe deleted launchers or experiments.
 
 ## Development priority
@@ -67,6 +67,27 @@ does so in shipping defaults so the scene does not receive two shadow systems.
 The game's **Creature Shadow Detail** should remain **Best**; NWN's Off setting
 uses a blob fallback rather than meaning “no shadows”.
 
+## Experimental transparency path
+
+The local branch contains an opt-in Linux A2C foliage experiment in
+`nwn_oit.cpp`. It is not part of the accepted shipping shadow path. Runtime
+evidence established that A2C is camera-stable and preserves useful opaque
+depth intersections, with 8x MSAA giving the preferred visual result. The
+remaining blockers are per-material selection, complete directional/local
+shadow interaction, and emitter visibility through multiple covered layers.
+
+An earlier weighted-OIT replay is not the current baseline. Although it could
+blend smoothly, it disappeared at some camera angles and interfered with
+textures, opaque geometry, UI, fog, and water. Weighted OIT will return only as
+an explicitly selected material mode after a read-only MTR parameter census.
+
+The native Linux MTR census mapped regular transparency to bucket 1,
+`sample_framebuffer 1` to bucket 5, `sample_framebuffer 2` to bucket 6, and
+`volumetric 1` to two passes in buckets 1 and 5. Framebuffer-2 visibly erases
+emitters behind the surface and cannot be classified as ordinary transparency.
+See [TRANSPARENCY_MODES.md](TRANSPARENCY_MODES.md) for exact state and the
+implementation checkpoints.
+
 ## Current limitations
 
 1. Static caster submission follows NWN's normal visible draw list. A caster
@@ -82,6 +103,9 @@ uses a blob fallback rather than meaning “no shadows”.
    priority sort is disabled.
 5. The result is an experimental diagnostic/composite system, not a complete
    replacement for NWN's lighting, stencil, or material shadow semantics.
+6. The A2C foliage branch is experimental. Multiple layers can consume all
+   covered MSAA samples and hide later emitters; an explicit transmittance path
+   is planned rather than making emitters unconditionally depthless.
 
 ## Development controls
 
@@ -128,5 +152,6 @@ The root flow is in `nwn_shadowmap.cpp`. The main implementation modules are:
   overlay, and frame ordering;
 - `shadow_diagnostics_settings.inc` — settings and diagnostics.
 
-See [CURRENT_TASK.md](CURRENT_TASK.md) for the active blocker and
+See [CURRENT_TASK.md](CURRENT_TASK.md) for the active blocker,
+[TRANSPARENCY_MODES.md](TRANSPARENCY_MODES.md) for transparency evidence, and
 [AGENTS.md](AGENTS.md) for invariants.

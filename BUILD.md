@@ -43,6 +43,11 @@ runs — and it is the pass that draws every shadow. This extracts each shader
 exactly as the C++ concatenates it and runs `glslangValidator` (package
 `glslang`) over it. Run it after ANY edit to those strings.
 
+Transparency shader injection in `nwn_oit.cpp` is runtime-built GLSL too. Run
+the same checker after changing those strings, then perform a native Linux game
+run because material parameters, MSAA coverage, and engine bucket state cannot
+be validated offline. See [TRANSPARENCY_MODES.md](TRANSPARENCY_MODES.md).
+
 ## Installing
 
 **Linux:** put `libnwn_shadowmap_deploy.so` next to `nwmain-linux` and
@@ -54,6 +59,9 @@ Proton/Wine also set `WINEDLLOVERRIDES="version=n,b"`.
 Logging is off by default in shipping builds. Enable with
 `NWN_SHADOWMAP_LOG=1`; on Windows the log is written beside the executable as
 `nwn_shadowmap_win.log`.
+
+The development trace launcher truncates `shadowmap-phase1.log` at every
+startup. Copy or filter evidence into a separate file before the next run.
 
 ### Windows: Smart App Control
 

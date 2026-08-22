@@ -59,6 +59,31 @@ The exact order matters. The receiver must not sample a target while its
 generation is being cleared or refilled, and local capture must not run before
 scene-depth capture.
 
+## Observed material bucket routes
+
+A controlled MTR census on 2026-08-21 observed this selected-area bucket order:
+
+```text
+0 -> 1 -> 7 -> 2 -> 3 -> 5 -> 8 -> 4
+```
+
+The test material routes were:
+
+| MTR path | Observed bucket behaviour |
+| --- | --- |
+| ordinary `transparency 1` | bucket 1 |
+| `sample_framebuffer 1` | bucket 5 |
+| `sample_framebuffer 2` | bucket 6 in its separate run; visually erased emitters behind it |
+| `volumetric 1` | two passes in buckets 1 and 5 with culling enabled |
+
+These are runtime observations for the current Linux game build, not stable
+engine enum names. Bucket 6 is heterogeneous: visible emitters and
+framebuffer-2 material draws have both been observed there. Never classify an
+entire bucket as one material family. Program IDs are process-local.
+
+See [TRANSPARENCY_MODES.md](TRANSPARENCY_MODES.md) for the exact GL state and
+material-mode guardrails.
+
 ## Engine authority
 
 `GetShadowLights()` returns the selected non-ambient local sources. The injector

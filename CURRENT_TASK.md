@@ -1,158 +1,231 @@
 # Current task checkpoint
 
-Updated 2026-08-20. A Linux-first foliage transparency experiment is now in
-progress. The source/program registry and inert shader branch remain opt-in at
-the current checkpoint. No engine draw is redirected or suppressed yet.
+Updated 2026-08-21. The active work is a Linux-first, material-selectable
+transparency system. Documentation has been reconciled before the next code
+change. The canonical evidence and roadmap are in
+[TRANSPARENCY_MODES.md](TRANSPARENCY_MODES.md).
 
-## Active task: foliage-first smooth-alpha OIT
+## Immediate checkpoint: strict fail-closed mode routing
 
-The goal is to prove the console-derived weighted transparency path on stock
-foliage before applying it to character hair. The target look is smooth alpha
-blending with only near-zero texels discarded. It is not temporal dithering or
-alpha-to-coverage.
+The read-only implementation is now built. It injects an active integer uniform
+into the source-classified stock alpha shader and reports unique
+`(bucket, program, mode)` tuples:
 
-The first implementation milestone is `NWN_OIT_FOLIAGE_CENSUS=1`. It:
-
-1. recognizes the stock `NO_DISCARD 0` + `fAlphaDiscardValue` fragment-source
-   signature;
-2. keeps shader/program IDs process-local and joins them at draw time;
-3. reports the live bucket, blend factors, alpha cutoff, depth test/write, and
-   cull state once per bucket/program pair;
-4. does not allocate OIT targets, redirect or suppress draws, or change the
-   visible frame.
-
-Run the first Linux evidence pass with:
-
-```bash
-env -u NWN_OIT NWN_OIT_FOLIAGE_CENSUS=1 ./run-dev.sh
-rg -n '\[oit\]\[foliage' shadowmap-phase1.log
+```mtr
+parameter int NWN_ALPHA_MODE 2
 ```
 
-The first Linux evidence pass completed on 2026-08-20 (RTX 3060 Ti, native
-Linux client, 1920x1006 viewport). It established:
+The census was intended to demonstrate:
 
-- stock alpha/card programs are source-over blended;
-- eligible draws appeared in buckets 1 and 3;
-- `fAlphaDiscardValue` was `0.2000`;
-- depth testing and depth writes were both enabled;
-- culling was enabled.
+1. an unmarked material reads as mode `0`;
+2. at least two marked materials retain distinct integer values;
+3. the value is joined to the correct live program/draw without persisting GL
+   object IDs;
+4. framebuffer-sampling, volumetric, emitter, water, UI, replay, and
+   injector-owned draws remain excluded;
+5. no draw is suppressed, redirected, replayed, or visibly modified.
 
-The reusable process-local program registry now joins those programs to the
-source-classified fragment once and caches the cutoff and OIT-pass uniform
-locations. Shader object IDs remain runtime-only and are never treated as
-stable identifiers. The standalone census path also captures NWN's draw entry
-points during GL resolution; it no longer depends on the heavyweight shadow
-trace launcher to observe geometry.
+Runtime propagation is now proven, but the mechanism is rejected for normal
+materials. Do not begin A2C routing until mode ownership can be transported
+without changing NWN's engine-selected shader variant.
 
-The same run exposed a stale `settings_tick()` cache bound: the settings table
-had grown to `kSettingsMax` while its comparison cache remained 32 entries.
-That overflow caused the startup crash and is fixed by sizing both from
-`kSettingsMax`.
+Enable only this census with `NWN_ALPHA_MODE_CENSUS=1`. Valid modes are
+non-negative. Negative values are reserved by the dormant shader guard and must
+not be authored.
 
-`NWN_OIT_FOLIAGE_SHADER=1` now injects an inert MRT branch into this exact stock
-shader family. `nwnOitPass=0` preserves the stock cutoff and output. A future
-late replay can set it to 1 to use a `0.001` cutoff and emit the console-derived
-combined/sum/translucence values. A Linux runtime pass proved the shaders link
-and expose live `nwnOitPass` locations while the ordinary draw still reports
-cutoff `0.2000`.
+The runtime proof needs three ordinary alpha materials in one area, preferably
+sharing the same stock shader program:
 
-Next: create a private late replay of static alpha bucket 1, copying the final
-opaque scene depth into the accumulation FBO and leaving the screen untouched.
-The first visible test must remain restricted to bucket 1 so character hair
-and other dynamic alpha cards are not silently pulled into the foliage trial.
+- one with no `NWN_ALPHA_MODE` parameter;
+- one with `parameter int NWN_ALPHA_MODE 2`;
+- one with `parameter int NWN_ALPHA_MODE 3`.
 
-## Current implementation checkpoint
+This also tests whether NWN resets an unmarked material to zero or leaks the
+previous marked material's program-uniform value. Expected log values are
+`0`, `2`, and `3`, with a non-negative uniform location.
 
-The local-light fill path that older notes called “planned” is already in the
-source. `shadow_trace_cascade.inc` calls
-`replay_bucket_into_local_light_layers()` immediately after NWN's original
-`Scene::RenderDrawBucket()` call. `shadow_replay.inc` installs each selected
-light's view/projection into NWN's matrix stack, renders the bucket through the
-re-entry guard, restores the matrices byte-for-byte, and restores GL state.
+The first two runtime attempts on 2026-08-21 reported only
+`location=-1 mode=0`. Two faults were found. First, the stock shader template
+contains multiple preprocessor-selected `main` definitions, so the uniform is
+now declared unconditionally after `#version` and guarded in every candidate
+`main`. Second, and decisively, the final shader-source handoff omitted the new
+`materialModeInjected` flag and submitted NWN's original source despite logging
+the successful edit. The handoff now submits the patched string. The rebuilt
+Linux library awaits the same three-material rerun.
 
-The active local path is therefore:
+The third attempt proved the corrected injector: ordinary alpha program 152
+exposed `NWN_ALPHA_MODE` at live location 2. Every draw still read zero,
+isolating the remaining issue to NWN's material upload. Inspection of the test
+MTRs found that modes 2 and 3 correctly used `parameter int`, but did not name
+`customshadervs` and `customshaderfs`. NWN's documented parametric-input path
+requires explicit shaders even when selecting standard shaders. The unmarked
+control also still had `volumetric 1` from the previous census and was not an
+ordinary-alpha control.
 
-1. NWN exposes the selected local shadow-light list.
-2. The injector copies that list in engine order, subject to the configured
-   source budget and the native three-source ceiling.
-3. Post-scene setup prepares one downward perspective layer per source and a
-   spare layer for a fading source.
-4. The normal visible bucket pass fills those layers immediately after each
-   original bucket draw.
-5. The fullscreen receiver samples the last coherent local generation. Local
-   capture remains after the receiver because moving it earlier broke scene-depth
-   capture.
+The fourth run explicitly selected `vslit_sm` / `fslit_sm`. It proved parameter
+propagation on program 188: the ordinary-alpha candidates reported modes `0`,
+`2`, and `3` at live location 2, and the unmarked material returned to zero.
+There was no uniform leakage between the three materials.
 
-Do not re-open the old standalone bucket-loop, warm-up, emitter-tier, or
-six-face cube-probe designs. They were removed or superseded.
+That run also visibly replaced the intended transparent appearance with an
+environment/specular-looking result. The census itself is read-only; the
+regression came from forcing a shader pair that is not equivalent to the
+engine-selected foliage variant. Therefore explicit `customshadervs` /
+`customshaderfs` selection is useful as proof of NWN's custom-parameter upload,
+but is rejected as the final mode-selection requirement.
+
+The next checkpoint now has a read-only Linux implementation awaiting runtime
+evidence. `NWN_ALPHA_IDENTITY_CENSUS=1` hooks
+`Material::BindAllStandardTextures()` only when subhook provides a real
+trampoline, reads texture 0's resource name through the engine's own
+`Material::GetTexture()` / `CAurTexture::GetName()` accessors, and joins it to
+the source-classified alpha draw. It does not replace shaders or intercept
+`CAurTexture::BindInUnit`; that older hook remains rejected because it produced
+camera-dependent texture/controller corruption.
+
+The first runtime run installed the safe trampoline and preserved native
+rendering. It reported three distinct `Material*` values, but all three MTRs
+correctly resolved to the same texture resource and GL object:
+`tcm02_leaves04`, texture 86. Texture identity alone therefore cannot select
+between these materials.
+
+The second identity run proved the full name association while retaining native
+rendering. It reported `tcm02_leaves04`, `tcm02_leaves04_1`, and
+`tcm02_leaves04_2` as separate MTR/shared-material identities even though all
+three shared program 152, texture resource `tcm02_leaves04`, and GL texture 86.
+
+The third identity run completed the proof. With no explicit custom shaders,
+the stock program 152 and texture 86 remained shared while the draw-time census
+reported:
+
+```text
+tcm02_leaves04   mode=0
+tcm02_leaves04_1 mode=2
+tcm02_leaves04_2 mode=3
+```
+
+All three safe hooks installed without trampoline warnings and native rendering
+remained intact. The non-invasive selector transport is therefore accepted on
+Linux. Pointer, program, and GL IDs remain process-local and must never be
+persisted. Unknown, missing, stale, invalid, or cross-bucket identity remains
+native.
+
+The next implementation slice is strict routing only: mode 0 remains native;
+mode 2 may select the existing A2C path when every pass/material exclusion and
+MSAA requirement is satisfied; mode 3 remains native until the separate OIT
+checkpoint. Stop after proving routing—do not combine it with further shadow or
+emitter changes.
+
+## Verified native MTR routing
+
+The four Linux census runs completed on 2026-08-21:
+
+| Material configuration | Observed route |
+| --- | --- |
+| `transparency 1`, `twosided 1` | bucket 1, regular source-over, cull off |
+| plus `sample_framebuffer 1` | bucket 5, regular source-over GL state |
+| plus `sample_framebuffer 2` | bucket 6, different program; visually erases emitters behind it |
+| `volumetric 1` | two passes in buckets 1 and 5 with culling enabled |
+
+All four transparent paths had depth testing and depth writes enabled. This is
+important for A2C: multiple layers consume MSAA samples and can eliminate
+later emitters. Disabling emitter depth is not an acceptable general fix; the
+planned solution records foliage transmittance and applies it during a late
+emitter composite.
+
+The observed area bucket order was `0, 1, 7, 2, 3, 5, 8, 4`. Bucket numbers
+and program IDs are evidence for this Linux build only; program IDs are
+process-local.
+
+## Current experimental implementation
+
+The local branch is four commits ahead of `origin/main`:
+
+```text
+249ddff Savepoint: working Linux A2C foliage baseline
+af01bc0 A2C: receive directional cascade shadows per fragment
+bca4c63 A2C: receive local-light shadows per fragment
+147ffe0 Savepoint: A2C particles and local-shadow ping-pong
+```
+
+Nothing has been pushed. The current tree contains experimental A2C, particle,
+and per-fragment shadow work. These commits are recovery points, not proof that
+local-light shadows and emitters are solved.
+
+Accepted runtime observations:
+
+- A2C avoids the camera-angle disappearance seen in the earlier weighted-OIT
+  replay experiment.
+- 2x MSAA is visibly coarse; 4x is improved; 8x was the preferred result.
+- A2C preserves useful depth intersection with characters and static meshes.
+- directional/local shadow and emitter interaction remains incomplete;
+  multiple alpha layers are the critical emitter case.
+- the earlier weighted-OIT path blended smoothly but could disappear with
+  camera angle and disturbed UI, fog, water, textures, and opaque geometry.
+  It is not the active baseline.
+
+## Ordered roadmap
+
+After the read-only material census:
+
+1. enforce strict material/pass exclusions;
+2. place the existing A2C path behind explicit mode `2` with MSAA detection and
+   a native fallback;
+3. integrate directional/local shadow reception into the selected material
+   draw and preserve alpha-aware shadow casting;
+4. add foliage transmittance for late emitters;
+5. implement weighted OIT as a separate explicit mode `3`, initially private
+   and non-suppressing;
+6. expose stable controls and run the full Linux regression/performance matrix.
+
+`sample_framebuffer 1`, `sample_framebuffer 2`, and `volumetric 1` keep their
+native semantics and are never used as surrogate mode selectors.
 
 ## Deferred shadow issue: second-story tile flicker
 
 NWN's “Hide second story tiles = Auto” setting removes and restores tiles from
-the per-frame visible draw list as the player walks under them. The shadow map
-follows that same list, so static shadows can strobe at the visibility
-boundary.
+the visible draw list. The current shadow map follows that list and can strobe
+at the boundary.
 
-Two approaches were tried and rejected:
+Rejected approaches remain rejected:
 
-- full-BSP submission every frame: the unculled geometry was fed into NWN's
-  live buckets and damaged normal rendering;
-- a hold-last-map heuristic based on draw counts: a whole wall can be one draw
-  among hundreds, so draw-count variation is not a reliable fill transition.
+- injecting the full unculled BSP into NWN's live draw stream;
+- holding a generation based only on draw-count changes.
 
-### Deferred design
+The deferred design uses two injector-owned static generations. Complete the
+replacement privately, keep the old generation published, then cross-fade
+after the new generation is coherent. Do not infer tile state from draw count.
 
-Use two injector-owned static layer sets. When the current static fill changes,
-complete the replacement privately. Keep the old generation published until the
-new one is complete, then cross-fade the receiver from old to new. The trigger
-must come from the static fill/generation itself, not an inferred tile state or
-a draw-count threshold. The engine's draw stream must remain untouched.
+## Other unresolved shadow limitations
 
-The first implementation should be opt-in and diagnostic-friendly:
+- Local lights use one downward contact cone, not full point-light cube maps.
+- Normal camera culling limits the sun and local caster set.
+- Windows `lightpriority` remains unverified and disabled.
+- Legacy stencil suppression and final lighting integration need broader
+  runtime coverage.
 
-1. identify the existing static target ownership and freshness boundaries;
-2. add a second static generation without changing receiver output;
-3. prove both generations are complete and world-aligned;
-4. add a short composite-only transition;
-5. test under an overhang, then test area changes, camera motion, alpha foliage,
-   menus, and local-light shadows.
+## Working rules
 
-## Other unresolved items
-
-- Local lights are contact shadows from one downward cone per light, not full
-  point-light cube coverage.
-- Normal camera culling limits the caster set for both sun and local captures.
-- Windows' `lightpriority` field offset is still unverified; its sort is
-  disabled. Do not apply that experiment to Linux.
-- Legacy stencil suppression, area-policy transitions, and the final lighting
-  integration need runtime coverage across both platforms before shipping
-  changes are treated as complete.
-
-## Working rules for the next change
-
-- Read `AGENTS.md` before editing.
-- Linux is the priority target for every feature until the injector is working
-  there. Work on Windows only when the maintainer explicitly requests a
-  Windows-specific task.
-- Use the source, not an old status section, as the implementation authority.
-- Keep Linux and Windows changes separate when behaviour differs.
-- Preserve engine authority: `GetShadowLights()` selects local sources.
-- Preserve replay guards, matrix-stack save/restore, and complete GL-state
-  restoration.
-- Never publish a partially filled target generation.
-- Add or update the ImGui control, settings table, reset default, and version
-  when adding a persisted setting.
+- Linux is the priority for every feature until the injector works there.
+  Windows work requires an explicit request.
+- Use source and new runtime evidence as authority; remove stale phase claims.
+- Preserve engine authority, replay guards, matrix-stack restoration, complete
+  GL-state restoration, and coherent target publication.
+- Unknown or unmarked materials render natively.
+- Do not suppress an engine draw until its private replacement is proven.
+- Add settings, table entries, reset defaults, and version updates together.
 - Run `python3 check_shaders.py` after shader-string changes.
-- Build the relevant artifact and record runtime evidence for renderer changes.
+- Build the actual Linux artifact and record runtime evidence.
+- Create local savepoints at agreed checkpoints. Do not push without explicit
+  maintainer direction.
 
 ## Useful commands
 
 ```bash
 git status --short --branch
-rg -n "replay_bucket_into_|capture_local_light_shadow" \
-  shadow_replay.inc shadow_local_lights.inc shadow_trace_cascade.inc
-rg -n "staticWorld|g_cascadeStatic|FramebufferTextureLayer" \
-  nwn_shadowmap.cpp shadow_*.inc
+rg -n "nwn_oit_needs_|nwn_oit_bucket_|census_observe_draw" nwn_oit.cpp
+rg -n "my_shader_source|draw wrappers|nwn_oit" \
+  shadow_shader_interposition.inc nwn_shadowmap.cpp
 python3 check_shaders.py
 make
 ```

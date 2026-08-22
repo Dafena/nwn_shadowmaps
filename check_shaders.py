@@ -96,6 +96,15 @@ def injected_emitter_shader():
             "\nvoid main(){ gl_FragColor=vec4(1.0);\n" + body + "\n}\n")
 
 
+def injected_material_mode_shader():
+    path = "shadow_shader_interposition.inc"
+    declaration = named_string(path, "declaration")
+    guard = named_string(path, "guard")
+    return ("#version 330 compatibility\n" + declaration +
+            "\nvoid main(){\n" + guard +
+            "\n  gl_FragColor=vec4(1.0);\n}\n")
+
+
 def main():
     if not shutil.which("glslangValidator"):
         print("glslangValidator not found (install `glslang`)", file=sys.stderr)
@@ -153,6 +162,21 @@ def main():
             failures += 1
     except Exception as exc:
         print(f"FAIL  a2c emitter injection assembly: {exc}")
+        failures += 1
+    try:
+        src = injected_material_mode_shader()
+        tmp = "/tmp/nwn_shadow_material_mode_check.frag"
+        open(tmp, "w").write(src)
+        res = subprocess.run(["glslangValidator", tmp],
+                             capture_output=True, text=True)
+        if res.returncode == 0:
+            print(f"ok    {'material mode census':22s} {len(src):6d} bytes")
+        else:
+            print("FAIL  material mode census injection")
+            print(res.stdout.strip() or res.stderr.strip())
+            failures += 1
+    except Exception as exc:
+        print(f"FAIL  material mode census assembly: {exc}")
         failures += 1
     return 1 if failures else 0
 

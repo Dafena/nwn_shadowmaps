@@ -1583,6 +1583,12 @@ static subhook_t g_hookTraceGetShadowLights = nullptr;
 static subhook_t g_hookSetLightGL           = nullptr;
 #ifndef _WIN32
 static subhook_t g_hookAurTextureBind       = nullptr;
+static subhook_t g_hookMaterialBind         = nullptr;
+static subhook_t g_hookMaterialInit         = nullptr;
+static subhook_t g_hookSharedMaterialParse  = nullptr;
+static eng::MaterialBindAllStandardTextures_t g_materialBindTrampoline = nullptr;
+static eng::MaterialInitSharedMaterial_t g_materialInitTrampoline = nullptr;
+static eng::SharedMaterialParseField_t g_sharedMaterialParseTrampoline = nullptr;
 #endif
 static bool      g_inStencilShadow = false;
 static GLuint    g_stencilPrograms[32] = {};
@@ -1621,6 +1627,33 @@ static int   g_traceCameraDepth = 0;
     } while (0)
 
 #ifndef _WIN32
+extern "C" void SharedMaterialParseField_detour(void* sharedMaterial,
+                                                  const char* field) {
+    nwn_oit_note_shared_material_field(sharedMaterial, field);
+    if (g_sharedMaterialParseTrampoline)
+        g_sharedMaterialParseTrampoline(sharedMaterial, field);
+}
+
+extern "C" void* MaterialInitSharedMaterial_detour(void* material,
+                                                     const char* name) {
+    void* sharedMaterial = g_materialInitTrampoline
+        ? g_materialInitTrampoline(material, name) : nullptr;
+    nwn_oit_note_material_resource(material, sharedMaterial, name);
+    return sharedMaterial;
+}
+
+extern "C" void MaterialBindAllStandardTextures_detour(void* material) {
+    const char* texture0Name = nullptr;
+    if (material && eng::MaterialGetTexture && eng::AurTextureGetName) {
+        void* texture0 = eng::MaterialGetTexture(material, 0);
+        if (texture0) texture0Name = eng::AurTextureGetName(texture0);
+    }
+    nwn_oit_note_material_bind(material, texture0Name);
+    // This per-material hot-path hook is installed only when subhook produced
+    // a real trampoline. Never remove/call/reinstall it around every draw.
+    if (g_materialBindTrampoline) g_materialBindTrampoline(material);
+}
+
 extern "C" void AurTextureBindInUnit_detour(void* texture, unsigned int unit,
                                              int controllerIndex) {
     if (eng::AurTextureGetName)
@@ -3390,6 +3423,77 @@ static void shadowmap_init() {
     }
 
 #ifndef _WIN32
+    if (nwn_oit_needs_material_identity_tracking() &&
+        eng::MaterialBindAllStandardTextures && eng::MaterialGetTexture &&
+        eng::AurTextureGetName) {
+        if (eng::MaterialInitSharedMaterial) {
+            g_hookMaterialInit = subhook_new((void*)eng::MaterialInitSharedMaterial,
+                                             (void*)MaterialInitSharedMaterial_detour,
+                                             SUBHOOK_64BIT_OFFSET);
+            if (g_hookMaterialInit && subhook_install(g_hookMaterialInit) == 0)
+                g_materialInitTrampoline =
+                    (eng::MaterialInitSharedMaterial_t)
+                        subhook_get_trampoline(g_hookMaterialInit);
+            if (!g_hookMaterialInit || !g_materialInitTrampoline) {
+                fprintf(stderr, "[oit][material-identity] warning: shared-material "
+                                "name trampoline unavailable\n");
+                if (g_hookMaterialInit) {
+                    subhook_remove(g_hookMaterialInit);
+                    subhook_free(g_hookMaterialInit);
+                    g_hookMaterialInit = nullptr;
+                }
+                g_materialInitTrampoline = nullptr;
+            } else {
+                fprintf(stderr, "[oit][material-identity] shared-material name "
+                                "tracking active\n");
+            }
+        }
+        if (eng::SharedMaterialParseField) {
+            g_hookSharedMaterialParse =
+                subhook_new((void*)eng::SharedMaterialParseField,
+                            (void*)SharedMaterialParseField_detour,
+                            SUBHOOK_64BIT_OFFSET);
+            if (g_hookSharedMaterialParse &&
+                subhook_install(g_hookSharedMaterialParse) == 0)
+                g_sharedMaterialParseTrampoline =
+                    (eng::SharedMaterialParseField_t)
+                        subhook_get_trampoline(g_hookSharedMaterialParse);
+            if (!g_hookSharedMaterialParse ||
+                !g_sharedMaterialParseTrampoline) {
+                fprintf(stderr, "[oit][material-identity] warning: shared-material "
+                                "field trampoline unavailable\n");
+                if (g_hookSharedMaterialParse) {
+                    subhook_remove(g_hookSharedMaterialParse);
+                    subhook_free(g_hookSharedMaterialParse);
+                    g_hookSharedMaterialParse = nullptr;
+                }
+                g_sharedMaterialParseTrampoline = nullptr;
+            } else {
+                fprintf(stderr, "[oit][material-identity] shared-material field "
+                                "tracking active\n");
+            }
+        }
+        g_hookMaterialBind = subhook_new((void*)eng::MaterialBindAllStandardTextures,
+                                         (void*)MaterialBindAllStandardTextures_detour,
+                                         SUBHOOK_64BIT_OFFSET);
+        if (g_hookMaterialBind && subhook_install(g_hookMaterialBind) == 0)
+            g_materialBindTrampoline =
+                (eng::MaterialBindAllStandardTextures_t)
+                    subhook_get_trampoline(g_hookMaterialBind);
+        if (!g_hookMaterialBind || !g_materialBindTrampoline) {
+            fprintf(stderr, "[oit][material-identity] warning: safe Material bind "
+                            "trampoline unavailable; census disabled\n");
+            if (g_hookMaterialBind) {
+                subhook_remove(g_hookMaterialBind);
+                subhook_free(g_hookMaterialBind);
+                g_hookMaterialBind = nullptr;
+            }
+            g_materialBindTrampoline = nullptr;
+        } else {
+            fprintf(stderr, "[oit][material-identity] Material bind tracking active\n");
+        }
+    }
+
     if (nwn_oit_needs_texture_tracking() && eng::AurTextureBindInUnit &&
         eng::AurTextureGetName) {
         g_hookAurTextureBind = subhook_new((void*)eng::AurTextureBindInUnit,
@@ -3623,6 +3727,31 @@ static void shadowmap_fini() {
         *g_sdlPollEventSlot = (void*)g_realSdlPollEvent;
         g_sdlPollEventSlot = nullptr;
     }
+#ifndef _WIN32
+    if (g_hookSharedMaterialParse) {
+        subhook_remove(g_hookSharedMaterialParse);
+        subhook_free(g_hookSharedMaterialParse);
+        g_hookSharedMaterialParse = nullptr;
+        g_sharedMaterialParseTrampoline = nullptr;
+    }
+    if (g_hookMaterialInit) {
+        subhook_remove(g_hookMaterialInit);
+        subhook_free(g_hookMaterialInit);
+        g_hookMaterialInit = nullptr;
+        g_materialInitTrampoline = nullptr;
+    }
+    if (g_hookMaterialBind) {
+        subhook_remove(g_hookMaterialBind);
+        subhook_free(g_hookMaterialBind);
+        g_hookMaterialBind = nullptr;
+        g_materialBindTrampoline = nullptr;
+    }
+    if (g_hookAurTextureBind) {
+        subhook_remove(g_hookAurTextureBind);
+        subhook_free(g_hookAurTextureBind);
+        g_hookAurTextureBind = nullptr;
+    }
+#endif
     if (g_hookPersp) { subhook_remove(g_hookPersp); subhook_free(g_hookPersp); }
     if (g_hookView)  { subhook_remove(g_hookView);  subhook_free(g_hookView);  }
     if (g_hookStencil) { subhook_remove(g_hookStencil); subhook_free(g_hookStencil); }

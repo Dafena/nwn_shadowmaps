@@ -123,6 +123,8 @@ bool nwn_oit_needs_shader_sources(void);
 bool nwn_oit_needs_draw_observer(void);
 bool nwn_oit_needs_bucket_hook(void);
 bool nwn_oit_needs_texture_tracking(void);
+bool nwn_oit_needs_material_identity_tracking(void);
+bool nwn_oit_wants_material_mode_census(void);
 bool nwn_oit_wants_foliage_shader_branch(void);
 bool nwn_oit_wants_a2c_emitter_shader_branch(void);
 bool nwn_oit_observes_owned_draws(void);
@@ -134,6 +136,10 @@ bool nwn_oit_observes_owned_draws(void);
 void nwn_oit_note_foliage_fragment(unsigned int shader);
 void nwn_oit_note_emitter_fragment(unsigned int shader);
 void nwn_oit_note_texture_bind(unsigned int unit, const char* name);
+void nwn_oit_note_shared_material_field(void* sharedMaterial, const char* field);
+void nwn_oit_note_material_resource(void* material, void* sharedMaterial,
+                                    const char* materialName);
+void nwn_oit_note_material_bind(void* material, const char* texture0Name);
 
 // Re-enter one native bucket through the shadow module's proven fault and
 // recursion guards. OIT owns the surrounding GL target/state; this function

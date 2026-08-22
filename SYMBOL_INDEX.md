@@ -70,6 +70,23 @@ field offset is verified.
 | `NWN_WIN_LOCAL_FASTPATH` | `nwn_platform.h` | Windows-only local-light mechanics |
 | `nwn_overlay_render` | `nwn_overlay_imgui.cpp` | Dear ImGui panel rendering |
 
+## Transparency experiment
+
+| Symbol | File | Purpose |
+| --- | --- | --- |
+| `read_settings` | `nwn_oit.cpp` | Reads opt-in transparency experiment switches |
+| `census_observe_draw` / `census_observe_draw_after` | `nwn_oit.cpp` | Reports live program, blend, depth, and cull state |
+| `foliage_program` | `nwn_oit.cpp` | Joins a live program to the source-classified foliage registry |
+| `nwn_oit_needs_shader_sources` | `nwn_oit.cpp` | Requests shader-source observation only when required |
+| `nwn_oit_needs_draw_observer` | `nwn_oit.cpp` | Gates per-draw observation |
+| `nwn_oit_bucket_begin` / `nwn_oit_bucket_complete` | `nwn_oit.cpp` | Experimental bucket lifecycle |
+| `nwn_oit_prepare` / `nwn_oit_frame` | `nwn_oit.cpp` | Experimental target/frame lifecycle |
+| `private_foliage_replay` | `nwn_oit.cpp` | Earlier weighted-OIT replay; not the accepted A2C baseline |
+
+Program and shader object IDs are process-local. Material-mode ownership and
+the verified Linux bucket census are documented in
+[TRANSPARENCY_MODES.md](TRANSPARENCY_MODES.md).
+
 ## Narrow inspection recipes
 
 ```bash
@@ -83,6 +100,7 @@ rg -n "draw_static_receiver|build_static_receiver_program|nwnLocalShadeCov" \
   shadow_overlay_runtime.inc shadow_fullscreen_receiver.inc
 rg -n "settings_table|settings_reset_defaults|kSettingsMax" \
   shadow_diagnostics_settings.inc
+rg -n "nwn_oit_needs_|nwn_oit_bucket_|census_observe_draw" nwn_oit.cpp
 ```
 
 If a symbol moves, update this file's ownership table only; do not add brittle

@@ -593,6 +593,44 @@ static bool inject_oit_foliage_branch(std::string& source) {
     return true;
 }
 
+// Material-mode discovery is intentionally separate from the much larger OIT
+// branch. NWN only uploads custom MTR parameters for active uniforms, so the
+// reserved negative guard keeps NWN_ALPHA_MODE live without changing any
+// documented mode (all valid modes are non-negative). The census never sets
+// this uniform itself and never changes GL state.
+static bool inject_material_mode_census(std::string& source) {
+    if (!nwn_oit_wants_material_mode_census() ||
+        source.find("NWN_ALPHA_MODE") != std::string::npos)
+        return false;
+
+    // The stock template contains several preprocessor-selected main
+    // definitions. rfind("void main") can select an inactive branch, which
+    // makes both the declaration and use disappear before link. Put the
+    // declaration in unconditional global scope immediately after #version,
+    // then instrument every candidate main; the preprocessor keeps exactly the
+    // guard belonging to the active variant.
+    const size_t versionAt = source.find("#version");
+    if (versionAt == std::string::npos) return false;
+    const size_t versionEnd = source.find('\n', versionAt);
+    if (versionEnd == std::string::npos) return false;
+    static const char* declaration = "uniform int NWN_ALPHA_MODE;\n";
+    source.insert(versionEnd + 1, declaration);
+
+    static const char* guard =
+        "\n    // Negative values are reserved; valid census modes are inert.\n"
+        "    if (NWN_ALPHA_MODE < 0) discard;\n";
+    size_t searchAt = versionEnd + 1 + std::strlen(declaration);
+    unsigned mains = 0;
+    while ((searchAt = source.find("void main", searchAt)) != std::string::npos) {
+        const size_t open = source.find('{', searchAt);
+        if (open == std::string::npos) break;
+        source.insert(open + 1, guard);
+        searchAt = open + 1 + std::strlen(guard);
+        ++mains;
+    }
+    return mains != 0;
+}
+
 // Particle emitters use a different stock fragment family from alpha-discard
 // foliage. Give every ordinary scene-colour fragment a tiny, inert opaque-depth
 // branch; live draw classification still requires the selected area's measured
@@ -661,6 +699,7 @@ extern "C" void my_shader_source(GLuint shader, GLsizei count,
         combined.find("#define NO_DISCARD 0") != std::string::npos &&
         combined.find("fAlphaDiscardValue") != std::string::npos;
     bool oitFoliageInjected = false;
+    bool materialModeInjected = false;
     bool a2cEmitterInjected = false;
     if (stockAlphaVariant) {
         if (staticAlphaProbe) {
@@ -681,6 +720,10 @@ extern "C" void my_shader_source(GLuint shader, GLsizei count,
         if (oitFoliageProbe &&
             combined.find("gl_FragColor") != std::string::npos) {
             nwn_oit_note_foliage_fragment(shader);
+            materialModeInjected = inject_material_mode_census(combined);
+            if (materialModeInjected)
+                fprintf(stderr, "[oit][material-mode] injected dormant "
+                                "NWN_ALPHA_MODE census into fragment=%u\n", shader);
             oitFoliageInjected = inject_oit_foliage_branch(combined);
             if (oitFoliageInjected)
                 fprintf(stderr, "[oit][foliage] injected inert MRT branch into "
@@ -735,7 +778,8 @@ extern "C" void my_shader_source(GLuint shader, GLsizei count,
         }
     }
     const bool markerInjected = inject_marker(combined);
-    if (!oitFoliageInjected && !a2cEmitterInjected && !markerInjected) {
+    if (!materialModeInjected && !oitFoliageInjected &&
+        !a2cEmitterInjected && !markerInjected) {
         g_realShaderSource(shader, count, string, length);
         return;
     }
@@ -744,7 +788,7 @@ extern "C" void my_shader_source(GLuint shader, GLsizei count,
     g_realShaderSource(shader, 1, &patched, &patchedLen);
     static int logged = 0;
     if (logged++ < 4)
-        fprintf(stderr, "[shadowmap] injected runtime marker into shader %u\n", shader);
+        fprintf(stderr, "[shadowmap] submitted patched runtime shader %u\n", shader);
 }
 
 // Uniform push only -- chaining is the caller's job, because we reach this from

@@ -1,0 +1,4 @@
+[oit][census] bucket=0 program=155 blend=off rgb=SRC_ALPHA/ONE_MINUS_SRC_ALPHA alpha=SRC_ALPHA/ONE_MINUS_SRC_ALPHA depthtest=1 depthwrite=1 cull=1  -> CUTOUT/OPAQUE - excluded (writes depth)
+[oit][census] bucket=1 program=152 blend=ON rgb=SRC_ALPHA/ONE_MINUS_SRC_ALPHA alpha=SRC_ALPHA/ONE_MINUS_SRC_ALPHA depthtest=1 depthwrite=1 cull=1  -> SRC_OVER - OIT CANDIDATE
+[oit][census] bucket=2 program=167 blend=off rgb=SRC_ALPHA/ONE_MINUS_SRC_ALPHA alpha=SRC_ALPHA/ONE_MINUS_SRC_ALPHA depthtest=1 depthwrite=1 cull=1  -> CUTOUT/OPAQUE - excluded (writes depth)
+[oit][census] bucket=5 program=152 blend=ON rgb=SRC_ALPHA/ONE_MINUS_SRC_ALPHA alpha=SRC_ALPHA/ONE_MINUS_SRC_ALPHA depthtest=1 depthwrite=1 cull=1  -> SRC_OVER - OIT CANDIDATE

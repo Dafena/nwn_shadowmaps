@@ -1,0 +1,7 @@
+[oit][material-identity-census] bucket=1 program=152 material=0x5584428276c0 serial=930723 mtr=tcm02_leaves04_1 mode=2 texture0=86 name=tcm02_leaves04
+[oit][material-identity-census] bucket=1 program=152 material=0x55844282db90 serial=930724 mtr=tcm02_leaves04 mode=0 texture0=86 name=tcm02_leaves04
+[oit][material-identity-census] bucket=3 program=152 material=0x558442833b80 serial=932611 mtr=tcm02_leaves04_2 mode=3 texture0=86 name=tcm02_leaves04
+[oit][material-identity] Material bind tracking active
+[oit][material-identity] shared-material field tracking active
+[oit][material-identity] shared-material name tracking active
+[oit][material-identity] stock-path census enabled. Read-only; native shader selection and draw state remain intact.
