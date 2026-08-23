@@ -409,6 +409,9 @@ static bool inject_oit_foliage_branch(std::string& source) {
         "uniform int nwnOitFringeOnly;\n"
         "uniform float nwnOitCutoff;\n"
         "uniform float nwnOitAlphaGain;\n"
+        "uniform int nwnOitNormalizeCutout;\n"
+        "uniform float nwnOitNormalizePivot;\n"
+        "uniform int nwnOitCoreResetPass;\n"
         "uniform int nwnOitDepthPass;\n"
         "uniform int nwnOitOpaqueCore;\n"
         "uniform int nwnA2cPass;\n"
@@ -490,9 +493,15 @@ static bool inject_oit_foliage_branch(std::string& source) {
         "        for(int nwnSample=0;nwnSample<nwnA2cEmitterSamples&&nwnSample<16;++nwnSample)\n"
         "            nwnOpaqueDepth=min(nwnOpaqueDepth,texelFetch(nwnA2cEmitterOpaqueDepth,nwnEmitterPixel,nwnSample).r);\n"
         "        if(gl_FragCoord.z>nwnOpaqueDepth+nwnA2cEmitterDepthBias) discard;\n"
+        "    } else if (nwnOitCoreResetPass != 0) {\n"
+        "        gl_FragColor = vec4(0.0);\n"
+        "        nwnOitSum = vec4(0.0);\n"
+        "        nwnOitTranslucence = vec4(1.0, 0.0, 0.0, 0.0);\n"
         "    } else if (nwnOitPass != 0) {\n"
         "        float nwnOitAlpha = clamp(gl_FragColor.a, 0.0, 1.0);\n"
         "        if (nwnOitAlpha <= 0.01) discard;\n"
+        "        if (nwnOitNormalizeCutout != 0)\n"
+        "            nwnOitAlpha = clamp(nwnOitAlpha / max(nwnOitNormalizePivot, 0.01), 0.0, 1.0);\n"
         "        nwnOitAlpha = 1.0 - pow(1.0 - nwnOitAlpha, max(nwnOitAlphaGain, 0.01));\n"
         "        if (nwnOitFringeOnly != 0 && nwnOitAlpha >= nwnOitCutoff) discard;\n"
         "        gl_FragColor = vec4(gl_FragColor.rgb * nwnOitAlpha, 1.0);\n"
@@ -1998,6 +2007,10 @@ static inline void finish_observed_engine_draw() {
 
 #define DUPLICATE_OIT_FRINGE(drawCall)                                      \
     do {                                                                    \
+        if (nwn_oit_begin_mode3_depth_duplicate()) {                        \
+            drawCall;                                                       \
+            nwn_oit_end_mode3_depth_duplicate();                            \
+        }                                                                   \
         if (nwn_oit_begin_immediate_fringe()) {                             \
             drawCall;                                                       \
             nwn_oit_end_immediate_fringe();                                 \
@@ -2009,6 +2022,22 @@ static inline void finish_observed_engine_draw() {
         if (nwn_oit_begin_opaque_depth_duplicate()) {                       \
             drawCall;                                                       \
             nwn_oit_end_opaque_depth_duplicate();                           \
+        }                                                                   \
+    } while (0)
+
+#define DUPLICATE_MODE3_OPAQUE_DEPTH(drawCall)                              \
+    do {                                                                    \
+        if (nwn_oit_begin_mode3_depth_duplicate()) {                        \
+            drawCall;                                                       \
+            nwn_oit_end_mode3_depth_duplicate();                            \
+        }                                                                   \
+    } while (0)
+
+#define DUPLICATE_A2C_PRIVATE_EMITTER(drawCall)                             \
+    do {                                                                    \
+        if (nwn_oit_begin_private_emitter_duplicate()) {                    \
+            drawCall;                                                       \
+            nwn_oit_end_private_emitter_duplicate();                        \
         }                                                                   \
     } while (0)
 
@@ -2196,11 +2225,17 @@ extern "C" void NWN_GL_INTERPOSE(glDrawElements)(GLenum mode, GLsizei count, GLe
                              dlsym(RTLD_NEXT, "glDrawElements");
     shadow_before_draw();
     trace_normal_geometry_draw(count, true);
-    if (g_nextDrawElements) g_nextDrawElements(mode, count, type, indices);
+    const bool suppressNative = nwn_oit_suppress_current_draw();
+    if (g_nextDrawElements && !suppressNative)
+        g_nextDrawElements(mode, count, type, indices);
     if (g_nextDrawElements)
         DUPLICATE_OIT_FRINGE(g_nextDrawElements(mode, count, type, indices));
     if (g_nextDrawElements)
         DUPLICATE_A2C_OPAQUE_DEPTH(g_nextDrawElements(mode, count, type, indices));
+    if (g_nextDrawElements)
+        DUPLICATE_MODE3_OPAQUE_DEPTH(g_nextDrawElements(mode, count, type, indices));
+    if (g_nextDrawElements)
+        DUPLICATE_A2C_PRIVATE_EMITTER(g_nextDrawElements(mode, count, type, indices));
     finish_observed_engine_draw();
     note_cascade_replay_draws(1);
     note_local_light_draws(1);
@@ -2224,11 +2259,17 @@ extern "C" void NWN_GL_INTERPOSE(glDrawArrays)(GLenum mode, GLint first, GLsizei
                            dlsym(RTLD_NEXT, "glDrawArrays");
     shadow_before_draw();
     trace_normal_geometry_draw(count, false);
-    if (g_nextDrawArrays) g_nextDrawArrays(mode, first, count);
+    const bool suppressNative = nwn_oit_suppress_current_draw();
+    if (g_nextDrawArrays && !suppressNative)
+        g_nextDrawArrays(mode, first, count);
     if (g_nextDrawArrays)
         DUPLICATE_OIT_FRINGE(g_nextDrawArrays(mode, first, count));
     if (g_nextDrawArrays)
         DUPLICATE_A2C_OPAQUE_DEPTH(g_nextDrawArrays(mode, first, count));
+    if (g_nextDrawArrays)
+        DUPLICATE_MODE3_OPAQUE_DEPTH(g_nextDrawArrays(mode, first, count));
+    if (g_nextDrawArrays)
+        DUPLICATE_A2C_PRIVATE_EMITTER(g_nextDrawArrays(mode, first, count));
     finish_observed_engine_draw();
     note_cascade_replay_draws(1);
     note_local_light_draws(1);
@@ -2282,7 +2323,8 @@ extern "C" void my_draw_range_elements(GLenum mode, GLuint start, GLuint end,
                                         GLsizei count, GLenum type,
                                         const void* indices) {
     trace_normal_geometry_draw(count, true);
-    if (g_realDrawRangeElements)
+    const bool suppressNative = nwn_oit_suppress_current_draw();
+    if (g_realDrawRangeElements && !suppressNative)
         g_realDrawRangeElements(mode, start, end, count, type, indices);
     if (g_realDrawRangeElements)
         DUPLICATE_OIT_FRINGE(g_realDrawRangeElements(mode, start, end, count,
@@ -2290,6 +2332,12 @@ extern "C" void my_draw_range_elements(GLenum mode, GLuint start, GLuint end,
     if (g_realDrawRangeElements)
         DUPLICATE_A2C_OPAQUE_DEPTH(g_realDrawRangeElements(mode, start, end, count,
                                                             type, indices));
+    if (g_realDrawRangeElements)
+        DUPLICATE_MODE3_OPAQUE_DEPTH(g_realDrawRangeElements(
+            mode, start, end, count, type, indices));
+    if (g_realDrawRangeElements)
+        DUPLICATE_A2C_PRIVATE_EMITTER(g_realDrawRangeElements(
+            mode, start, end, count, type, indices));
     finish_observed_engine_draw();
     note_cascade_replay_draws(1);
     note_local_light_draws(1);
@@ -2310,12 +2358,19 @@ extern "C" void my_multi_draw_arrays(GLenum mode, const GLint* first,
                                      const GLsizei* count, GLsizei drawcount) {
     if (count) for (GLsizei i = 0; i < drawcount; ++i)
         trace_normal_geometry_draw(count[i], false);
-    if (g_realMultiDrawArrays)
+    const bool suppressNative = nwn_oit_suppress_current_draw();
+    if (g_realMultiDrawArrays && !suppressNative)
         g_realMultiDrawArrays(mode, first, count, drawcount);
     if (g_realMultiDrawArrays)
         DUPLICATE_OIT_FRINGE(g_realMultiDrawArrays(mode, first, count, drawcount));
     if (g_realMultiDrawArrays)
         DUPLICATE_A2C_OPAQUE_DEPTH(g_realMultiDrawArrays(mode, first, count, drawcount));
+    if (g_realMultiDrawArrays)
+        DUPLICATE_MODE3_OPAQUE_DEPTH(g_realMultiDrawArrays(
+            mode, first, count, drawcount));
+    if (g_realMultiDrawArrays)
+        DUPLICATE_A2C_PRIVATE_EMITTER(g_realMultiDrawArrays(
+            mode, first, count, drawcount));
     finish_observed_engine_draw();
     note_cascade_replay_draws((unsigned)std::max(0, drawcount));
     note_local_light_draws((unsigned)std::max(0, drawcount));
@@ -2337,7 +2392,8 @@ extern "C" void my_multi_draw_elements(GLenum mode, const GLsizei* count,
                                        GLsizei drawcount) {
     if (count) for (GLsizei i = 0; i < drawcount; ++i)
         trace_normal_geometry_draw(count[i], true);
-    if (g_realMultiDrawElements)
+    const bool suppressNative = nwn_oit_suppress_current_draw();
+    if (g_realMultiDrawElements && !suppressNative)
         g_realMultiDrawElements(mode, count, type, indices, drawcount);
     if (g_realMultiDrawElements)
         DUPLICATE_OIT_FRINGE(g_realMultiDrawElements(mode, count, type, indices,
@@ -2345,6 +2401,12 @@ extern "C" void my_multi_draw_elements(GLenum mode, const GLsizei* count,
     if (g_realMultiDrawElements)
         DUPLICATE_A2C_OPAQUE_DEPTH(g_realMultiDrawElements(mode, count, type,
                                                             indices, drawcount));
+    if (g_realMultiDrawElements)
+        DUPLICATE_MODE3_OPAQUE_DEPTH(g_realMultiDrawElements(
+            mode, count, type, indices, drawcount));
+    if (g_realMultiDrawElements)
+        DUPLICATE_A2C_PRIVATE_EMITTER(g_realMultiDrawElements(
+            mode, count, type, indices, drawcount));
     finish_observed_engine_draw();
     note_cascade_replay_draws((unsigned)std::max(0, drawcount));
     note_local_light_draws((unsigned)std::max(0, drawcount));
@@ -2365,7 +2427,8 @@ extern "C" void my_draw_elements_base_vertex(GLenum mode, GLsizei count,
                                                GLenum type, const void* indices,
                                                GLint basevertex) {
     trace_normal_geometry_draw(count, true);
-    if (g_realDrawElementsBaseVertex)
+    const bool suppressNative = nwn_oit_suppress_current_draw();
+    if (g_realDrawElementsBaseVertex && !suppressNative)
         g_realDrawElementsBaseVertex(mode, count, type, indices, basevertex);
     if (g_realDrawElementsBaseVertex)
         DUPLICATE_OIT_FRINGE(g_realDrawElementsBaseVertex(mode, count, type,
@@ -2373,6 +2436,12 @@ extern "C" void my_draw_elements_base_vertex(GLenum mode, GLsizei count,
     if (g_realDrawElementsBaseVertex)
         DUPLICATE_A2C_OPAQUE_DEPTH(g_realDrawElementsBaseVertex(mode, count, type,
                                                                 indices, basevertex));
+    if (g_realDrawElementsBaseVertex)
+        DUPLICATE_MODE3_OPAQUE_DEPTH(g_realDrawElementsBaseVertex(
+            mode, count, type, indices, basevertex));
+    if (g_realDrawElementsBaseVertex)
+        DUPLICATE_A2C_PRIVATE_EMITTER(g_realDrawElementsBaseVertex(
+            mode, count, type, indices, basevertex));
     finish_observed_engine_draw();
     note_cascade_replay_draws(1);
     note_local_light_draws(1);
@@ -2395,7 +2464,8 @@ extern "C" void my_draw_range_elements_base_vertex(GLenum mode, GLuint start,
                                                      GLenum type, const void* indices,
                                                      GLint basevertex) {
     trace_normal_geometry_draw(count, true);
-    if (g_realDrawRangeElementsBaseVertex)
+    const bool suppressNative = nwn_oit_suppress_current_draw();
+    if (g_realDrawRangeElementsBaseVertex && !suppressNative)
         g_realDrawRangeElementsBaseVertex(mode, start, end, count, type,
                                            indices, basevertex);
     if (g_realDrawRangeElementsBaseVertex)
@@ -2403,6 +2473,12 @@ extern "C" void my_draw_range_elements_base_vertex(GLenum mode, GLuint start,
             mode, start, end, count, type, indices, basevertex));
     if (g_realDrawRangeElementsBaseVertex)
         DUPLICATE_A2C_OPAQUE_DEPTH(g_realDrawRangeElementsBaseVertex(
+            mode, start, end, count, type, indices, basevertex));
+    if (g_realDrawRangeElementsBaseVertex)
+        DUPLICATE_MODE3_OPAQUE_DEPTH(g_realDrawRangeElementsBaseVertex(
+            mode, start, end, count, type, indices, basevertex));
+    if (g_realDrawRangeElementsBaseVertex)
+        DUPLICATE_A2C_PRIVATE_EMITTER(g_realDrawRangeElementsBaseVertex(
             mode, start, end, count, type, indices, basevertex));
     finish_observed_engine_draw();
     note_cascade_replay_draws(1);
@@ -2427,13 +2503,20 @@ extern "C" void my_draw_elements_instanced(GLenum mode, GLsizei count,
                                             GLenum type, const void* indices,
                                             GLsizei instances) {
     for (GLsizei i = 0; i < instances; ++i) trace_normal_geometry_draw(count, true);
-    if (g_realDrawElementsInstanced)
+    const bool suppressNative = nwn_oit_suppress_current_draw();
+    if (g_realDrawElementsInstanced && !suppressNative)
         g_realDrawElementsInstanced(mode, count, type, indices, instances);
     if (g_realDrawElementsInstanced)
         DUPLICATE_OIT_FRINGE(g_realDrawElementsInstanced(
             mode, count, type, indices, instances));
     if (g_realDrawElementsInstanced)
         DUPLICATE_A2C_OPAQUE_DEPTH(g_realDrawElementsInstanced(
+            mode, count, type, indices, instances));
+    if (g_realDrawElementsInstanced)
+        DUPLICATE_MODE3_OPAQUE_DEPTH(g_realDrawElementsInstanced(
+            mode, count, type, indices, instances));
+    if (g_realDrawElementsInstanced)
+        DUPLICATE_A2C_PRIVATE_EMITTER(g_realDrawElementsInstanced(
             mode, count, type, indices, instances));
     finish_observed_engine_draw();
     note_cascade_replay_draws((unsigned)std::max(0, instances));
@@ -2456,7 +2539,8 @@ extern "C" void my_draw_elements_instanced_base_vertex(GLenum mode, GLsizei coun
                                                         GLenum type, const void* indices,
                                                         GLsizei instances, GLint basevertex) {
     for (GLsizei i = 0; i < instances; ++i) trace_normal_geometry_draw(count, true);
-    if (g_realDrawElementsInstancedBaseVertex)
+    const bool suppressNative = nwn_oit_suppress_current_draw();
+    if (g_realDrawElementsInstancedBaseVertex && !suppressNative)
         g_realDrawElementsInstancedBaseVertex(mode, count, type, indices,
                                                instances, basevertex);
     if (g_realDrawElementsInstancedBaseVertex)
@@ -2464,6 +2548,12 @@ extern "C" void my_draw_elements_instanced_base_vertex(GLenum mode, GLsizei coun
             mode, count, type, indices, instances, basevertex));
     if (g_realDrawElementsInstancedBaseVertex)
         DUPLICATE_A2C_OPAQUE_DEPTH(g_realDrawElementsInstancedBaseVertex(
+            mode, count, type, indices, instances, basevertex));
+    if (g_realDrawElementsInstancedBaseVertex)
+        DUPLICATE_MODE3_OPAQUE_DEPTH(g_realDrawElementsInstancedBaseVertex(
+            mode, count, type, indices, instances, basevertex));
+    if (g_realDrawElementsInstancedBaseVertex)
+        DUPLICATE_A2C_PRIVATE_EMITTER(g_realDrawElementsInstancedBaseVertex(
             mode, count, type, indices, instances, basevertex));
     finish_observed_engine_draw();
     note_cascade_replay_draws((unsigned)std::max(0, instances));
@@ -2486,6 +2576,8 @@ extern "C" void my_draw_elements_instanced_base_vertex(GLenum mode, GLsizei coun
 
 #undef DUPLICATE_OIT_FRINGE
 #undef DUPLICATE_A2C_OPAQUE_DEPTH
+#undef DUPLICATE_MODE3_OPAQUE_DEPTH
+#undef DUPLICATE_A2C_PRIVATE_EMITTER
 
 // This resolver hook is inert unless the geometry census or another module's
 // draw observer needs it. It catches direct GL function pointers at the time

@@ -1,0 +1,13 @@
+Mode-3 private opaque-depth checkpoint — accepted 2026-08-23 (Linux)
+
+Launch evidence: /tmp/nwn-mode3-depth-20260823.log
+
+[oit][mode3-depth] private D24 cleared; bucket-0/2 immediate duplicates will populate it
+[oit][mode3-private] proof draws=1 color=55742/1931520 maxRgb=0.1266 sum=55770 fractionalSum=55770 maxSum=0.6626 trans=55770 fractionalT=55770 minT=0.4468 resolved=55770 fractionalResolved=55770 resolvedMaxRgb=0.1058 resolvedMinT=0.4468 sourceFbo=2 viewport=0,0 1920x1006 opaqueDepthDraws=362 depth=duplicate-static-plus-dynamic screen=untouched native=retained
+
+Acceptance:
+- 362 depth-writing, non-blended bucket-0/bucket-2 draws populated the private D24 attachment.
+- The marked mode-3 draw survived GL_LEQUAL against reconstructed opaque depth.
+- Accumulation, transmittance, and resolve remained non-zero and fractional.
+- No multisample scene-depth import was used.
+- The screen was untouched and NWN's native mode-3 draw remained visible.

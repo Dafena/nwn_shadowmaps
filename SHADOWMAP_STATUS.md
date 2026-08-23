@@ -69,12 +69,16 @@ uses a blob fallback rather than meaning “no shadows”.
 
 ## Experimental transparency path
 
-The local branch contains an opt-in Linux A2C foliage experiment in
-`nwn_oit.cpp`. It is not part of the accepted shipping shadow path. Runtime
-evidence established that A2C is camera-stable and preserves useful opaque
-depth intersections, with 8x MSAA giving the preferred visual result. The
-remaining blockers are per-material selection, complete directional/local
-shadow interaction, and emitter visibility through multiple covered layers.
+The repository contains opt-in Linux material transparency experiments in
+`nwn_oit.cpp`. They are not part of the accepted shipping shadow path. Explicit
+Mode 2 A2C is camera-stable, preserves opaque depth intersections, and receives
+directional/local shadows, with 8x MSAA giving the preferred visual result.
+Multiple covered layers still limit emitter fidelity.
+
+Explicit Mode 3 is an accepted diagnostic hybrid prototype: native-pivot
+coverage forms an opaque depth-writing core and weighted OIT handles only its
+soft fringe. Production activation, lazy private target work, and a clean
+performance matrix remain outstanding.
 
 An earlier weighted-OIT replay is not the current baseline. Although it could
 blend smoothly, it disappeared at some camera angles and interfered with

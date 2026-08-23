@@ -100,6 +100,11 @@ bool nwn_oit_begin_immediate_fringe(void);
 void nwn_oit_end_immediate_fringe(void);
 bool nwn_oit_begin_opaque_depth_duplicate(void);
 void nwn_oit_end_opaque_depth_duplicate(void);
+bool nwn_oit_begin_mode3_depth_duplicate(void);
+void nwn_oit_end_mode3_depth_duplicate(void);
+bool nwn_oit_begin_private_emitter_duplicate(void);
+void nwn_oit_end_private_emitter_duplicate(void);
+bool nwn_oit_suppress_current_draw(void);
 
 // Called at Scene::Render entry, once a GL context is current. It installs
 // read-only observers before the engine issues this frame's draws. No targets

@@ -28,53 +28,48 @@ The provisional values are:
 | `3` | Weighted blended OIT |
 | `4` | Conventional source-over blending |
 
-The stock-path parser/bind census proved a non-invasive selector transport and
-saved it at `56068d9`. A strict Linux router is now built for runtime testing:
-mode 2 alone may select A2C, while every other, unknown, or excluded case stays
-native. Do not infer a requested mode from texture names, camera angle, or
-bucket alone.
+The stock-path parser/bind census proved a non-invasive selector transport. A
+strict Linux router is now built for runtime testing: mode 2 alone may select
+A2C, while every other, unknown, or excluded case stays native. Do not infer a
+requested mode from texture names, camera angle, or bucket alone.
 
 ## Current experimental baseline
 
-The local branch contains five unpushed transparency commits after
-`origin/main`:
+The accepted visible foliage baseline is explicit material Mode 2 using
+alpha-to-coverage (A2C). It is stable under camera rotation and was visually
+preferred at 8x MSAA. At 2x MSAA the small sample set is conspicuously
+stippled; 4x is better. With no MSAA, A2C cannot provide fractional coverage
+and must fall back to native rendering or cutoff.
 
-```text
-249ddff Savepoint: working Linux A2C foliage baseline
-af01bc0 A2C: receive directional cascade shadows per fragment
-bca4c63 A2C: receive local-light shadows per fragment
-147ffe0 Savepoint: A2C particles and local-shadow ping-pong
-56068d9 Savepoint: prove stock-path material transparency modes
-```
+Explicit Mode 3 is an accepted Linux visual prototype using a native-pivot
+opaque core plus a weighted, order-independent soft fringe. It remains behind
+diagnostic gates until private target work is lazy and all census/readback
+instrumentation is removed from its production path.
 
-They are local savepoints, not a claim that every interaction is solved. The
-observed A2C result is stable under camera rotation and was visually preferred
-at 8x MSAA. At 2x MSAA the small sample set is conspicuously stippled; 4x is
-better. With no MSAA, A2C cannot provide fractional coverage and must fall back
-to native rendering or cutoff.
-
-The outstanding A2C problems are architectural:
+The accepted A2C baseline has these architectural limits:
 
 - directional and local shadow reception must remain correct on covered
   samples;
 - alpha geometry must continue to cast alpha-aware shadows;
 - multiple A2C layers progressively consume samples, so later particles can
   disappear even when the source texture is only partly opaque;
-- emitter visibility therefore needs explicit transmittance information, not
-  merely a disabled depth test;
+- emitter visibility uses explicit transmittance and opaque-only depth rather
+  than merely disabling depth testing;
 - UI, water, framebuffer-sampling materials, volumetric materials, and
   unmarked draws must remain native.
 
 The earlier weighted-OIT experiment demonstrated smooth blending but was not
 accepted: its replay/classification path could disappear at particular camera
 angles and had ordering problems with fog, water, lighting, textures, and UI.
-Weighted OIT remains a future explicit mode, not the current global solution.
+Weighted OIT is now the active private checkpoint for explicit mode 3, never a
+global solution.
 
 ## Native MTR census
 
 Four one-material Linux runs were captured on 2026-08-21 with the ordinary OIT
-census only. The launcher truncates `shadowmap-phase1.log` at startup; each run
-was preserved separately as `census-test1.txt` through `census-test4.txt`.
+census only. Trace logs append rather than truncate, so use a fresh `/tmp` log
+name for each run. The original runs were preserved separately as
+`census-test1.txt` through `census-test4.txt`.
 
 The common opaque programs in buckets 0 and 2 are scene context, not the test
 material. The relevant material results were:
@@ -146,13 +141,19 @@ native meanings. They are not surrogate selectors for injector modes.
    Dark shadows expose A2C's discrete sample mask; this is documented as a
    mode-2 limitation rather than treated as a shadow failure. Evidence:
    `census-mode2-shadow-routing.txt` and the focused visual test.
-5. **Emitter transmittance:** active. First record mode-2 foliage transmittance
-   in a private target and prove it without changing the frame. Only then apply
-   it to a depth-aware late emitter composite. Do not make particles
-   unconditionally depthless.
-6. **Weighted OIT opt-in:** accumulate and resolve only mode-3 draws. Keep the
-   native draw visible until private accumulation, resolve, camera stability,
-   fog, and water ordering are proven.
+5. **Emitter transmittance:** accepted compromise. Mode-2 foliage
+   transmittance and opaque-occluded private emitter color were independently
+   proven, then joined after the shadow receiver and before overlays. Do not
+   make particles unconditionally depthless.
+
+   The private product proof passed at 1920x1006: two mode-2 draws yielded
+   59,273 covered pixels, 15,816 fractional pixels, and `minT=0`. Modes 0 and
+   3 remained native and the screen was untouched. Evidence:
+   `census-mode2-transmittance.txt`. Exact source-over/additive separation and
+   many-layer emitter fidelity are a pinned TODO, not a blocker for mode 3.
+6. **Weighted OIT opt-in:** active private checkpoint. Accumulate only mode-3
+   draws while keeping their native draw visible. Resolve, suppression, camera
+   stability, fog, and water ordering remain gated on private proof.
 7. **Product surface:** add stable controls and MTR documentation, then run the
    complete Linux regression and performance matrix.
 
@@ -179,7 +180,7 @@ Every visible checkpoint must cover:
 Run the read-only native census with behavioural OIT/A2C modes disabled:
 
 ```bash
-cd "/run/media/fede/SSD_SATA/Games/nwn-shadowmap"
+cd "/path/to/nwn-shadowmap"
 env -u NWN_OIT \
   -u NWN_A2C_FOLIAGE \
   -u NWN_OIT_FOLIAGE_VISIBLE \
@@ -202,7 +203,7 @@ rg '\[oit\]\[(foliage-)?census\]' shadowmap-phase1.log \
 Run the custom material-mode census separately:
 
 ```bash
-cd "/run/media/fede/SSD_SATA/Games/nwn-shadowmap"
+cd "/path/to/nwn-shadowmap"
 env -u NWN_OIT \
   -u NWN_A2C_FOLIAGE \
   -u NWN_OIT_FOLIAGE_VISIBLE \
@@ -300,7 +301,7 @@ transport is accepted. Strict fail-closed routing is the next checkpoint.
 Run it with every behavioural transparency option disabled:
 
 ```bash
-cd "/run/media/fede/SSD_SATA/Games/nwn-shadowmap"
+cd "/path/to/nwn-shadowmap"
 env -u NWN_OIT \
   -u NWN_A2C_FOLIAGE \
   -u NWN_OIT_FOLIAGE_VISIBLE \
@@ -326,7 +327,7 @@ Run this checkpoint with 8x MSAA and every legacy transparency experiment
 disabled:
 
 ```bash
-cd "/run/media/fede/SSD_SATA/Games/nwn-shadowmap"
+cd "/path/to/nwn-shadowmap"
 env -u NWN_OIT \
   -u NWN_A2C_FOLIAGE \
   -u NWN_OIT_FOLIAGE_VISIBLE \
@@ -386,3 +387,401 @@ Directional success should include `direct per-fragment CSM receiver active`.
 A valid local-light scene should additionally include
 `direct per-fragment local receiver active`. Absence of the latter means the
 local checkpoint was not exercised, not that it passed.
+
+### Private mode-2 transmittance proof
+
+The first checkpoint-5 slice duplicates only already accepted mode-2 A2C draws
+into a private target and measures `product(1-alpha)`. It does not composite,
+alter native emitters, or touch the visible framebuffer. This proof is
+deliberately depthless: the scene depth is multisampled and the legacy OIT
+proof target is single-sample. A proper multisample/depth-aware emitter design
+comes after this value is proven.
+
+Run at 8x MSAA with the same three-material test:
+
+```bash
+cd "/path/to/nwn-shadowmap"
+env -u NWN_OIT \
+  -u NWN_A2C_FOLIAGE \
+  -u NWN_OIT_FOLIAGE_VISIBLE \
+  -u NWN_OIT_FOLIAGE_CENSUS \
+  -u NWN_OIT_TEXTURE_CENSUS \
+  -u NWN_ALPHA_MODE_CENSUS \
+  -u NWN_ALPHA_IDENTITY_CENSUS \
+  NWN_ALPHA_MODE_ROUTING=1 \
+  NWN_A2C_TRANSMITTANCE_CENSUS=1 \
+  NWN_DEV_NO_BUILD=1 \
+  ./run-dev.sh
+```
+
+The visible result must be identical to the proven strict-routing run. A valid
+private proof reports at least one draw, non-zero `covered` and `fractional`
+counts, `minT` below 1, `screen=untouched`, and `emitters=native`:
+
+```bash
+rg '\[a2c\]\[transmittance\]|\[oit\]\[mode-route\]' \
+  shadowmap-phase1.log \
+  | sort -u \
+  > census-mode2-transmittance.txt
+```
+
+### Private emitter-color proof
+
+This second checkpoint-5 slice retains the native emitter on screen and
+duplicates only measured, source-classified particle draws into an
+injector-owned multisampled RGBA16F target. Current Linux evidence places the
+torch after the numbered buckets and after the engine's `Scene::Render`
+trampoline returns. Its stable signature is the latched scene FBO, no live
+alpha-discard uniform, depth test on, depth write off, and source-over or
+additive blending. UI is excluded by its disabled depth test, foliage by its
+live discard uniform, and opaque geometry by depth writes. Bucket 6 remains an
+accepted path for builds/materials that use it. The target uses the private
+opaque-only multisample depth assembled before foliage and extended with
+dynamic opaque bucket 2. This is still a proof, not the final emitter fix:
+there is no transmittance composite and the visible frame must not change.
+
+Run at 8x MSAA in the same test area, with a torch/fire emitter behind both a
+single mode-2 card and several overlapping mode-2 cards:
+
+```bash
+cd "/path/to/nwn-shadowmap"
+env -u NWN_OIT \
+  -u NWN_A2C_FOLIAGE \
+  -u NWN_OIT_FOLIAGE_VISIBLE \
+  -u NWN_OIT_FOLIAGE_CENSUS \
+  -u NWN_OIT_TEXTURE_CENSUS \
+  -u NWN_ALPHA_MODE_CENSUS \
+  -u NWN_ALPHA_IDENTITY_CENSUS \
+  NWN_ALPHA_MODE_ROUTING=1 \
+  NWN_A2C_TRANSMITTANCE_CENSUS=1 \
+  NWN_A2C_EMITTER_CENSUS=1 \
+  NWN_DEV_NO_BUILD=1 \
+  ./run-dev.sh
+```
+
+The existing emitter occlusion remains visible during this private test; that
+is expected because native rendering is retained. A successful private proof
+reports at least one draw, a non-zero `lit` count, positive `maxRgb`,
+`depth=duplicate-static-plus-dynamic`, `screen=untouched`, and
+`native=retained`:
+
+```bash
+rg '\[a2c\]\[emitter-census\]|\[a2c\]\[transmittance\]|\[oit\]\[mode-route\]' \
+  shadowmap-phase1.log \
+  | sort -u \
+  > census-mode2-emitter-private.txt
+```
+
+Accepted Linux evidence refined the depth construction. Importing scene depth
+at bucket 1 rejected essentially all private emitter color. A depth-disabled
+duplicate captured 9,489 lit pixels at `maxRgb=0.9438`; far-cleared depth plus
+bucket-2 dynamic opaque duplicates also retained emitter color. This proved
+the dynamic path valid and the scene-depth import contaminating.
+
+The accepted replacement imports no scene depth. It clears private depth to
+far before bucket 0, then immediately duplicates only depth-writing,
+non-blended draws from opaque bucket 0 and dynamic opaque bucket 2. Runtime
+proof reported seven emitter draws, 8,675 lit pixels, `maxRgb=0.9531`, and
+`maxA=0.4478` with:
+
+```text
+depth=duplicate-static-plus-dynamic screen=untouched native=retained
+```
+
+Checkpoint 5 now has two independently proven private inputs:
+
+- mode-2 foliage `product(1-alpha)` with fractional transmittance;
+- source-over/additive emitter color occluded only by duplicated opaque
+  bucket-0/bucket-2 geometry.
+
+The first visible checkpoint must remain separately opt-in. It may suppress
+only the same strict emitter signature after both private targets are ready,
+then composite captured emitter color through mode-2 transmittance before the
+overlay. Missing targets, unknown signatures, UI, water/framebuffer-sampling
+materials, and non-mode-2 transparency remain native.
+
+### Visible emitter-through-foliage checkpoint
+
+This checkpoint replaces only the already proven late particle signature. It
+is intentionally separate from mode routing and from both private census
+switches. Start it with a fresh log at 8x MSAA:
+
+```bash
+cd "/path/to/nwn-shadowmap"
+env -u NWN_OIT \
+  -u NWN_A2C_FOLIAGE \
+  -u NWN_OIT_FOLIAGE_VISIBLE \
+  -u NWN_OIT_FOLIAGE_CENSUS \
+  -u NWN_OIT_TEXTURE_CENSUS \
+  -u NWN_ALPHA_MODE_CENSUS \
+  -u NWN_ALPHA_IDENTITY_CENSUS \
+  NWN_ALPHA_MODE_ROUTING=1 \
+  NWN_A2C_TRANSMITTANCE_CENSUS=1 \
+  NWN_A2C_EMITTER_CENSUS=1 \
+  NWN_A2C_EMITTER_VISIBLE=1 \
+  NWN_DEV_NO_BUILD=1 \
+  NWN_SHADOWMAP_LOG=/tmp/nwn-emitter-visible.log \
+  ./run-dev.sh
+```
+
+The first accepted frame should report both the private proof and:
+
+```text
+[a2c][emitter-visible] first replacement composite: ...
+timing=after-shadow-receiver-before-overlays
+```
+
+Visually verify the same torch/fire emitter through one mode-2 card and then
+several overlapping cards. It should remain visible but be attenuated by each
+foliage layer. Opaque bucket-0/bucket-2 geometry must still occlude it. UI,
+water, mode-0/mode-3 controls, and materials using `sample_framebuffer` or
+`volumetric` must remain native. This first visible version stores source-over
+and additive particles in one private color target; if those blend families
+behave differently at runtime, split targets are the next refinement rather
+than widening the classifier.
+
+The engine scene FBO and final composite FBO are not expected to match on the
+Linux shadow path. The shadow receiver resolves scene FBO 2 into output FBO 0
+before this composite. Screen-space viewport and extent equality are the valid
+compatibility checks; requiring framebuffer identity suppresses native
+particles and then incorrectly skips their replacement.
+
+### Private mode-3 weighted-OIT proof
+
+`NWN_OIT_MODE3_CENSUS=1` is the first checkpoint for explicit mode 3. It
+duplicates only strictly eligible mode-3 stock alpha draws into the weighted
+OIT MRT while retaining the native draw. It performs no visible resolve and no
+suppression. Mode 0, mode 2, unknown materials, framebuffer-sampling and
+volumetric materials, unusual blends, emitters, water, UI, and injector-owned
+draws remain native.
+
+The mode-3 proof currently shares its diagnostic MRT with the private mode-2
+transmittance census, so those two census switches are intentionally mutually
+exclusive. This does not prevent normal mode-2 A2C and private mode-3 OIT from
+being present in the same scene.
+
+Run the three-material test with a fresh log name:
+
+```bash
+cd "/path/to/nwn-shadowmap"
+env -u NWN_OIT \
+  -u NWN_OIT_CENSUS \
+  -u NWN_A2C_FOLIAGE \
+  -u NWN_OIT_FOLIAGE_VISIBLE \
+  -u NWN_OIT_FOLIAGE_CENSUS \
+  -u NWN_OIT_TEXTURE_CENSUS \
+  -u NWN_ALPHA_MODE_CENSUS \
+  -u NWN_ALPHA_IDENTITY_CENSUS \
+  -u NWN_A2C_TRANSMITTANCE_CENSUS \
+  -u NWN_A2C_EMITTER_CENSUS \
+  -u NWN_A2C_EMITTER_VISIBLE \
+  NWN_ALPHA_MODE_ROUTING=1 \
+  NWN_OIT_MODE3_CENSUS=1 \
+  NWN_DEV_NO_BUILD=1 \
+  NWN_SHADOWMAP_LOG=/tmp/nwn-mode3-private.log \
+  ./run-dev.sh
+```
+
+The visible result must remain native. A successful proof reports the mode-3
+route plus non-zero private color, alpha sum, and transmittance coverage:
+
+```text
+[oit][mode-route] ... mode=3 ... action=oit-mode-3-private
+[oit][mode3-private] proof draws=... color=... sum=... trans=...
+depth=disabled-private-proof screen=untouched native=retained
+```
+
+The first proof deliberately uses `GL_ALWAYS` in the private single-sample MRT
+because the live scene depth is multisampled. This proves material identity,
+shader output, equation, and immediate draw-state retention only. A compatible
+depth/order design is required before any visible resolve or native
+suppression.
+
+The Linux proof passed on 2026-08-23 at 1920x1006. One mode-3 draw produced
+56,172 color pixels, 56,198 alpha-sum/transmittance pixels, 28,477 fractional
+sum pixels, `maxSum=1.3721`, 56,198 fractional-transmittance pixels, and
+`minT=0.0983`. Mode 0 remained native, mode 2 remained A2C, and the visible
+mode-3 draw was retained. Evidence is preserved in
+`census-mode3-private.txt`.
+
+Private accumulation is therefore accepted. The next slice resolves these
+same buffers into an injector-owned texture and reads that texture back. It
+must still perform no screen composite and no native suppression. That slice
+is now built: the same `NWN_OIT_MODE3_CENSUS=1` command should additionally
+report non-zero `resolved`, `fractionalResolved`, and `resolvedMaxRgb` values.
+
+The private resolve passed on 2026-08-23. It produced 55,756 resolved pixels,
+all fractional, with `resolvedMaxRgb=0.1025` and `resolvedMinT=0.4553`; that
+minimum exactly matched the accumulated transmittance. The screen remained
+untouched and the native mode-3 draw was retained. Evidence is preserved in
+`census-mode3-resolve.txt`.
+
+The next gate is a bounded private stability census while the camera rotates
+and zooms. It must report no sampled frame where an eligible mode-3 draw was
+present but the private resolved coverage became zero.
+
+Enable it by adding `NWN_OIT_MODE3_STABILITY_CENSUS=1` to the private mode-3
+command. Keep the mode-3 test material in view and rotate/zoom continuously for
+at least 120 rendered eligible frames. The census samples every fifth frame to
+limit synchronous readback cost and finishes after 24 samples:
+
+```text
+[oit][mode3-stability] complete eligibleFrames=120 samples=24 disappeared=0
+```
+
+Any `DISAPPEARED` line fails this gate. Large coverage variation is expected
+when zooming or viewing cards edge-on; zero resolved coverage while the marked
+material remains visibly in frame is not. The census remains private:
+`screen=untouched native=retained`.
+
+The stability gate passed on 2026-08-23: 24 samples across 120 eligible frames
+reported `disappeared=0`, coverage range 16,275–16,313, and non-zero resolved
+color throughout. Evidence is preserved in `census-mode3-stability.txt`.
+
+The next private gate reconstructs single-sample opaque depth by immediately
+duplicating only depth-writing, non-blended bucket-0 and bucket-2 draws into
+the mode-3 MRT depth attachment. It must not import scene depth: that approach
+was already proven contaminated during the A2C emitter investigation. Mode-3
+accumulation will test this private opaque depth while its native draw remains
+visible and unchanged.
+
+Enable this gate with `NWN_OIT_MODE3_DEPTH_CENSUS=1` alongside
+`NWN_OIT_MODE3_CENSUS=1`. The ordinary private proof should remain non-zero and
+change its depth label to:
+
+```text
+opaqueDepthDraws=... depth=duplicate-static-plus-dynamic
+screen=untouched native=retained
+```
+
+The duplicate count must be non-zero. Inspect the mode-3 material while opaque
+static geometry and a character cross in front of it, then rotate and zoom.
+The visible result is still NWN's native mode-3 draw; this checkpoint proves
+only that the private weighted-OIT contribution survives a reconstructed
+opaque depth test without importing contaminated scene depth.
+
+The private-depth gate passed on Linux on 2026-08-23. The injector duplicated
+362 depth-writing, non-blended bucket-0/bucket-2 draws. One marked mode-3 draw
+then produced 55,742 color pixels and 55,770 fractional alpha-sum,
+transmittance, and resolved pixels through `GL_LEQUAL`; `resolvedMinT=0.4468`
+matched the accumulated transmittance. The screen remained untouched and the
+native draw was retained. Evidence is preserved in `census-mode3-depth.txt`.
+
+Private opaque depth is therefore accepted. The next gate is ordering-only:
+prove from live state that the duplicated stock color already contains NWN's
+fog, and locate the real water/final-scene boundary before attempting any
+visible composite. Bucket numbers alone are not semantic proof.
+
+Enable the read-only ordering gate with `NWN_OIT_MODE3_ORDER_CENSUS=1` while
+keeping the private accumulation and depth switches enabled. Keep the marked
+mode-3 material and visible water in the same view, in an area with fog enabled.
+After the first eligible frame, the census observes one complete following
+frame. It reports:
+
+- the live `fogParams` reaching the marked stock shader; the injected private
+  branch runs after NWN has produced its stock main color;
+- each distinct program/state signature used by every numbered bucket,
+  including active uniform names containing `water`, `frame`, `screen`,
+  `refract`, or `fog`;
+- each bucket-complete FBO/viewport and the final post-shadow-receiver target.
+
+The census does not suppress, reorder, resolve to the screen, or composite any
+mode-3 draw. The native result remains the only visible result. Preserve the
+bounded `[oit][mode3-order]` lines as evidence; do not infer water solely from
+a bucket number when no water/framebuffer uniform signature corroborates it.
+
+The first ordering run proved fog and framebuffer timing. The mode-3 program
+received enabled fog parameters (`start=30`, `end=45`) before its final stock
+color entered private accumulation. Numbered buckets rendered into FBO 2 and
+the shadow receiver produced FBO 0 before overlays. Bucket 6 remained
+ambiguous: its program exposed only fog uniforms, while prior evidence already
+places `sample_framebuffer 2` in the same bucket. Evidence and this unresolved
+qualification are preserved in `census-mode3-order.txt`.
+
+The follow-up build additionally emits `[oit][mode3-order] material` lines with
+the bound MTR name, mode, `sample_framebuffer`, `volumetric`, transparency, and
+texture-0 resource name. Use those fields—not the process-local program ID—to
+identify the late draw in the same water scene.
+
+The follow-up passed: the marked mode-3 material was `tcm02_leaves04_2` in
+bucket 3, while the stable MTR and texture identity of the bucket-6 draw was
+`TTR01_water01`. The first valid visible insertion point is therefore after
+bucket 3 and before bucket 6, into scene FBO 2. Compositing after the shadow
+receiver into FBO 0 is rejected because it would draw mode 3 over water.
+
+The first visible gate is deliberately non-suppressing. Enable
+`NWN_OIT_MODE3_VISIBLE_CENSUS=1` with private mode 3 and reconstructed depth.
+It adds the private resolve to scene FBO 2 at bucket-3 completion, before water,
+but retains NWN's native mode-3 draw. The marked material will therefore look
+too strong/double-layered during this diagnostic. Judge only ordering: water
+must render over it where appropriate, fog color must match, shadows and the
+later shadow receiver must remain present, and UI must remain untouched. Native
+suppression is allowed only after this visible insertion point passes.
+
+The first visible run reached the correct FBO/timing but failed opacity. Its
+strongest pixel had `minT=0.4600`, so the private layer never exceeded roughly
+54% opacity; removing the retained native draw at that point would only make
+the failure more obvious. Evidence is preserved in `census-mode3-visible.txt`.
+
+For cutout-authored foliage, enable `NWN_OIT_MODE3_ALPHA_NORMALIZE=1` for the
+next gate. The shader divides raw alpha by the material's live
+`fAlphaDiscardValue` pivot and clamps it: coverage that NWN's native cutout
+would retain becomes opaque, while sub-pivot coverage remains a continuous
+soft fringe. This is foliage-specific alpha shaping, not a change to the
+weighted resolve equation. Native mode 3 remains retained for this gate.
+
+The normalized run proved full opacity (`minT=0`) but still showed the farther
+physical card through the nearer one. `maxSum=2.0` identified two overlapping
+opaque layers: weighted OIT was averaging their colors even though resolved
+alpha was opaque. This is a weighted-color limitation, not insufficient alpha.
+
+Enable `NWN_OIT_MODE3_HYBRID_CENSUS=1` for the corrective foliage gate. It
+changes only the strictly routed mode-3 draw:
+
+1. alpha at/above the live native cutoff renders as an opaque, depth-writing
+   scene core;
+2. the same core immediately writes private depth and resets accumulated
+   color/sum/transmittance to their identity values at those pixels, erasing
+   any farther fringe submitted earlier;
+3. only normalized alpha below the pivot accumulates as weighted OIT fringe;
+4. the private fringe composites after bucket 3 and water still renders later
+   in bucket 6.
+
+This gives foliage exact nearest-surface behavior for solid coverage while
+retaining smooth order-independent edges. It is an explicit foliage hybrid,
+not pure weighted OIT and not the final policy for glass/hair modes.
+
+### Hybrid interoperability with native cutouts
+
+The first hybrid test passed Mode-3-on-Mode-3 overlap but showed card borders
+through intervening Mode 0/2 objects. Those objects were rendered correctly by
+their own native paths, but they were not represented in Mode 3's private depth
+image. The weighted fringe therefore had no evidence that they occluded it.
+
+The current checkpoint keeps Mode 0 and Mode 2 visible rendering unchanged and
+adds only a private occluder duplicate for strictly classified cutout materials:
+
+- `transparency 1`, `sample_framebuffer 0`, and non-volumetric;
+- stock alpha-discard shader with a live cutoff and ordinary source-over/cutout
+  blend signature;
+- explicit material mode 0 or strictly accepted A2C mode 2;
+- bucket 1 or 3 only.
+
+Surviving stock-cutoff pixels write Mode 3 private depth and reset its MRTs to
+the accumulation identity, removing any farther Mode 3 fringe at those pixels.
+For Mode 2, the private duplicate temporarily disables the shader A2C path so
+the occluder uses the authored alpha cutoff rather than an MSAA coverage mask.
+No Mode 0/2 color is accumulated by Mode 3 and no visible mode routing changes.
+
+The Linux follow-up passed. Both native control modes emitted the bounded
+occluder-only proof, the visible Mode 3 path remained `core-plus-fringe`, and
+the intervening card-border artifact disappeared. The hybrid visual prototype
+is accepted; evidence is appended to `census-mode3-visible.txt`.
+
+This does not make the census path production-ready. Its private opaque-depth
+reconstruction duplicates broad bucket-0/2 work and the development launcher
+enables additional expensive diagnostics. Production Mode 3 must remove
+readbacks/order instrumentation, allocate and clear its targets lazily, and do
+no private depth/MRT/resolve work in frames or areas without visible Mode 3
+materials. Performance comparisons must use the same clean shadowmap launch;
+`run-dev.sh` is intentionally not that baseline.
