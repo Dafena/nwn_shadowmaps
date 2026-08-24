@@ -41,6 +41,19 @@ maintainer explicitly requests a Windows-specific task. Windows builds may
 remain compiling when practical, but Windows runtime behaviour must not drive
 shared-code design decisions.
 
+### Shared Linux/Proton resource directory
+
+The native Linux game starts with `/home/fede/.local/share/Neverwinter Nights`
+as its user directory, but that directory's `nwn.ini` deliberately redirects
+the `DEVELOPMENT` and other resource aliases into the Proton prefix under
+`.../compatdata/704450/pfx/drive_c/users/fede/Documents/Neverwinter Nights`.
+The `users/fede` and `users/steamuser` development paths currently resolve to
+the same directory/inode. This is intentional so native Linux and Proton use
+the same authored resources. Do not infer the active resource path from the
+startup working-directory line, do not copy test resources into the unaliased
+home `development` directory, and verify `nwn.ini` aliases plus `realpath` and
+inode identity before diagnosing resource loading.
+
 ### Platform separation
 
 If Linux works and Windows does not, fix Windows in a Windows-only path. Do not

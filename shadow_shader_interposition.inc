@@ -399,6 +399,9 @@ static bool inject_marker(std::string& source) {
 static bool inject_oit_foliage_branch(std::string& source) {
     if (!nwn_oit_wants_foliage_shader_branch()) return false;
     std::string patched = source;
+    const bool explicitContinuousAlpha =
+        patched.find("#define NWN_CONTINUOUS_ALPHA_SHADER 1") !=
+        std::string::npos;
 
     static const char* kOutput = "out vec4 compat_glFragColor;";
     static const char* kOutputs =
@@ -468,7 +471,11 @@ static bool inject_oit_foliage_branch(std::string& source) {
         searchAt += std::strlen(kOitDiscard);
         ++discardDefinitions;
     }
-    if (!discardDefinitions) return false;
+    // Explicit custom shaders can compute coverage independently of
+    // inc_standard's ALPHA_DISCARD_VALUE path. Their final gl_FragColor alpha
+    // is authoritative, so the injected tail remains valid even when there is
+    // no stock discard macro to rewrite.
+    if (!discardDefinitions && !explicitContinuousAlpha) return false;
 
     const size_t mainAt = patched.rfind("void main");
     if (mainAt == std::string::npos) return false;
@@ -510,6 +517,10 @@ static bool inject_oit_foliage_branch(std::string& source) {
         "    } else if (nwnA2cPass != 0) {\n"
         "        gl_FragColor.rgb *= min(nwnA2cDirectionalShadow(), nwnA2cLocalShadow());\n"
         "    } else if (nwnOitOpaqueCore != 0) {\n"
+        "        // Stock shaders already test ALPHA_DISCARD_VALUE, but custom\n"
+        "        // shaders may compute their real coverage only in the final\n"
+        "        // output. Apply the same core cutoff to that final alpha.\n"
+        "        if (clamp(gl_FragColor.a, 0.0, 1.0) < nwnOitCutoff) discard;\n"
         "        gl_FragColor.a = 1.0;\n"
         "    }\n";
     patched.insert(close, kBody);
@@ -707,10 +718,13 @@ extern "C" void my_shader_source(GLuint shader, GLsizei count,
     const bool stockAlphaVariant =
         combined.find("#define NO_DISCARD 0") != std::string::npos &&
         combined.find("fAlphaDiscardValue") != std::string::npos;
+    const bool customContinuousAlphaVariant =
+        combined.find("#define NWN_CONTINUOUS_ALPHA_SHADER 1") !=
+        std::string::npos;
     bool oitFoliageInjected = false;
     bool materialModeInjected = false;
     bool a2cEmitterInjected = false;
-    if (stockAlphaVariant) {
+    if (stockAlphaVariant || customContinuousAlphaVariant) {
         if (staticAlphaProbe) {
             bool seen = false;
             for (GLuint id : g_cascadeStaticAlphaFragments)

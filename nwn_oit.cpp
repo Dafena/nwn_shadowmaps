@@ -2152,16 +2152,31 @@ void census_observe_draw() {
     }
 
     if (mode3_depth_active() && g_mode3DepthReady && g_fbo &&
-        (bucket == 0 || bucket == 2 || mode3ForeignCutoutOccluder ||
+        (bucket == 0 || bucket == 2 || bucket == 3 ||
+         mode3ForeignCutoutOccluder ||
          (strictMode3Draw && mode3_hybrid_active()))) {
         GLboolean depthMask = GL_FALSE;
         g.GetBooleanv(GL_DEPTH_WRITEMASK, &depthMask);
+        // Bucket 3 mixes opaque character pieces with transparent cards, and
+        // NWN may leave GL_BLEND enabled while drawing the former.  The
+        // resolved material identity is the authoritative distinction here;
+        // requiring a disabled transient blend state caused robe/neck draws
+        // to be omitted from the private depth image, so a later hair fringe
+        // passed depth even though the native scene correctly hid it.
+        const bool resolvedOpaqueDraw = materialRoute &&
+            !materialRoute->transparency &&
+            materialRoute->sampleFramebuffer == 0 &&
+            !materialRoute->volumetric;
+        const bool lateOpaqueBucket3 = bucket == 3 && materialRoute &&
+            resolvedOpaqueDraw && foliageProgram &&
+            foliageProgram->oitCoreResetPassLoc >= 0;
         g_mode3DepthDuplicatePending = g.IsEnabled(GL_DEPTH_TEST) &&
             (mode3ForeignCutoutOccluder ||
-             (depthMask && !g.IsEnabled(GL_BLEND)));
+             (depthMask && (!g.IsEnabled(GL_BLEND) || resolvedOpaqueDraw)));
         g_mode3CoreResetPending = g_mode3DepthDuplicatePending &&
             mode3_hybrid_active() &&
-            (strictMode3Draw || mode3ForeignCutoutOccluder);
+            (strictMode3Draw || mode3ForeignCutoutOccluder ||
+             lateOpaqueBucket3);
         if (g_mode3CoreResetPending) {
             g_mode3DepthResetProgram = foliageProgram;
             if (mode3ForeignCutoutOccluder && materialRoute->mode == 2)

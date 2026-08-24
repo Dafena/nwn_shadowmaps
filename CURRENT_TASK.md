@@ -5,6 +5,12 @@ transparency system. Documentation has been reconciled before the next code
 change. The canonical evidence and roadmap are in
 [TRANSPARENCY_MODES.md](TRANSPARENCY_MODES.md).
 
+Resource-path invariant: native Linux NWN intentionally follows the aliases in
+`/home/fede/.local/share/Neverwinter Nights/nwn.ini` into the Proton prefix, so
+Linux and Proton share the same development resources. The `users/fede` and
+`users/steamuser` development paths resolve to the same inode. Do not deploy
+duplicate overrides into the unaliased home `development` directory.
+
 ## Immediate checkpoint: productionize accepted Mode 3
 
 The non-invasive stock-path selector and strict Linux router are proven. With
@@ -61,6 +67,19 @@ both Mode 2 A2C and Mode 3 hybrid OIT, and performance remained healthy (the
 maintainer observed it may even be faster than the earlier baseline). The lazy
 no-readback Mode 3 runtime, hashed native fast path, late-field refresh, and
 destructor-based registry recycling are accepted for the current Linux PR.
+
+Custom character-hair follow-up: character chest and neck materials were
+observed as opaque, depth-writing bucket-3 draws. Mode 3 originally mirrored
+opaque depth only from buckets 0 and 2, allowing hair fringe to resolve over
+those body surfaces. Bucket 3 now joins private-depth duplication when depth
+testing and depth writes are live. NWN can leave `GL_BLEND` enabled for these
+opaque character pieces, so the cached material identity—not the transient
+blend-enable bit—is authoritative: only parsed non-transparent,
+non-framebuffer-sampling, non-volumetric materials may take that exception.
+Their duplicate also writes the existing private-MRT identity reset wherever
+it wins depth, covering either ordering within the mixed bucket. Transparent,
+A2C, and OIT draws remain excluded. The maintainer confirmed that Mode 3 hair
+is now correctly occluded by same-bucket chest and neck geometry.
 
 ```mtr
 parameter int NWN_ALPHA_MODE 2
