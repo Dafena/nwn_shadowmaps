@@ -30,16 +30,19 @@ As of 2026-08-21:
 - The repository has a Windows build. Windows-specific local-light fast paths
   are isolated behind `NWN_WIN_LOCAL_FASTPATH`; shared Linux behaviour must not
   be changed to solve a Windows-only problem.
-- The local Linux branch also contains an experimental foliage A2C path. A2C
-  is the preferred foliage baseline because it remains stable under camera
-  rotation, but shadow reception and emitter visibility through multiple
-  layers are not complete. It is not yet a shipping feature.
+- The Linux tree contains opt-in material transparency modes. Mode 2 A2C is
+  the preferred foliage baseline because it remains stable under camera
+  rotation and receives directional/local shadows; multiple covered layers
+  still limit emitter fidelity. Mode 3 is a lazy hybrid runtime candidate with
+  an opaque cutout core and weighted OIT soft fringe. Its Linux no-readback
+  runtime now passes native-area performance and cross-area Mode 2/3 routing;
+  both modes remain explicit opt-ins rather than default shipping behavior.
 - A native MTR census proved that ordinary transparency, framebuffer sampling,
   and volumetric rendering use materially different routes. Future alpha modes
   are planned around an explicit `NWN_ALPHA_MODE` material parameter, but the
-  initial custom-shader transport changed foliage rendering and is not accepted
-  as the final mechanism. Framebuffer and volumetric flags retain their native
-  meanings.
+  initial custom-shader transport changed foliage rendering and was rejected;
+  the accepted selector now follows the stock material path. Framebuffer and
+  volumetric flags retain their native meanings.
 
 This remains a prototype rather than a complete replacement for NWN's shadow
 system. The most important open visual issue is flicker when NWN's
@@ -108,6 +111,7 @@ Run these from the repository directory:
 
 ```bash
 ./run-dev.sh                         # rebuild and launch the development path
+./run-shadowmaps-clean.sh            # shadows-only visual/performance baseline
 ./run-shadowmap-trace.sh             # non-rendering trace path
 ./run-nwn.sh /path/to/nwmain-linux   # generic LD_PRELOAD launcher
 ```
@@ -117,6 +121,17 @@ game-directory discovery to `run-shadowmap-trace.sh`. Set
 `NWN_SHADOWMAP_GAME_DIR` when the game is not found by the launcher. Diagnostic
 logs and PGM output go to the repository by default; override the locations
 with `NWN_SHADOWMAP_LOG` and `NWN_SHADOWMAP_OUT_DIR`.
+
+Use `run-shadowmaps-clean.sh` for visual and performance comparisons. It keeps
+the current shipping/deploy library and normal shadow settings but disables all
+census/readback/dump/timing diagnostics. Using the shipping build is important:
+the development library defaults GPU cost reporting and capture dumps on. The
+base scene trace remains enabled
+with a one-frame/one-event output cap because its hooks supply the camera,
+scene, and light state required by the shadow renderer. It ignores saved panel
+settings by default so repeated A/B runs are comparable. Stable transparency
+opt-ins such as `NWN_ALPHA_MODE_ROUTING=1` and `NWN_OIT_MODE3=1` remain
+caller-controlled.
 
 For a normal development run, press `Ctrl+Shift+F11` in a loaded area to open
 the panel. Settings are saved as `nwn_shadowmap_settings.ini` in

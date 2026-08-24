@@ -14,7 +14,7 @@
 set -euo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-LIB="libnwn_shadowmap.so"
+LIB="${NWN_SHADOWMAP_LIBRARY:-libnwn_shadowmap.so}"
 HOOK="$HERE/$LIB"
 
 if [[ ! -f "$HOOK" ]]; then

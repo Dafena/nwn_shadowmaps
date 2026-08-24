@@ -1585,10 +1585,14 @@ static subhook_t g_hookSetLightGL           = nullptr;
 static subhook_t g_hookAurTextureBind       = nullptr;
 static subhook_t g_hookMaterialBind         = nullptr;
 static subhook_t g_hookMaterialInit         = nullptr;
+static subhook_t g_hookMaterialDestroy      = nullptr;
 static subhook_t g_hookSharedMaterialParse  = nullptr;
+static subhook_t g_hookSharedMaterialDestroy = nullptr;
 static eng::MaterialBindAllStandardTextures_t g_materialBindTrampoline = nullptr;
 static eng::MaterialInitSharedMaterial_t g_materialInitTrampoline = nullptr;
+static eng::MaterialDestroy_t g_materialDestroyTrampoline = nullptr;
 static eng::SharedMaterialParseField_t g_sharedMaterialParseTrampoline = nullptr;
+static eng::SharedMaterialDestroy_t g_sharedMaterialDestroyTrampoline = nullptr;
 #endif
 static bool      g_inStencilShadow = false;
 static GLuint    g_stencilPrograms[32] = {};
@@ -1652,6 +1656,17 @@ extern "C" void MaterialBindAllStandardTextures_detour(void* material) {
     // This per-material hot-path hook is installed only when subhook produced
     // a real trampoline. Never remove/call/reinstall it around every draw.
     if (g_materialBindTrampoline) g_materialBindTrampoline(material);
+}
+
+extern "C" void MaterialDestroy_detour(void* material) {
+    nwn_oit_note_material_destroy(material);
+    if (g_materialDestroyTrampoline) g_materialDestroyTrampoline(material);
+}
+
+extern "C" void SharedMaterialDestroy_detour(void* sharedMaterial) {
+    nwn_oit_note_shared_material_destroy(sharedMaterial);
+    if (g_sharedMaterialDestroyTrampoline)
+        g_sharedMaterialDestroyTrampoline(sharedMaterial);
 }
 
 extern "C" void AurTextureBindInUnit_detour(void* texture, unsigned int unit,
@@ -3473,6 +3488,51 @@ static void shadowmap_init() {
                                 "tracking active\n");
             }
         }
+        if (eng::MaterialDestroy) {
+            g_hookMaterialDestroy =
+                subhook_new((void*)eng::MaterialDestroy,
+                            (void*)MaterialDestroy_detour, SUBHOOK_64BIT_OFFSET);
+            if (g_hookMaterialDestroy &&
+                subhook_install(g_hookMaterialDestroy) == 0)
+                g_materialDestroyTrampoline =
+                    (eng::MaterialDestroy_t)
+                        subhook_get_trampoline(g_hookMaterialDestroy);
+            if (!g_materialDestroyTrampoline) {
+                if (g_hookMaterialDestroy) {
+                    subhook_remove(g_hookMaterialDestroy);
+                    subhook_free(g_hookMaterialDestroy);
+                    g_hookMaterialDestroy = nullptr;
+                }
+                fprintf(stderr, "[oit][material-identity] warning: Material "
+                                "lifetime recycling unavailable\n");
+            } else {
+                fprintf(stderr, "[oit][material-identity] Material lifetime "
+                                "recycling active\n");
+            }
+        }
+        if (eng::SharedMaterialDestroy) {
+            g_hookSharedMaterialDestroy =
+                subhook_new((void*)eng::SharedMaterialDestroy,
+                            (void*)SharedMaterialDestroy_detour,
+                            SUBHOOK_64BIT_OFFSET);
+            if (g_hookSharedMaterialDestroy &&
+                subhook_install(g_hookSharedMaterialDestroy) == 0)
+                g_sharedMaterialDestroyTrampoline =
+                    (eng::SharedMaterialDestroy_t)
+                        subhook_get_trampoline(g_hookSharedMaterialDestroy);
+            if (!g_sharedMaterialDestroyTrampoline) {
+                if (g_hookSharedMaterialDestroy) {
+                    subhook_remove(g_hookSharedMaterialDestroy);
+                    subhook_free(g_hookSharedMaterialDestroy);
+                    g_hookSharedMaterialDestroy = nullptr;
+                }
+                fprintf(stderr, "[oit][material-identity] warning: shared "
+                                "material lifetime recycling unavailable\n");
+            } else {
+                fprintf(stderr, "[oit][material-identity] shared material "
+                                "lifetime recycling active\n");
+            }
+        }
         g_hookMaterialBind = subhook_new((void*)eng::MaterialBindAllStandardTextures,
                                          (void*)MaterialBindAllStandardTextures_detour,
                                          SUBHOOK_64BIT_OFFSET);
@@ -3728,6 +3788,18 @@ static void shadowmap_fini() {
         g_sdlPollEventSlot = nullptr;
     }
 #ifndef _WIN32
+    if (g_hookSharedMaterialDestroy) {
+        subhook_remove(g_hookSharedMaterialDestroy);
+        subhook_free(g_hookSharedMaterialDestroy);
+        g_hookSharedMaterialDestroy = nullptr;
+        g_sharedMaterialDestroyTrampoline = nullptr;
+    }
+    if (g_hookMaterialDestroy) {
+        subhook_remove(g_hookMaterialDestroy);
+        subhook_free(g_hookMaterialDestroy);
+        g_hookMaterialDestroy = nullptr;
+        g_materialDestroyTrampoline = nullptr;
+    }
     if (g_hookSharedMaterialParse) {
         subhook_remove(g_hookSharedMaterialParse);
         subhook_free(g_hookSharedMaterialParse);

@@ -13,10 +13,54 @@ uses A2C while Mode 0 and excluded materials remain native. Explicit Mode 3
 has now passed its diagnostic hybrid visual checkpoint: a native-pivot opaque
 core provides exact depth while a weighted OIT fringe preserves soft edges.
 
-The next implementation removes census/readback work from the normal Mode 3
-path and makes private depth/MRT/resolve work lazy. Areas without visible Mode
-3 materials must pay no Mode 3 frame cost. Performance must be compared using
-the clean shadowmap launch, not `run-dev.sh`, which enables all diagnostics.
+The no-readback runtime candidate is now built behind `NWN_OIT_MODE3=1`. It
+leaves the first strict Mode 3 frame native, then activates the accepted hybrid
+for 120 frames after the latest visible Mode 3 draw. Native-only areas do not
+allocate, clear, duplicate depth, or resolve Mode 3 targets; area changes and
+expired visibility grace release them. The next gate is a clean performance
+and visual A/B. Use the same direct shadowmap launch for both runs because
+`run-dev.sh` enables all diagnostics.
+
+The clean A/B launcher must retain `NWN_SHADOWMAP_TRACE=1`: despite its legacy
+name, that switch installs the camera/scene/light hooks required by CSM and
+local-light capture. Its textual trace is capped to one frame and one event;
+readbacks, dumps, timing, and per-draw diagnostic switches remain disabled.
+The launcher uses `libnwn_shadowmap_deploy.so`, not the development library:
+the latter defaults cost-report `glFinish` stalls and capture PGM readbacks on.
+
+The first clean routing-only A/B exposed a separate native-area regression
+(about 82 -> 51 FPS) before any Mode 3 pass was active. The material observer
+was linearly scanning as many as 4096 resource records on every draw and then
+querying GL state even for unmarked Mode 0 materials. The runtime candidate now
+uses a fixed O(1) pointer lookup and returns unmarked native draws before all GL
+queries. This optimization still needs the same routing-only A/B confirmation.
+
+Routing-only retest: **passed**. The maintainer reports native-area FPS is back
+to the shadows-only baseline with `NWN_ALPHA_MODE_ROUTING=1` and Mode 3 unset.
+The remaining performance gate is the full lazy Mode 3 command: confirm the
+native area stays at baseline, then confirm accepted visuals and expected cost
+only while authored Mode 3 content is present.
+
+Transition retest initially failed when loading a native area before the Mode 3
+area. The bounded log contained shader instrumentation but no Mode 3 route,
+warm-up, arm, depth, or composite event. Root cause: NWN can create a concrete
+material identity before finishing its shared MTR fields, and—more decisively—
+the native area exhausted the old 4096-entry material registry before the test
+area loaded (`material resource registry full; later identities stay native`).
+Both concrete and shared registries now hold 65536 hashed entries. Each
+concrete identity retains its shared route pointer and refreshes the four route
+scalars at bind time, covering late field parsing without a linear scan. Linux
+material and shared-material destructor hooks remove their hash entries and
+return slots to free lists, so capacity tracks live/reused identities rather
+than total materials encountered during a long session. Retest the same native
+-> Mode 2/3 transition and confirm both lifetime-recycling hooks at startup.
+
+Final maintainer retest: **passed**. Starting in the native area retained the
+clean shipping-shadow FPS, transitioning into the authored test area activated
+both Mode 2 A2C and Mode 3 hybrid OIT, and performance remained healthy (the
+maintainer observed it may even be faster than the earlier baseline). The lazy
+no-readback Mode 3 runtime, hashed native fast path, late-field refresh, and
+destructor-based registry recycling are accepted for the current Linux PR.
 
 ```mtr
 parameter int NWN_ALPHA_MODE 2
@@ -309,10 +353,11 @@ Their visible routing remains native/A2C; their color never enters Mode 3 OIT.
 The cross-mode follow-up passed visually and in the private proof: Mode 0 and
 Mode 2 reported occluder-only participation, and Mode 3 remained a core-plus-
 fringe composite before water. The diagnostic Mode 3 prototype is accepted.
-The next checkpoint is productionization: remove census/readback work from the
-runtime path, activate lazily only after a visible Mode 3 material is known,
-and compare it against the clean shadowmaps-only baseline. `run-dev.sh` is not
-a performance baseline because it intentionally enables all diagnostics.
+Productionization checkpoint 1 is implemented but not yet runtime-accepted:
+the lazy path is separate from every `*_CENSUS` switch and performs no
+`glReadPixels`. The next checkpoint compares it against the clean
+shadowmaps-only baseline and confirms one native warm-up frame followed by the
+same accepted core-plus-fringe result.
 
 `sample_framebuffer 1`, `sample_framebuffer 2`, and `volumetric 1` keep their
 native semantics and are never used as surrogate mode selectors.

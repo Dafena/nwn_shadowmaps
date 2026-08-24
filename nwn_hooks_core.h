@@ -145,6 +145,8 @@ void nwn_oit_note_shared_material_field(void* sharedMaterial, const char* field)
 void nwn_oit_note_material_resource(void* material, void* sharedMaterial,
                                     const char* materialName);
 void nwn_oit_note_material_bind(void* material, const char* texture0Name);
+void nwn_oit_note_material_destroy(void* material);
+void nwn_oit_note_shared_material_destroy(void* sharedMaterial);
 
 // Re-enter one native bucket through the shadow module's proven fault and
 // recursion guards. OIT owns the surrounding GL target/state; this function

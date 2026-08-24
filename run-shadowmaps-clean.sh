@@ -1,0 +1,111 @@
+#!/usr/bin/env bash
+# Clean Linux development launcher for visual/performance A/B tests.
+#
+# Unlike run-dev.sh, this enables no census, readback, PGM dump, timing query,
+# or trace path. Stable transparency opt-ins supplied by the caller are kept:
+#
+#   NWN_ALPHA_MODE_ROUTING=1 NWN_OIT_MODE3=1 ./run-shadowmaps-clean.sh
+#
+# Set NWN_DEV_NO_BUILD=1 after the first build to keep repeated A/B launches
+# identical. No saved overlay settings are loaded unless the caller explicitly
+# sets NWN_SHADOWMAP_NO_SETTINGS=0.
+set -euo pipefail
+
+HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+if [[ "${NWN_DEV_NO_BUILD:-0}" != "1" ]]; then
+    make -C "$HERE"
+fi
+if [[ ! -f "$HERE/libnwn_shadowmap_deploy.so" ]]; then
+    echo "build failed -- not launching" >&2
+    exit 1
+fi
+
+if [[ -n "${NWN_SHADOWMAP_GAME_DIR:-}" ]]; then
+    GAME_DIR="$(cd "$NWN_SHADOWMAP_GAME_DIR" && pwd)"
+elif [[ -x "$HERE/../../nwmain-linux" ]]; then
+    GAME_DIR="$(cd "$HERE/../.." && pwd)"
+elif [[ -x "$HERE/../nwmain-linux" ]]; then
+    GAME_DIR="$(cd "$HERE/.." && pwd)"
+else
+    echo "Could not locate nwmain-linux." >&2
+    echo "Set NWN_SHADOWMAP_GAME_DIR to the linux-x86 game directory." >&2
+    exit 1
+fi
+
+echo "[run-clean] shipping shadows enabled; diagnostic output/readbacks disabled" \
+     " mode-routing=${NWN_ALPHA_MODE_ROUTING:-0}" \
+     " mode3=${NWN_OIT_MODE3:-0}"
+
+cd "$GAME_DIR"
+exec env \
+    -u NWN_SHADOWMAP_OFF \
+    -u NWN_OIT \
+    -u NWN_OIT_CENSUS \
+    -u NWN_OIT_FINALIZE_BUCKET \
+    -u NWN_OIT_FOLIAGE_CENSUS \
+    -u NWN_OIT_FOLIAGE_DEPTHLESS \
+    -u NWN_OIT_FOLIAGE_REPLAY \
+    -u NWN_OIT_FOLIAGE_REPLAY_NO_DEPTH \
+    -u NWN_OIT_FOLIAGE_SHADER \
+    -u NWN_OIT_FOLIAGE_VISIBLE \
+    -u NWN_OIT_MODE3_CENSUS \
+    -u NWN_OIT_MODE3_DEPTH_CENSUS \
+    -u NWN_OIT_MODE3_ORDER_CENSUS \
+    -u NWN_OIT_MODE3_STABILITY_CENSUS \
+    -u NWN_OIT_MODE3_VISIBLE_CENSUS \
+    -u NWN_OIT_MODE3_ALPHA_NORMALIZE \
+    -u NWN_OIT_MODE3_HYBRID_CENSUS \
+    -u NWN_OIT_TEST_COLOR \
+    -u NWN_OIT_TEXTURE_CENSUS \
+    -u NWN_A2C_FOLIAGE \
+    -u NWN_A2C_TRANSMITTANCE_CENSUS \
+    -u NWN_A2C_EMITTER_CENSUS \
+    -u NWN_A2C_EMITTER_VISIBLE \
+    -u NWN_ALPHA_MODE_CENSUS \
+    -u NWN_ALPHA_IDENTITY_CENSUS \
+    -u NWN_SHADOWMAP_TRACE \
+    -u NWN_SHADOWMAP_DUMP_PGM \
+    -u NWN_SHADOWMAP_COST \
+    -u NWN_SHADOWMAP_LAMP_CENSUS \
+    -u NWN_SHADOWMAP_STENCIL_TRACE \
+    -u NWN_SHADOWMAP_LOCAL_LIGHT_DUMP \
+    -u NWN_SHADOWMAP_CASCADE_MATH \
+    -u NWN_SHADOWMAP_LIGHT_VECTOR_TRACE \
+    -u NWN_SHADOWMAP_CASCADE_TARGET_VALIDATE \
+    -u NWN_SHADOWMAP_CASCADE_GEOMETRY_TRACE \
+    -u NWN_SHADOWMAP_UNIFORM_TRACE \
+    -u NWN_SHADOWMAP_RECEIVER_TRACE \
+    NWN_SHADOWMAP_LIBRARY=libnwn_shadowmap_deploy.so \
+    NWN_SHADOWMAP_TRACE=1 \
+    NWN_SHADOWMAP_TRACE_FRAMES=1 \
+    NWN_SHADOWMAP_TRACE_EVENTS=1 \
+    NWN_SHADOWMAP_COST=0 \
+    NWN_SHADOWMAP_DUMP_PGM=0 \
+    NWN_SHADOWMAP_NO_SETTINGS="${NWN_SHADOWMAP_NO_SETTINGS:-1}" \
+    NWN_SHADOWMAP_CASCADE_LIGHT_CAPTURE=1 \
+    NWN_SHADOWMAP_CASCADE_LIGHT_BUCKET=0 \
+    NWN_SHADOWMAP_STATIC_RECEIVER=1 \
+    NWN_SHADOWMAP_STATIC_ALPHA_RECEIVER=1 \
+    NWN_SHADOWMAP_STATIC_ALPHA_BUCKET=1 \
+    NWN_SHADOWMAP_CASTER_FULL_BSP_NATIVE_SUBMIT=1 \
+    NWN_SHADOWMAP_CSM_STATIC_RECEIVER=1 \
+    NWN_SHADOWMAP_CSM_DYNAMIC_RECEIVER=1 \
+    NWN_SHADOWMAP_CSM_ALPHA_RECEIVER=1 \
+    NWN_SHADOWMAP_CSM_COMPOSITE=1 \
+    NWN_SHADOWMAP_CSM_BUCKET_REPLAY=1 \
+    NWN_SHADOWMAP_CSM_STRENGTH="${NWN_SHADOWMAP_CSM_STRENGTH:-0.42}" \
+    NWN_SHADOWMAP_CSM_BLEND="${NWN_SHADOWMAP_CSM_BLEND:-0.75}" \
+    NWN_SHADOWMAP_CSM_PCF_RADIUS="${NWN_SHADOWMAP_CSM_PCF_RADIUS:-0.75}" \
+    NWN_SHADOWMAP_CSM_CASCADES="${NWN_SHADOWMAP_CSM_CASCADES:-3}" \
+    NWN_SHADOWMAP_CSM_DYNAMIC_CASCADES="${NWN_SHADOWMAP_CSM_DYNAMIC_CASCADES:-3}" \
+    NWN_SHADOWMAP_STATIC_NEAR_CASCADES="${NWN_SHADOWMAP_STATIC_NEAR_CASCADES:-4}" \
+    NWN_SHADOWMAP_SIZE="${NWN_SHADOWMAP_SIZE:-2048}" \
+    NWN_SHADOWMAP_STATIC_WORLD=1 \
+    NWN_SHADOWMAP_STATIC_WORLD_SIZE="${NWN_SHADOWMAP_STATIC_WORLD_SIZE:-8192}" \
+    NWN_SHADOWMAP_STATIC_WORLD_EXTENT="${NWN_SHADOWMAP_STATIC_WORLD_EXTENT:-128}" \
+    NWN_SHADOWMAP_LOCAL_LIGHT_TRACE=1 \
+    NWN_SHADOWMAP_LOCAL_LIGHT_CAPTURE=1 \
+    NWN_SHADOWMAP_LOCAL_LIGHT_RECEIVER=1 \
+    NWN_SHADOWMAP_LOCAL_LIGHT_SIZE="${NWN_SHADOWMAP_LOCAL_LIGHT_SIZE:-256}" \
+    "$HERE/run-nwn.sh" "$GAME_DIR/nwmain-linux" "$@"

@@ -54,9 +54,11 @@ namespace eng {
     using MaterialBindAllStandardTextures_t = void (*)(void* material);
     using MaterialGetTexture_t = void* (*)(void* material, int index);
     using MaterialInitSharedMaterial_t = void* (*)(void* material,
-                                                    const char* name);
+                                                   const char* name);
     using SharedMaterialParseField_t = void (*)(void* sharedMaterial,
                                                 const char* field);
+    using MaterialDestroy_t = void (*)(void* material);
+    using SharedMaterialDestroy_t = void (*)(void* sharedMaterial);
 #endif
 
     SceneRender_t           SceneRender           = nullptr;
@@ -111,6 +113,8 @@ namespace eng {
     MaterialGetTexture_t    MaterialGetTexture    = nullptr;
     MaterialInitSharedMaterial_t MaterialInitSharedMaterial = nullptr;
     SharedMaterialParseField_t SharedMaterialParseField = nullptr;
+    MaterialDestroy_t         MaterialDestroy = nullptr;
+    SharedMaterialDestroy_t   SharedMaterialDestroy = nullptr;
 #endif
     AurShadowToggle_t       AurDisableShadowing   = nullptr;
     AurSetDynProjLight_t    AurSetDynProjLight    = nullptr;
@@ -238,6 +242,8 @@ static const struct { const char* mangled; void** slot; bool required; } kBindin
                               (void**)&eng::MaterialInitSharedMaterial, false},
     {"_ZN14SharedMaterial10ParseFieldEPKc",
                               (void**)&eng::SharedMaterialParseField, false},
+    {"_ZN8MaterialD1Ev",      (void**)&eng::MaterialDestroy, false},
+    {"_ZN14SharedMaterialD1Ev", (void**)&eng::SharedMaterialDestroy, false},
 #endif
     {"SDL_PollEvent",                  (void**)&eng::SdlPollEventThunk,     false},
     // GLRender matrix entry points. Hooked to capture the renderer instance +

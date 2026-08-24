@@ -64,6 +64,7 @@
 //
 // This TU must compile under both g++ (the .so) and mingw-w64 (version.dll).
 #include <cstdio>
+#include <cstdint>
 #include <cstdlib>
 #include <cstring>
 
@@ -314,6 +315,7 @@ bool  g_materialModeRouting = false; // fail-closed authored mode dispatch
 bool  g_a2cTransmittanceCensus = false; // private mode-2 product(1-alpha) proof
 bool  g_a2cEmitterCensus = false; // private emitter colour + opaque-depth proof
 bool  g_a2cEmitterVisible = false; // replace proven late emitters through mode-2 T
+bool  g_mode3Runtime = false; // production candidate: lazy hybrid Mode 3
 bool  g_mode3OitCensus = false; // private weighted-OIT proof; native retained
 bool  g_mode3StabilityCensus = false; // bounded resolved-texture camera census
 bool  g_mode3DepthCensus = false; // private bucket-0/2 opaque depth reconstruction
@@ -340,6 +342,34 @@ float g_testColor[3] = { 1.0f, 0.25f, 0.25f };
 float g_testAlpha = 0.35f;
 float g_alphaGain = 1.0f;       // preserve authored alpha unless explicitly tuned
 float g_coreCutoff = 0.50f;     // solid/depth core; lower alpha remains soft OIT
+
+bool mode3_requested() {
+    return g_mode3Runtime || g_mode3OitCensus;
+}
+
+// Runtime Mode 3 is armed lazily after a strict eligible draw has been seen.
+// Census Mode 3 deliberately retains its eager behaviour for regression.
+bool mode3_runtime_frame_active();
+
+bool mode3_render_active() {
+    return g_mode3OitCensus || mode3_runtime_frame_active();
+}
+
+bool mode3_depth_active() {
+    return g_mode3DepthCensus || mode3_runtime_frame_active();
+}
+
+bool mode3_visible_active() {
+    return g_mode3VisibleCensus || mode3_runtime_frame_active();
+}
+
+bool mode3_normalize_active() {
+    return g_mode3AlphaNormalize || mode3_runtime_frame_active();
+}
+
+bool mode3_hybrid_active() {
+    return g_mode3HybridCensus || mode3_runtime_frame_active();
+}
 
 float env_float(const char* name, float dflt) {
     const char* v = getenv(name);
@@ -407,6 +437,24 @@ void read_settings() {
         fprintf(stderr, "[oit][mode3-private] shares the diagnostic MRT with "
                         "NWN_A2C_TRANSMITTANCE_CENSUS; disable that census "
                         "before proving mode 3\n");
+    }
+    const char* mode3Runtime = getenv("NWN_OIT_MODE3");
+    g_mode3Runtime = (mode3Runtime && *mode3Runtime && *mode3Runtime != '0');
+    if (g_mode3Runtime && !g_materialModeRouting) {
+        g_mode3Runtime = false;
+        fprintf(stderr, "[oit][mode3-runtime] requires "
+                        "NWN_ALPHA_MODE_ROUTING=1; disabled\n");
+    }
+    if (g_mode3Runtime && g_a2cTransmittanceCensus) {
+        g_mode3Runtime = false;
+        fprintf(stderr, "[oit][mode3-runtime] shares private MRTs with the "
+                        "A2C transmittance census; runtime Mode 3 disabled\n");
+    }
+    if (g_mode3Runtime && g_mode3OitCensus) {
+        g_mode3Runtime = false;
+        fprintf(stderr, "[oit][mode3-runtime] diagnostic Mode 3 census is "
+                        "also enabled; runtime path disabled for an isolated "
+                        "regression run\n");
     }
     const char* mode3Stability = getenv("NWN_OIT_MODE3_STABILITY_CENSUS");
     g_mode3StabilityCensus = (mode3Stability && *mode3Stability &&
@@ -493,7 +541,7 @@ void read_settings() {
     }
     if (g_foliageA2c) g_foliageShader = true;
     if (g_materialModeRouting) g_foliageShader = true;
-    if (g_mode3OitCensus) g_foliageShader = true;
+    if (mode3_requested()) g_foliageShader = true;
     if (g_foliageReplay) g_foliageShader = true;
     if (g_census)
         fprintf(stderr, "[oit] Phase 2a census enabled: reports blend/depth/cull "
@@ -512,8 +560,8 @@ void read_settings() {
                         "Read-only; native shader selection and draw state remain intact.\n");
     if (g_materialModeRouting)
         fprintf(stderr, "[oit][mode-route] strict material routing enabled: "
-                        "mode 2 may use A2C; mode 3 may enter only its explicit "
-                        "private proof; every unknown/excluded mode remains "
+                        "mode 2 may use A2C; mode 3 requires an explicit "
+                        "runtime/proof switch; every unknown/excluded mode remains "
                         "native.\n");
     if (g_a2cTransmittanceCensus)
         fprintf(stderr, "[a2c][transmittance] private mode-2 census enabled: "
@@ -531,6 +579,11 @@ void read_settings() {
         fprintf(stderr, "[oit][mode3-private] weighted-OIT accumulation proof "
                         "enabled: eligible mode-3 draws are duplicated into "
                         "private MRTs; native screen rendering is retained.\n");
+    if (g_mode3Runtime)
+        fprintf(stderr, "[oit][mode3-runtime] lazy hybrid Mode 3 enabled: "
+                        "first eligible frame remains native, subsequent "
+                        "visible frames use core-plus-fringe with no census "
+                        "readbacks\n");
     if (g_mode3StabilityCensus)
         fprintf(stderr, "[oit][mode3-stability] bounded camera census enabled: "
                         "24 private resolve samples over 120 eligible frames; "
@@ -1127,6 +1180,10 @@ GLboolean      g_immediateScissor = GL_FALSE;
 unsigned       g_immediateDraws = 0;
 unsigned       g_mode3PrivateDraws = 0;
 GLfloat        g_mode3LastNativeCutoff = 0.0f;
+void*          g_mode3RuntimeScene = nullptr;
+bool           g_mode3RuntimeFrameActive = false;
+unsigned       g_mode3RuntimeGraceFrames = 0;
+constexpr unsigned kMode3RuntimeGraceFrames = 120;
 bool           g_mode3DepthReady = false;
 bool           g_mode3DepthDuplicatePending = false;
 bool           g_mode3DepthDuplicateActive = false;
@@ -1148,6 +1205,10 @@ struct Mode3OrderMaterialSeen {
 };
 Mode3OrderMaterialSeen g_mode3OrderMaterials[128] = {};
 unsigned               g_mode3OrderMaterialCount = 0;
+
+bool mode3_runtime_frame_active() {
+    return g_mode3Runtime && g_mode3RuntimeFrameActive;
+}
 GLint          g_immediateSceneFbo = -1;
 GLint          g_immediateViewport[4] = {};
 bool           g_privateReplayActive = false;
@@ -1183,17 +1244,24 @@ char            g_currentMaterialTexture0[128] = {};
 unsigned long long g_currentMaterialSerial = 0;
 int             g_currentMaterialBucket = -1;
 
+struct SharedMaterialMode;
 struct MaterialResourceIdentity {
     void* material;
     void* sharedMaterial;
+    const SharedMaterialMode* sharedRoute;
     int mode;
     int sampleFramebuffer;
     bool transparency;
     bool volumetric;
     char name[128];
 };
-MaterialResourceIdentity g_materialResources[4096] = {};
+MaterialResourceIdentity* g_currentMaterialRoute = nullptr;
+MaterialResourceIdentity g_materialResources[65536] = {};
 unsigned g_materialResourceCount = 0;
+unsigned g_materialResourceFree[65536] = {};
+unsigned g_materialResourceFreeCount = 0;
+constexpr unsigned kMaterialResourceLookupSlots = 131072;
+unsigned g_materialResourceLookup[kMaterialResourceLookupSlots] = {};
 
 struct SharedMaterialMode {
     void* sharedMaterial;
@@ -1202,36 +1270,142 @@ struct SharedMaterialMode {
     bool transparency;
     bool volumetric;
 };
-SharedMaterialMode g_sharedMaterialModes[4096] = {};
+SharedMaterialMode g_sharedMaterialModes[65536] = {};
 unsigned g_sharedMaterialModeCount = 0;
+unsigned g_sharedMaterialFree[65536] = {};
+unsigned g_sharedMaterialFreeCount = 0;
+constexpr unsigned kSharedMaterialLookupSlots = 131072;
+unsigned g_sharedMaterialLookup[kSharedMaterialLookupSlots] = {};
+constexpr unsigned kLookupTombstone = ~0u;
 
-const SharedMaterialMode* shared_material_route(void* sharedMaterial) {
-    for (unsigned i = 0; i < g_sharedMaterialModeCount; ++i)
-        if (g_sharedMaterialModes[i].sharedMaterial == sharedMaterial)
-            return &g_sharedMaterialModes[i];
+static unsigned pointer_hash(void* pointer) {
+    std::uintptr_t value = reinterpret_cast<std::uintptr_t>(pointer);
+    value >>= 4;
+    value ^= value >> 17;
+    value *= static_cast<std::uintptr_t>(0xed5ad4bbU);
+    value ^= value >> 11;
+    return static_cast<unsigned>(value);
+}
+
+static SharedMaterialMode* find_shared_material(void* sharedMaterial) {
+    if (!sharedMaterial) return nullptr;
+    unsigned slot = pointer_hash(sharedMaterial) &
+                    (kSharedMaterialLookupSlots - 1);
+    for (unsigned probe = 0; probe < kSharedMaterialLookupSlots; ++probe) {
+        const unsigned encoded = g_sharedMaterialLookup[slot];
+        if (!encoded) return nullptr;
+        if (encoded == kLookupTombstone) {
+            slot = (slot + 1) & (kSharedMaterialLookupSlots - 1);
+            continue;
+        }
+        SharedMaterialMode& entry = g_sharedMaterialModes[encoded - 1];
+        if (entry.sharedMaterial == sharedMaterial) return &entry;
+        slot = (slot + 1) & (kSharedMaterialLookupSlots - 1);
+    }
     return nullptr;
 }
 
+static void index_shared_material(unsigned index) {
+    const unsigned encoded = index + 1;
+    unsigned slot = pointer_hash(g_sharedMaterialModes[index].sharedMaterial) &
+                    (kSharedMaterialLookupSlots - 1);
+    unsigned tombstone = kSharedMaterialLookupSlots;
+    for (unsigned probe = 0; probe < kSharedMaterialLookupSlots; ++probe) {
+        if (g_sharedMaterialLookup[slot] == kLookupTombstone &&
+            tombstone == kSharedMaterialLookupSlots)
+            tombstone = slot;
+        if (!g_sharedMaterialLookup[slot]) {
+            g_sharedMaterialLookup[tombstone == kSharedMaterialLookupSlots
+                                       ? slot : tombstone] = encoded;
+            return;
+        }
+        slot = (slot + 1) & (kSharedMaterialLookupSlots - 1);
+    }
+}
+
+static void unindex_shared_material(void* sharedMaterial) {
+    unsigned slot = pointer_hash(sharedMaterial) &
+                    (kSharedMaterialLookupSlots - 1);
+    for (unsigned probe = 0; probe < kSharedMaterialLookupSlots; ++probe) {
+        const unsigned encoded = g_sharedMaterialLookup[slot];
+        if (!encoded) return;
+        if (encoded != kLookupTombstone &&
+            g_sharedMaterialModes[encoded - 1].sharedMaterial == sharedMaterial) {
+            g_sharedMaterialLookup[slot] = kLookupTombstone;
+            return;
+        }
+        slot = (slot + 1) & (kSharedMaterialLookupSlots - 1);
+    }
+}
+
+static MaterialResourceIdentity* find_material_resource(void* material) {
+    if (!material) return nullptr;
+    unsigned slot = pointer_hash(material) & (kMaterialResourceLookupSlots - 1);
+    for (unsigned probe = 0; probe < kMaterialResourceLookupSlots; ++probe) {
+        const unsigned encoded = g_materialResourceLookup[slot];
+        if (!encoded) return nullptr;
+        if (encoded == kLookupTombstone) {
+            slot = (slot + 1) & (kMaterialResourceLookupSlots - 1);
+            continue;
+        }
+        MaterialResourceIdentity& entry = g_materialResources[encoded - 1];
+        if (entry.material == material) return &entry;
+        slot = (slot + 1) & (kMaterialResourceLookupSlots - 1);
+    }
+    return nullptr;
+}
+
+static void index_material_resource(unsigned index) {
+    const unsigned encoded = index + 1;
+    unsigned slot = pointer_hash(g_materialResources[index].material) &
+                    (kMaterialResourceLookupSlots - 1);
+    unsigned tombstone = kMaterialResourceLookupSlots;
+    for (unsigned probe = 0; probe < kMaterialResourceLookupSlots; ++probe) {
+        if (g_materialResourceLookup[slot] == kLookupTombstone &&
+            tombstone == kMaterialResourceLookupSlots)
+            tombstone = slot;
+        if (!g_materialResourceLookup[slot]) {
+            g_materialResourceLookup[tombstone == kMaterialResourceLookupSlots
+                                         ? slot : tombstone] = encoded;
+            return;
+        }
+        slot = (slot + 1) & (kMaterialResourceLookupSlots - 1);
+    }
+}
+
+static void unindex_material_resource(void* material) {
+    unsigned slot = pointer_hash(material) &
+                    (kMaterialResourceLookupSlots - 1);
+    for (unsigned probe = 0; probe < kMaterialResourceLookupSlots; ++probe) {
+        const unsigned encoded = g_materialResourceLookup[slot];
+        if (!encoded) return;
+        if (encoded != kLookupTombstone &&
+            g_materialResources[encoded - 1].material == material) {
+            g_materialResourceLookup[slot] = kLookupTombstone;
+            return;
+        }
+        slot = (slot + 1) & (kMaterialResourceLookupSlots - 1);
+    }
+}
+
+const SharedMaterialMode* shared_material_route(void* sharedMaterial) {
+    return find_shared_material(sharedMaterial);
+}
+
 const char* material_resource_name(void* material) {
-    for (unsigned i = 0; i < g_materialResourceCount; ++i)
-        if (g_materialResources[i].material == material)
-            return g_materialResources[i].name;
-    return "";
+    const MaterialResourceIdentity* entry = find_material_resource(material);
+    return entry ? entry->name : "";
 }
 
 int material_resource_mode(void* material) {
-    for (unsigned i = 0; i < g_materialResourceCount; ++i)
-        if (g_materialResources[i].material == material)
-            return g_materialResources[i].mode;
-    return 0;
+    const MaterialResourceIdentity* entry = find_material_resource(material);
+    return entry ? entry->mode : 0;
 }
 
 const MaterialResourceIdentity* material_resource(void* material, int bucket) {
     if (!material || g_currentMaterialBucket != bucket) return nullptr;
-    for (unsigned i = 0; i < g_materialResourceCount; ++i)
-        if (g_materialResources[i].material == material)
-            return &g_materialResources[i];
-    return nullptr;
+    if (g_currentMaterial == material) return g_currentMaterialRoute;
+    return find_material_resource(material);
 }
 
 struct SeenMaterialIdentity {
@@ -1643,6 +1817,15 @@ static void mode3_order_observe_material(int bucket, GLuint program) {
             route ? "resolved" : "unresolved");
 }
 
+static bool production_material_routing_only() {
+    return g_materialModeRouting && !g_enabled && !g_census &&
+           !g_foliageCensus && !g_materialModeCensus &&
+           !g_materialIdentityCensus && !g_a2cTransmittanceCensus &&
+           !g_a2cEmitterCensus && !g_mode3OitCensus &&
+           !g_foliageReplay && !g_foliageDepthless &&
+           !g_foliageA2c && !g_foliageVisible;
+}
+
 void census_observe_draw() {
     // Every duplicate is consumed immediately after its native draw. Clear the
     // one-shot flags first so an early return can never replay stale geometry.
@@ -1721,6 +1904,22 @@ void census_observe_draw() {
                        !g_a2cEmitterCensus))
         return;
 
+    const MaterialResourceIdentity* materialRoute =
+        material_resource(g_currentMaterial, bucket);
+    if (production_material_routing_only() &&
+        !mode3_runtime_frame_active()) {
+        // The production switches still need a draw observer because NWN has
+        // no material-level callback at submission time. Keep unmarked native
+        // draws genuinely cheap: resolve their cached pointer identity, then
+        // return before querying any OpenGL state. Mode 2 remains an A2C
+        // candidate; Mode 3 is relevant only when its runtime is requested.
+        const bool candidate = materialRoute &&
+            (bucket == 1 || bucket == 3) &&
+            (materialRoute->mode == 2 ||
+             (materialRoute->mode == 3 && mode3_requested()));
+        if (!candidate) return;
+    }
+
     GLint prog = 0;
     g.GetIntegerv(GL_CURRENT_PROGRAM, &prog);
     if (prog <= 0) return;
@@ -1780,8 +1979,6 @@ void census_observe_draw() {
         return;
     }
 
-    const MaterialResourceIdentity* materialRoute =
-        material_resource(g_currentMaterial, bucket);
     bool strictA2cDraw = false;
     bool strictMode3Draw = false;
     bool mode3ForeignCutoutOccluder = false;
@@ -1803,7 +2000,7 @@ void census_observe_draw() {
                     (materialRoute->mode == 3 &&
                       (foliageProgram->oitPassLoc < 0 ||
                        foliageProgram->oitFringeOnlyLoc < 0 ||
-                       (g_mode3HybridCensus &&
+                       ((g_mode3HybridCensus || g_mode3Runtime) &&
                         (foliageProgram->oitCutoffLoc < 0 ||
                          foliageProgram->oitOpaqueCoreLoc < 0 ||
                          foliageProgram->oitCoreResetPassLoc < 0)))))
@@ -1831,9 +2028,17 @@ void census_observe_draw() {
                 else if (materialRoute->mode == 2) {
                     strictA2cDraw = true;
                     action = "a2c-mode-2";
-                } else if (g_mode3OitCensus) {
-                    strictMode3Draw = true;
-                    action = "oit-mode-3-private";
+                } else if (mode3_requested()) {
+                    if (g_mode3Runtime)
+                        g_mode3RuntimeGraceFrames = kMode3RuntimeGraceFrames;
+                    if (g_mode3OitCensus || mode3_runtime_frame_active()) {
+                        strictMode3Draw = true;
+                        action = g_mode3Runtime
+                            ? "oit-mode-3-runtime"
+                            : "oit-mode-3-private";
+                    } else {
+                        action = "native-mode-3-warmup";
+                    }
                 } else {
                     action = "native-mode-3";
                 }
@@ -1862,7 +2067,7 @@ void census_observe_draw() {
             g.GetUniformfv)
             g.GetUniformfv((GLuint)prog, foliageProgram->alphaDiscardLoc,
                            &g_mode3LastNativeCutoff);
-        if (strictMode3Draw && g_mode3HybridCensus) {
+        if (strictMode3Draw && mode3_hybrid_active()) {
             if (!g_originalDepthOverride) {
                 g.GetBooleanv(GL_DEPTH_WRITEMASK, &g_originalDepthMask);
                 g.GetBooleanv(GL_COLOR_WRITEMASK, g_originalColorMask);
@@ -1896,7 +2101,7 @@ void census_observe_draw() {
     // only duplicate their stock alpha-tested core into the private depth/MRT
     // as an identity reset.  This prevents a farther Mode 3 fringe from being
     // composed over an intervening native card.
-    if (g_mode3HybridCensus && g_mode3DepthCensus && materialRoute && foliage &&
+    if (mode3_hybrid_active() && mode3_depth_active() && materialRoute && foliage &&
         (bucket == 1 || bucket == 3) && materialRoute->transparency &&
         materialRoute->sampleFramebuffer == 0 && !materialRoute->volumetric &&
         (materialRoute->mode == 0 || materialRoute->mode == 2) &&
@@ -1946,16 +2151,16 @@ void census_observe_draw() {
                                       !g.IsEnabled(GL_BLEND);
     }
 
-    if (g_mode3DepthCensus && g_mode3DepthReady && g_fbo &&
+    if (mode3_depth_active() && g_mode3DepthReady && g_fbo &&
         (bucket == 0 || bucket == 2 || mode3ForeignCutoutOccluder ||
-         (strictMode3Draw && g_mode3HybridCensus))) {
+         (strictMode3Draw && mode3_hybrid_active()))) {
         GLboolean depthMask = GL_FALSE;
         g.GetBooleanv(GL_DEPTH_WRITEMASK, &depthMask);
         g_mode3DepthDuplicatePending = g.IsEnabled(GL_DEPTH_TEST) &&
             (mode3ForeignCutoutOccluder ||
              (depthMask && !g.IsEnabled(GL_BLEND)));
         g_mode3CoreResetPending = g_mode3DepthDuplicatePending &&
-            g_mode3HybridCensus &&
+            mode3_hybrid_active() &&
             (strictMode3Draw || mode3ForeignCutoutOccluder);
         if (g_mode3CoreResetPending) {
             g_mode3DepthResetProgram = foliageProgram;
@@ -2414,7 +2619,7 @@ bool nwn_oit_needs_draw_observer(void) {
     return g_census || g_foliageCensus || g_materialModeCensus ||
            g_materialIdentityCensus || g_materialModeRouting ||
            g_a2cTransmittanceCensus || g_a2cEmitterCensus ||
-           g_mode3OitCensus || g_foliageReplay ||
+           mode3_requested() || g_foliageReplay ||
            g_foliageDepthless || g_foliageA2c;
 }
 
@@ -2548,24 +2753,24 @@ void nwn_oit_note_shared_material_field(void* sharedMaterial,
     }
     if (parsed == None) return;
 
-    SharedMaterialMode* entry = nullptr;
-    for (unsigned i = 0; i < g_sharedMaterialModeCount; ++i) {
-        if (g_sharedMaterialModes[i].sharedMaterial == sharedMaterial) {
-            entry = &g_sharedMaterialModes[i];
-            break;
-        }
-    }
+    SharedMaterialMode* entry = find_shared_material(sharedMaterial);
     if (!entry) {
-        if (g_sharedMaterialModeCount >=
+        if (!g_sharedMaterialFreeCount && g_sharedMaterialModeCount >=
             sizeof(g_sharedMaterialModes) / sizeof(g_sharedMaterialModes[0]))
             return;
-        entry = &g_sharedMaterialModes[g_sharedMaterialModeCount++];
+        const unsigned index = g_sharedMaterialFreeCount
+            ? g_sharedMaterialFree[--g_sharedMaterialFreeCount]
+            : g_sharedMaterialModeCount++;
+        entry = &g_sharedMaterialModes[index];
+        *entry = {};
         entry->sharedMaterial = sharedMaterial;
+        index_shared_material(index);
     }
     if (parsed == Mode) entry->mode = value;
     else if (parsed == Transparency) entry->transparency = value != 0;
     else if (parsed == SampleFramebuffer) entry->sampleFramebuffer = value;
     else if (parsed == Volumetric) entry->volumetric = value != 0;
+
 }
 
 void nwn_oit_note_material_resource(void* material, void* sharedMaterial,
@@ -2582,15 +2787,9 @@ void nwn_oit_note_material_resource(void* material, void* sharedMaterial,
         if (c < 0x20 || c > 0x7e) return;
     }
 
-    MaterialResourceIdentity* entry = nullptr;
-    for (unsigned i = 0; i < g_materialResourceCount; ++i) {
-        if (g_materialResources[i].material == material) {
-            entry = &g_materialResources[i];
-            break;
-        }
-    }
+    MaterialResourceIdentity* entry = find_material_resource(material);
     if (!entry) {
-        if (g_materialResourceCount >=
+        if (!g_materialResourceFreeCount && g_materialResourceCount >=
             sizeof(g_materialResources) / sizeof(g_materialResources[0])) {
             static bool warned = false;
             if (!warned) {
@@ -2600,16 +2799,23 @@ void nwn_oit_note_material_resource(void* material, void* sharedMaterial,
             }
             return;
         }
-        entry = &g_materialResources[g_materialResourceCount++];
+        const unsigned index = g_materialResourceFreeCount
+            ? g_materialResourceFree[--g_materialResourceFreeCount]
+            : g_materialResourceCount++;
+        entry = &g_materialResources[index];
+        *entry = {};
         entry->material = material;
+        index_material_resource(index);
     }
     entry->sharedMaterial = sharedMaterial;
     if (const SharedMaterialMode* route = shared_material_route(sharedMaterial)) {
+        entry->sharedRoute = route;
         entry->mode = route->mode;
         entry->sampleFramebuffer = route->sampleFramebuffer;
         entry->transparency = route->transparency;
         entry->volumetric = route->volumetric;
     } else {
+        entry->sharedRoute = nullptr;
         entry->mode = 0;
         entry->sampleFramebuffer = 0;
         entry->transparency = false;
@@ -2623,6 +2829,23 @@ void nwn_oit_note_material_bind(void* material, const char* texture0Name) {
     if (!g_materialIdentityCensus && !g_materialModeRouting) return;
     g_currentMaterial = material;
     g_currentMaterialBucket = nwn_core::g_currentBucket;
+    g_currentMaterialRoute = find_material_resource(material);
+    if (g_currentMaterialRoute) {
+        if (!g_currentMaterialRoute->sharedRoute)
+            g_currentMaterialRoute->sharedRoute =
+                shared_material_route(g_currentMaterialRoute->sharedMaterial);
+        if (const SharedMaterialMode* route =
+                g_currentMaterialRoute->sharedRoute) {
+            // Shared fields may finish parsing after the concrete resource was
+            // created. The pointer is stable; refresh four scalar route values
+            // at bind time without another registry scan.
+            g_currentMaterialRoute->mode = route->mode;
+            g_currentMaterialRoute->sampleFramebuffer =
+                route->sampleFramebuffer;
+            g_currentMaterialRoute->transparency = route->transparency;
+            g_currentMaterialRoute->volumetric = route->volumetric;
+        }
+    }
     ++g_currentMaterialSerial;
     g_currentMaterialTexture0[0] = '\0';
     if (!texture0Name || !*texture0Name) return;
@@ -2635,6 +2858,33 @@ void nwn_oit_note_material_bind(void* material, const char* texture0Name) {
     }
     std::memcpy(g_currentMaterialTexture0, texture0Name, length);
     g_currentMaterialTexture0[length] = '\0';
+}
+
+void nwn_oit_note_material_destroy(void* material) {
+    MaterialResourceIdentity* entry = find_material_resource(material);
+    if (!entry) return;
+    const unsigned index = static_cast<unsigned>(entry - g_materialResources);
+    unindex_material_resource(material);
+    if (g_currentMaterialRoute == entry) {
+        g_currentMaterial = nullptr;
+        g_currentMaterialRoute = nullptr;
+        g_currentMaterialBucket = -1;
+    }
+    *entry = {};
+    if (g_materialResourceFreeCount <
+        sizeof(g_materialResourceFree) / sizeof(g_materialResourceFree[0]))
+        g_materialResourceFree[g_materialResourceFreeCount++] = index;
+}
+
+void nwn_oit_note_shared_material_destroy(void* sharedMaterial) {
+    SharedMaterialMode* entry = find_shared_material(sharedMaterial);
+    if (!entry) return;
+    const unsigned index = static_cast<unsigned>(entry - g_sharedMaterialModes);
+    unindex_shared_material(sharedMaterial);
+    *entry = {};
+    if (g_sharedMaterialFreeCount <
+        sizeof(g_sharedMaterialFree) / sizeof(g_sharedMaterialFree[0]))
+        g_sharedMaterialFree[g_sharedMaterialFreeCount++] = index;
 }
 
 void nwn_oit_shutdown(void) {
@@ -2650,7 +2900,7 @@ void nwn_oit_prepare(void) {
     if ((!g_enabled && !g_census && !g_foliageCensus && !g_materialModeCensus &&
          !g_materialIdentityCensus && !g_materialModeRouting &&
          !g_a2cTransmittanceCensus && !g_a2cEmitterCensus &&
-         !g_mode3OitCensus &&
+         !mode3_requested() &&
          !g_foliageReplay &&
          !g_foliageDepthless && !g_foliageA2c) ||
         g_failed) return;
@@ -2672,7 +2922,8 @@ void nwn_oit_prepare(void) {
         fprintf(stderr, "[a2c][emitter-visible] replacement unavailable; "
                         "native emitters retained\n");
     }
-    if (g_mode3OitCensus && !build_program()) {
+    if (mode3_requested() && !build_program()) {
+        g_mode3Runtime = false;
         g_mode3OitCensus = false;
         g_mode3StabilityCensus = false;
         g_mode3DepthCensus = false;
@@ -2686,7 +2937,7 @@ void nwn_oit_prepare(void) {
     if (g_census || g_foliageCensus || g_materialModeCensus ||
         g_materialIdentityCensus || g_materialModeRouting ||
         g_a2cTransmittanceCensus || g_a2cEmitterCensus ||
-        g_mode3OitCensus || g_foliageReplay ||
+        mode3_requested() || g_foliageReplay ||
         g_foliageDepthless || g_foliageA2c) {
         if (!nwn_core::g_drawObserver) {
             nwn_core::g_drawObserver = census_observe_draw;
@@ -2705,6 +2956,42 @@ void nwn_oit_prepare(void) {
 
 void nwn_oit_bucket_begin(void* scene, int bucket) {
     read_settings();
+    if (g_mode3Runtime && bucket == 0) {
+        if (scene != g_mode3RuntimeScene) {
+            const bool wasActive = g_mode3RuntimeFrameActive;
+            g_mode3RuntimeScene = scene;
+            g_mode3RuntimeFrameActive = false;
+            g_mode3RuntimeGraceFrames = 0;
+            g_mode3DepthReady = false;
+            g_immediatePrepared = false;
+            // These targets are shared with older diagnostics. Release them on
+            // an area change only when runtime Mode 3 is their sole owner.
+            if (!g_mode3OitCensus && !g_a2cTransmittanceCensus &&
+                !g_foliageReplay && !g_foliageVisible)
+                destroy_accum_targets();
+            if (wasActive)
+                fprintf(stderr, "[oit][mode3-runtime] area changed; private "
+                                "targets released and native warmup restored\n");
+        } else {
+            const bool wasActive = g_mode3RuntimeFrameActive;
+            g_mode3RuntimeFrameActive = g_mode3RuntimeGraceFrames > 0;
+            if (g_mode3RuntimeGraceFrames > 0)
+                --g_mode3RuntimeGraceFrames;
+            if (!wasActive && g_mode3RuntimeFrameActive)
+                fprintf(stderr, "[oit][mode3-runtime] armed after strict "
+                                "Mode 3 discovery; private rendering active\n");
+            if (!g_mode3RuntimeFrameActive && g_fbo &&
+                !g_mode3OitCensus && !g_a2cTransmittanceCensus &&
+                !g_foliageReplay && !g_foliageVisible) {
+                destroy_accum_targets();
+                g_mode3DepthReady = false;
+                g_immediatePrepared = false;
+                if (wasActive)
+                    fprintf(stderr, "[oit][mode3-runtime] visibility grace "
+                                    "expired; private targets released\n");
+            }
+        }
+    }
     if (g_mode3OrderCensus && bucket == 0 && g_mode3OrderSawEligible &&
         !g_mode3OrderComplete && !g_mode3OrderCapture) {
         g_mode3OrderCapture = true;
@@ -2716,13 +3003,14 @@ void nwn_oit_bucket_begin(void* scene, int bucket) {
     }
     if (g_materialIdentityCensus || g_materialModeRouting) {
         g_currentMaterial = nullptr;
+        g_currentMaterialRoute = nullptr;
         g_currentMaterialTexture0[0] = '\0';
         g_currentMaterialBucket = -1;
     }
     const bool privateOpaqueBucket0 = g_a2cEmitterCensus && bucket == 0;
-    const bool privateMode3DepthBucket0 = g_mode3DepthCensus && bucket == 0;
+    const bool privateMode3DepthBucket0 = mode3_depth_active() && bucket == 0;
     if ((!g_foliageVisible && !g_foliageA2c &&
-         !g_a2cTransmittanceCensus && !g_mode3OitCensus) ||
+         !g_a2cTransmittanceCensus && !mode3_render_active()) ||
         g_failed || !scene ||
         (!privateOpaqueBucket0 && !privateMode3DepthBucket0 &&
          bucket != 1 && bucket != 3)) return;
@@ -2863,12 +3151,12 @@ void nwn_oit_bucket_begin(void* scene, int bucket) {
         }
         restore_state(st);
         if (!g_foliageVisible && !g_a2cTransmittanceCensus &&
-            !g_mode3OitCensus) return;
+            !mode3_render_active()) return;
         save_state(st);
     }
 
     if (!g_foliageVisible && !g_a2cTransmittanceCensus &&
-        !g_mode3OitCensus) {
+        !mode3_render_active()) {
         restore_state(st);
         return;
     }
@@ -2955,7 +3243,7 @@ bool nwn_oit_begin_mode3_depth_duplicate(void) {
     g_mode3DepthDuplicatePending = false;
     const bool coreReset = g_mode3CoreResetPending;
     g_mode3CoreResetPending = false;
-    if (!pending || !g_mode3DepthCensus || !g_mode3DepthReady || !g_fbo ||
+    if (!pending || !mode3_depth_active() || !g_mode3DepthReady || !g_fbo ||
         g_mode3DepthDuplicateActive)
         return false;
     FoliageProgram* p = coreReset ? g_mode3DepthResetProgram : nullptr;
@@ -3047,7 +3335,7 @@ bool nwn_oit_begin_immediate_fringe(void) {
     FoliageProgram* p = g_immediateProgram;
     const bool transmittanceProof = g_a2cTransmittanceCensus &&
                                     g_immediateTransmittance;
-    const bool mode3Proof = g_mode3OitCensus && g_immediateMode3;
+    const bool mode3Proof = mode3_render_active() && g_immediateMode3;
     if ((!g_foliageVisible && !transmittanceProof && !mode3Proof) ||
         !g_immediatePrepared ||
         g_immediateActive || !p || p->oitPassLoc < 0 ||
@@ -3065,10 +3353,10 @@ bool nwn_oit_begin_immediate_fringe(void) {
         g.Uniform1i(g_originalA2cLoc, 0);
     g.Uniform1i(p->oitPassLoc, 1);
     g.Uniform1i(p->oitFringeOnlyLoc,
-                mode3Proof && g_mode3HybridCensus
+                mode3Proof && mode3_hybrid_active()
                     ? 1
                     : ((transmittanceProof || mode3Proof) ? 0 : 1));
-    if (mode3Proof && g_mode3HybridCensus)
+    if (mode3Proof && mode3_hybrid_active())
         g.Uniform1f(p->oitCutoffLoc, 1.0f);
     else if (!transmittanceProof && !mode3Proof)
         g.Uniform1f(p->oitCutoffLoc, g_coreCutoff);
@@ -3077,7 +3365,7 @@ bool nwn_oit_begin_immediate_fringe(void) {
                     (transmittanceProof || mode3Proof) ? 1.0f : g_alphaGain);
     if (p->oitNormalizeCutoutLoc >= 0)
         g.Uniform1i(p->oitNormalizeCutoutLoc,
-                    mode3Proof && g_mode3AlphaNormalize ? 1 : 0);
+                    mode3Proof && mode3_normalize_active() ? 1 : 0);
     if (p->oitNormalizePivotLoc >= 0)
         g.Uniform1f(p->oitNormalizePivotLoc,
                     g_mode3LastNativeCutoff > 0.01f
@@ -3096,8 +3384,8 @@ bool nwn_oit_begin_immediate_fringe(void) {
     // alpha>=coreCutoff, so LEQUAL cannot double-render the solid core.
     g.DepthFunc(transmittanceProof ? GL_ALWAYS
                                    : (mode3Proof
-                                        ? (g_mode3DepthCensus ? GL_LEQUAL
-                                                              : GL_ALWAYS)
+                                        ? (mode3_depth_active() ? GL_LEQUAL
+                                                                : GL_ALWAYS)
                                         : (g_foliageReplayNoDepth ? GL_ALWAYS
                                                                   : GL_LEQUAL)));
     g.DepthMask(GL_FALSE);
@@ -3541,8 +3829,8 @@ static bool resolve_mode3_private_texture() {
     return ok;
 }
 
-static bool composite_mode3_visible_census() {
-    if (!g_mode3VisibleCensus || !g_immediatePrepared ||
+static bool composite_mode3_visible() {
+    if (!mode3_visible_active() || !g_immediatePrepared ||
         g_mode3PrivateDraws == 0 || !g_mode3DepthReady || !g_program ||
         !g_texCombined || !g_texSum || !g_texTransl)
         return false;
@@ -3607,12 +3895,13 @@ static bool composite_mode3_visible_census() {
                         "draws=%u sourceFbo=%d destinationFbo=%d "
                         "timing=after-bucket-3-before-water-bucket-6 "
                         "nativeCutoff=%.4f alphaNormalize=%d "
-                        "hybrid=%d native=%s diagnostic=%s\n",
+                        "hybrid=%d native=%s result=%s path=%s\n",
                 g_mode3PrivateDraws, g_immediateSceneFbo, st.fbo,
-                g_mode3LastNativeCutoff, g_mode3AlphaNormalize ? 1 : 0,
-                g_mode3HybridCensus ? 1 : 0,
-                g_mode3HybridCensus ? "opaque-core" : "retained",
-                g_mode3HybridCensus ? "core-plus-fringe" : "double-layer");
+                g_mode3LastNativeCutoff, mode3_normalize_active() ? 1 : 0,
+                mode3_hybrid_active() ? 1 : 0,
+                mode3_hybrid_active() ? "opaque-core" : "retained",
+                mode3_hybrid_active() ? "core-plus-fringe" : "double-layer",
+                g_mode3Runtime ? "runtime-no-readback" : "census");
     }
     return ok;
 }
@@ -3688,7 +3977,7 @@ static void sample_mode3_private_stability() {
 void nwn_oit_bucket_complete(void* scene, int bucket) {
     read_settings();
     if ((!g_foliageVisible && !g_a2cTransmittanceCensus &&
-         !g_mode3OitCensus) || g_failed) return;
+         !mode3_render_active()) || g_failed) return;
     if (g_mode3OrderCapture && g_glBound) {
         GLint fbo = -1, viewport[4] = {};
         g.GetIntegerv(GL_FRAMEBUFFER_BINDING, &fbo);
@@ -3697,6 +3986,10 @@ void nwn_oit_bucket_complete(void* scene, int bucket) {
                         "viewport=%d,%d %dx%d\n",
                 bucket, fbo, viewport[0], viewport[1],
                 viewport[2], viewport[3]);
+    }
+    if (g_mode3Runtime && mode3_runtime_frame_active() && bucket == 3) {
+        composite_mode3_visible();
+        return;
     }
     if (g_mode3OitCensus && bucket == 3) {
         static bool reported = false;
@@ -3838,7 +4131,7 @@ void nwn_oit_bucket_complete(void* scene, int bucket) {
         }
         sample_mode3_private_stability();
         if (g_mode3VisibleCensus)
-            composite_mode3_visible_census();
+            composite_mode3_visible();
         if (!g_foliageVisible) return;
     }
     if (g_a2cTransmittanceCensus && bucket == 3) {

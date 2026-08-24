@@ -58,11 +58,10 @@ The accepted A2C baseline has these architectural limits:
 - UI, water, framebuffer-sampling materials, volumetric materials, and
   unmarked draws must remain native.
 
-The earlier weighted-OIT experiment demonstrated smooth blending but was not
-accepted: its replay/classification path could disappear at particular camera
-angles and had ordering problems with fog, water, lighting, textures, and UI.
-Weighted OIT is now the active private checkpoint for explicit mode 3, never a
-global solution.
+The earlier global weighted-OIT experiment was rejected: its replay path could
+disappear at particular camera angles and interfered with fog, water, lighting,
+textures, and UI. Explicit material Mode 3 now uses the separately proven
+hybrid core-plus-fringe design; it is never a global solution.
 
 ## Native MTR census
 
@@ -151,11 +150,12 @@ native meanings. They are not surrogate selectors for injector modes.
    3 remained native and the screen was untouched. Evidence:
    `census-mode2-transmittance.txt`. Exact source-over/additive separation and
    many-layer emitter fidelity are a pinned TODO, not a blocker for mode 3.
-6. **Weighted OIT opt-in:** active private checkpoint. Accumulate only mode-3
-   draws while keeping their native draw visible. Resolve, suppression, camera
-   stability, fog, and water ordering remain gated on private proof.
-7. **Product surface:** add stable controls and MTR documentation, then run the
-   complete Linux regression and performance matrix.
+6. **Weighted OIT opt-in:** accepted visual prototype. Strict Mode 3 uses a
+   native-pivot opaque core plus weighted OIT fringe, composes before water,
+   retains stock fog/lighting, and interoperates with Mode 0/2 cutout cores.
+7. **Product surface:** active. `NWN_OIT_MODE3=1` selects the no-readback lazy
+   runtime candidate. Complete its Linux performance/regression matrix before
+   promoting it to a shipping control.
 
 Create local savepoints after checkpoints 1, 4, 5, and 6. Do not push unless
 the maintainer explicitly requests it.
@@ -778,10 +778,41 @@ occluder-only proof, the visible Mode 3 path remained `core-plus-fringe`, and
 the intervening card-border artifact disappeared. The hybrid visual prototype
 is accepted; evidence is appended to `census-mode3-visible.txt`.
 
-This does not make the census path production-ready. Its private opaque-depth
-reconstruction duplicates broad bucket-0/2 work and the development launcher
-enables additional expensive diagnostics. Production Mode 3 must remove
-readbacks/order instrumentation, allocate and clear its targets lazily, and do
-no private depth/MRT/resolve work in frames or areas without visible Mode 3
-materials. Performance comparisons must use the same clean shadowmap launch;
-`run-dev.sh` is intentionally not that baseline.
+The census path remains diagnostic: its private opaque-depth reconstruction is
+eager and it performs bounded readbacks/order instrumentation. The runtime
+candidate is enabled separately with `NWN_OIT_MODE3=1` plus strict material
+routing. It performs no census readbacks, leaves the first eligible frame
+native, then arms private rendering for 120 frames after the latest visible
+Mode 3 draw. Native-only areas never allocate or clear Mode 3 targets; area
+changes and expired visibility grace release them. Performance comparisons
+must use the same clean shadowmap launch because `run-dev.sh` intentionally
+enables expensive diagnostics.
+
+The first production A/B also found that strict material routing itself could
+drop a native area from roughly 82 to 51 FPS even with Mode 3 disabled. This
+was not OIT cost: the observer performed a linear material-registry scan and GL
+state queries for every native draw. Production routing now hashes material
+pointers and exits unmarked Mode 0 draws before touching GL. Keep a routing-only
+run in the regression matrix so this cost cannot silently return.
+
+The immediate routing-only retest passed: native-area FPS returned to the clean
+shadow baseline. The hash plus native fast exit is therefore the accepted
+production routing baseline; full Mode 3 activation remains a separate gate.
+
+A native-area-first transition exposed a material-load ordering bug: concrete
+resources could cache default Mode 0 before their shared MTR fields completed,
+and the old 4096-entry registry filled before the Mode 3 area loaded. Later
+Mode 2 and Mode 3 identities therefore failed closed. The concrete and shared
+registries now provide 65536 hashed entries; concrete identities retain a
+stable shared-route pointer and refresh its scalar values at bind time. Linux
+destructor hooks erase concrete/shared hash entries and recycle their array
+slots; the limit therefore applies to simultaneously live identities, not a
+longplay's cumulative material history. Direct-start and transitioned-area
+behavior must both remain in the regression matrix.
+
+The complete production retest passed: native-area FPS remained at the clean
+shipping-shadow baseline, then both authored Mode 2 A2C and Mode 3 hybrid OIT
+activated after transitioning into the test area. No cumulative-registry or
+transition regression remained. This is the accepted Linux production
+checkpoint for the current PR; emitter fidelity through multiple A2C layers
+remains the separately pinned compromise/TODO.
