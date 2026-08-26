@@ -12,7 +12,7 @@ Both targets are built from the same renderer source.
 
 ## Current state
 
-As of 2026-08-21:
+As of 2026-08-26:
 
 - Directional sun shadows use cascaded, injector-owned depth arrays and a
   fullscreen composite. Static world geometry can use a world-anchored map;
@@ -33,10 +33,10 @@ As of 2026-08-21:
 - The Linux tree contains opt-in material transparency modes. Mode 2 A2C is
   the preferred foliage baseline because it remains stable under camera
   rotation and receives directional/local shadows; multiple covered layers
-  still limit emitter fidelity. Mode 3 is a lazy hybrid runtime candidate with
-  an opaque cutout core and weighted OIT soft fringe. Its Linux no-readback
-  runtime now passes native-area performance and cross-area Mode 2/3 routing;
-  both modes remain explicit opt-ins rather than default shipping behavior.
+  still limit emitter fidelity. Mode 3 weighted OIT is parked: its runtime and
+  census switches are ignored and authored Mode 3 materials render natively.
+  The proven Linux prototype remains in-tree only as dormant research and is
+  not part of the Windows plan.
 - A native MTR census proved that ordinary transparency, framebuffer sampling,
   and volumetric rendering use materially different routes. Future alpha modes
   are planned around an explicit `NWN_ALPHA_MODE` material parameter, but the
@@ -129,9 +129,9 @@ the development library defaults GPU cost reporting and capture dumps on. The
 base scene trace remains enabled
 with a one-frame/one-event output cap because its hooks supply the camera,
 scene, and light state required by the shadow renderer. It ignores saved panel
-settings by default so repeated A/B runs are comparable. Stable transparency
-opt-ins such as `NWN_ALPHA_MODE_ROUTING=1` and `NWN_OIT_MODE3=1` remain
-caller-controlled.
+settings by default so repeated A/B runs are comparable. The accepted
+transparency opt-in `NWN_ALPHA_MODE_ROUTING=1` remains caller-controlled.
+`NWN_OIT_MODE3` is intentionally unavailable.
 
 For a normal development run, press `Ctrl+Shift+F11` in a loaded area to open
 the panel. Settings are saved as `nwn_shadowmap_settings.ini` in
@@ -183,6 +183,7 @@ shipping defaults and writes no log unless `NWN_SHADOWMAP_LOG=1` is set. See
 ## Documentation map
 
 - [CURRENT_TASK.md](CURRENT_TASK.md) — authoritative active checkpoint
+- [WINDOWS_IMPLEMENTATION_PLAN.md](WINDOWS_IMPLEMENTATION_PLAN.md) — staged native Windows parity plan
 - [TRANSPARENCY_MODES.md](TRANSPARENCY_MODES.md) — transparency evidence, mode contract, and roadmap
 - [SHADOWMAP_STATUS.md](SHADOWMAP_STATUS.md) — current implementation status
 - [AGENTS.md](AGENTS.md) — stable engineering rules for future work

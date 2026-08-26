@@ -481,6 +481,14 @@ static void capture_local_light_shadow(void* scene) {
             if (!j.key || j.live || j.radius <= 0.0f) continue;
             if (!bestFading || j.level > bestFading->level) bestFading = &j;
         }
+#ifdef _WIN32
+        // NWN's Windows list churns while moving.  Never let a cosmetic
+        // retirement fade exceed the advertised capture budget there: the
+        // extra 2048^2 capture was the measured movement stutter.
+        const unsigned publishLimit = (unsigned)slotBudget;
+#else
+        const unsigned publishLimit = (unsigned)kLocalLightFaces;
+#endif
         for (int pass = 0; pass < 2; ++pass) {
             for (auto& j : g_localJoin) {
                 if (!j.key || j.radius <= 0.0f) continue;
@@ -489,7 +497,7 @@ static void capture_local_light_shadow(void* scene) {
                     if (&j != bestFading || fadingPublished) continue;
                     ++fadingPublished;
                 }
-                if (slotCount >= (unsigned)kLocalLightFaces) break;
+                if (slotCount >= publishLimit) break;
                 slots[slotCount].pos[0] = j.pos[0];
                 slots[slotCount].pos[1] = j.pos[1];
                 slots[slotCount].pos[2] = j.pos[2];

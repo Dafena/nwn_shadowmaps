@@ -78,6 +78,21 @@ static const NwnWinSymbol kNwnWinSymbols[] = {
     {"_Z17GetLightFadeSpeedPK9PartLight",
      "?GetLightFadeSpeed@@YAMPEBVPartLight@@@Z",                                                  false},
 
+    // --- material identity transport ------------------------------------
+    // Exact exports from v89.8193.37-17. These support the read-only Windows
+    // material census and, after lifecycle proof, strict Mode 2 routing.
+    // BindInUnit is deliberately absent: its detour corrupted texture state
+    // on Linux and normal identity routing does not need it.
+    {"_ZN11CAurTexture7GetNameEv",      "?GetName@CAurTexture@@UEAAPEADXZ",                    false},
+    {"_ZN8Material23BindAllStandardTexturesEv",
+                                         "?BindAllStandardTextures@Material@@QEAAXXZ",          false},
+    {"_ZN8Material10GetTextureEi",      "?GetTexture@Material@@QEAAPEAVCAurTexture@@H@Z",      false},
+    {"_ZN8Material18InitSharedMaterialEPKc",
+                                         "?InitSharedMaterial@Material@@AEAAPEAVSharedMaterial@@PEBD@Z", false},
+    {"_ZN14SharedMaterial4InitEPKc",      "?Init@SharedMaterial@@QEAAXPEBD@Z",                      false},
+    {"_ZN14SharedMaterial10ParseFieldEPKc",
+                                         "?ParseField@SharedMaterial@@QEAAXPEBD@Z",              false},
+
     // --- NWN's own stencil-shadow state (read only) -----------------------
     // shadowalpha is the engine's shadow opacity and the source of the
     // day/night fade; the MSVC mangling confirms the type the Linux probe

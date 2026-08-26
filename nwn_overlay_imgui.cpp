@@ -432,6 +432,24 @@ void nwn_overlay_render(int viewportW, int viewportH, const NwnOverlayState& st)
             }
             ImGui::TextDisabled("  live shadow sources: %u / NWN candidates: %u",
                                 st.localCubeActiveSources, st.localShadowCandidates);
+            if (st.localCubeQuality) {
+                static const char* kUpdateNames[] = {
+                    "Low (25 ms)", "Medium (16 ms)", "Ultra (every frame)"
+                };
+                int quality = *st.localCubeQuality;
+                quality = quality < 0 ? 0 : (quality > 2 ? 2 : quality);
+                if (ImGui::Combo("Local shadow update", &quality, kUpdateNames, 3))
+                    *st.localCubeQuality = quality;
+                help("How often local-light shadow maps are rebuilt.\n\n"
+                     "Low updates at most every 25 ms and is the default. Medium "
+                     "updates at most every 16 ms, which normally matches a 60 Hz "
+                     "frame rate. Ultra rebuilds on every rendered frame, matching "
+                     "the sun-shadow cadence even at higher frame rates.\n\n"
+                     "This affects only the local shadow maps. It does not change "
+                     "how many ordinary lights illuminate the scene or how many "
+                     "lights participate in sun-shadow lifting. Faster updates "
+                     "increase the cost of up to three local depth captures.");
+            }
 #if !NWN_SHIP
             if (st.hideEngineShadows) {
                 bool hs = *st.hideEngineShadows;

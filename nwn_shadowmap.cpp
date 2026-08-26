@@ -348,7 +348,15 @@ static bool     g_localLightEmittersCast  = true;
 // Brightness below which a pixel counts as unlit. The lift ramps from here to
 // full white, so it follows the engine's own lit pools instead of a guessed
 // distance falloff. NWN_SHADOWMAP_LIFT_THRESHOLD.
+#ifdef _WIN32
+// Windows' recovered local-light path needs the full engine-colour guard to
+// keep torch-lit surfaces from being darkened again by the later directional
+// composite.  This slider is a START threshold (lower means more lifting), so
+// 0 is the confirmed parity value.  Keep Linux on its validated 0.85 default.
+static float    g_liftThreshold          = 0.0f;
+#else
 static float    g_liftThreshold          = 0.85f;   // self-illum guard: the engine-curve path
+#endif
 // NWN's own attenuation constants, read from its shaders at runtime. The
 // defaults only cover the frame or two before the scan finds them.
 static float    g_lightMaxIntensityInv   = 0.1f;
@@ -385,7 +393,7 @@ static constexpr unsigned kLampPool      = 128;   // collected per frame
 static bool g_lampLiftEnabled = true;
 static int g_lampUploadMax = 0;   // 0 = follow the engine
 struct LampEntry { const void* key = nullptr; float pos[3] = {}; float radius = 0.0f;
-                   bool emitter = false; };
+                   bool emitter = false; int shadowRank = -1; };
 // DOUBLE-BUFFERED. The list is refilled by SetLightGL as the engine draws, so
 // anything reading it mid-frame sees however much has arrived so far -- the
 // shadow-light picker read it early and got 0 while the lift, which reads late,
@@ -420,7 +428,7 @@ static void lamp_list_begin() {
     // Prints only when the set changes, so it cannot spam. Enabled by default
     // on BOTH platforms until this is settled -- it is a handful of lines once
     // per change, and the bug only reproduces on Windows.
-    {
+    if (g_localLightTrace) {
         static unsigned lastCount = 0xFFFFFFFFu;
         static float    lastMaxR  = -1.0f;
         float maxR = 0.0f;
@@ -446,7 +454,7 @@ static void lamp_list_begin() {
 }
 
 static void lamp_list_add(const void* key, float px, float py, float pz, float radius,
-                          bool emitter) {
+                          bool emitter, int shadowRank = -1) {
     if (radius <= 0.0f) return;
     // Peak-hold against this light's own previous radius, matched by pointer so
     // the hold follows the LIGHT and not a list position that can reorder.
@@ -461,6 +469,22 @@ static void lamp_list_add(const void* key, float px, float py, float pz, float r
     for (unsigned i = 0; i < g_lampBuildCount; ++i)
         if (g_lampBuild[i].key == key) {           // already have it this frame
             g_lampBuild[i].radius = slot->radius;
+#ifdef _WIN32
+            // SetLightGL can observe the same moving light before the
+            // authoritative GetShadowLights list does. The old duplicate path
+            // retained that first position forever for this build and only
+            // copied the later engine rank, so a carried torch lifted at spawn
+            // and then left its sun-lift volume behind as the creature moved.
+            // A ranked Windows observation owns both priority and position.
+            if (shadowRank >= 0) {
+                g_lampBuild[i].pos[0] = px;
+                g_lampBuild[i].pos[1] = py;
+                g_lampBuild[i].pos[2] = pz;
+            }
+#endif
+            if (shadowRank >= 0 &&
+                (g_lampBuild[i].shadowRank < 0 || shadowRank < g_lampBuild[i].shadowRank))
+                g_lampBuild[i].shadowRank = shadowRank;
             return;
         }
     if (g_lampBuildCount >= kLampPool) return;
@@ -469,6 +493,7 @@ static void lamp_list_add(const void* key, float px, float py, float pz, float r
     e.emitter = emitter;
     e.pos[0] = px; e.pos[1] = py; e.pos[2] = pz;
     e.radius = slot->radius;
+    e.shadowRank = shadowRank;
 }// NWN_SHADOWMAP_LOCAL_LIGHT_BIAS
 static int      g_receiverDebug          = 0;      // NWN_SHADOWMAP_RECEIVER_DEBUG (see shader)
 // Direction and cone width of the single local-light face. Default: straight
@@ -1583,17 +1608,43 @@ static subhook_t g_hookTraceGetShadowLights = nullptr;
 static subhook_t g_hookSetLightGL           = nullptr;
 #ifndef _WIN32
 static subhook_t g_hookAurTextureBind       = nullptr;
+#endif
 static subhook_t g_hookMaterialBind         = nullptr;
 static subhook_t g_hookMaterialInit         = nullptr;
+#ifdef _WIN32
+static subhook_t g_hookSharedMaterialInit   = nullptr;
+#endif
+#ifndef _WIN32
 static subhook_t g_hookMaterialDestroy      = nullptr;
-static subhook_t g_hookSharedMaterialParse  = nullptr;
 static subhook_t g_hookSharedMaterialDestroy = nullptr;
+#endif
+static subhook_t g_hookSharedMaterialParse  = nullptr;
 static eng::MaterialBindAllStandardTextures_t g_materialBindTrampoline = nullptr;
 static eng::MaterialInitSharedMaterial_t g_materialInitTrampoline = nullptr;
+static eng::SharedMaterialInit_t g_sharedMaterialInitTrampoline = nullptr;
+#ifndef _WIN32
 static eng::MaterialDestroy_t g_materialDestroyTrampoline = nullptr;
-static eng::SharedMaterialParseField_t g_sharedMaterialParseTrampoline = nullptr;
 static eng::SharedMaterialDestroy_t g_sharedMaterialDestroyTrampoline = nullptr;
 #endif
+static eng::SharedMaterialParseField_t g_sharedMaterialParseTrampoline = nullptr;
+
+static int material_hook_stage() {
+#ifdef _WIN32
+    // Prove each MSVC detour independently. A non-null subhook trampoline did
+    // not prevent the first combined Windows census build from crashing, so
+    // concrete creation, parsing, hot-path binding, and shared initialization
+    // advance one stage. Windows destructors are permanently refused: their
+    // exported prologues produced nominal trampolines that crashed on return.
+    // at a time. Fail closed at stage 1 unless the tester explicitly asks for
+    // more. Linux retains its already validated complete hook set.
+    int stage = 1;
+    if (const char* value = std::getenv("NWN_WIN_MATERIAL_HOOK_STAGE"))
+        stage = std::atoi(value);
+    return std::max(0, std::min(4, stage));
+#else
+    return 4;
+#endif
+}
 static bool      g_inStencilShadow = false;
 static GLuint    g_stencilPrograms[32] = {};
 static unsigned  g_stencilProgramCount = 0;
@@ -1630,34 +1681,106 @@ static int   g_traceCameraDepth = 0;
         if (hook) subhook_install(hook);                                      \
     } while (0)
 
-#ifndef _WIN32
 extern "C" void SharedMaterialParseField_detour(void* sharedMaterial,
                                                   const char* field) {
+#ifdef _WIN32
+    static unsigned reports = 0;
+    const bool report = reports++ < 8;
+    if (report) fprintf(stderr, "[oit][win-material] ParseField enter shared=%p field=%p\n",
+                        sharedMaterial, field);
+#endif
     nwn_oit_note_shared_material_field(sharedMaterial, field);
     if (g_sharedMaterialParseTrampoline)
         g_sharedMaterialParseTrampoline(sharedMaterial, field);
+#ifdef _WIN32
+    if (report) fprintf(stderr, "[oit][win-material] ParseField returned\n");
+#endif
+}
+
+extern "C" void SharedMaterialInit_detour(void* sharedMaterial,
+                                            const char* name) {
+#ifdef _WIN32
+    static unsigned reports = 0;
+    const bool report = reports++ < 8;
+    if (report) fprintf(stderr, "[oit][win-material] SharedMaterial::Init enter shared=%p name=%p\n",
+                        sharedMaterial, name);
+#endif
+    nwn_oit_note_shared_material_init(sharedMaterial, name);
+#ifdef _WIN32
+    if (report) fprintf(stderr, "[oit][win-material] SharedMaterial::Init reset returned\n");
+#endif
+    if (g_sharedMaterialInitTrampoline)
+        g_sharedMaterialInitTrampoline(sharedMaterial, name);
+#ifdef _WIN32
+    if (report) fprintf(stderr, "[oit][win-material] SharedMaterial::Init original returned\n");
+#endif
 }
 
 extern "C" void* MaterialInitSharedMaterial_detour(void* material,
                                                      const char* name) {
+#ifdef _WIN32
+    static unsigned reports = 0;
+    const bool report = reports++ < 8;
+    if (report) fprintf(stderr, "[oit][win-material] InitSharedMaterial enter material=%p name=%p\n",
+                        material, name);
+#endif
     void* sharedMaterial = g_materialInitTrampoline
         ? g_materialInitTrampoline(material, name) : nullptr;
+#ifdef _WIN32
+    if (report) fprintf(stderr, "[oit][win-material] InitSharedMaterial original returned shared=%p\n",
+                        sharedMaterial);
+#endif
     nwn_oit_note_material_resource(material, sharedMaterial, name);
+#ifdef _WIN32
+    if (report) fprintf(stderr, "[oit][win-material] InitSharedMaterial census returned\n");
+#endif
     return sharedMaterial;
 }
 
 extern "C" void MaterialBindAllStandardTextures_detour(void* material) {
+#ifdef _WIN32
+    static unsigned reports = 0;
+    const bool report = reports++ < 8;
+    if (report) fprintf(stderr, "[oit][win-material] BindAll enter material=%p\n", material);
+#endif
+#ifdef _WIN32
+    // v89.8193.37-17's exported Material::CheckAndBindCustomShader reads the
+    // owning SharedMaterial* from this exact field. InitSharedMaterial is not
+    // called for every cached concrete material after our hooks install, so
+    // recover the same association from the proven live bind boundary.
+    void* sharedMaterial = material
+        ? *reinterpret_cast<void**>(reinterpret_cast<unsigned char*>(material) +
+                                    0xd0)
+        : nullptr;
+    nwn_oit_note_material_shared(material, sharedMaterial);
+    if (report) fprintf(stderr, "[oit][win-material] BindAll shared=%p\n",
+                        sharedMaterial);
+#endif
     const char* texture0Name = nullptr;
     if (material && eng::MaterialGetTexture && eng::AurTextureGetName) {
         void* texture0 = eng::MaterialGetTexture(material, 0);
+#ifdef _WIN32
+        if (report) fprintf(stderr, "[oit][win-material] BindAll texture0=%p\n", texture0);
+#endif
         if (texture0) texture0Name = eng::AurTextureGetName(texture0);
+#ifdef _WIN32
+        if (report) fprintf(stderr, "[oit][win-material] BindAll texture name=%p\n",
+                            texture0Name);
+#endif
     }
     nwn_oit_note_material_bind(material, texture0Name);
+#ifdef _WIN32
+    if (report) fprintf(stderr, "[oit][win-material] BindAll census returned\n");
+#endif
     // This per-material hot-path hook is installed only when subhook produced
     // a real trampoline. Never remove/call/reinstall it around every draw.
     if (g_materialBindTrampoline) g_materialBindTrampoline(material);
+#ifdef _WIN32
+    if (report) fprintf(stderr, "[oit][win-material] BindAll original returned\n");
+#endif
 }
 
+#ifndef _WIN32
 extern "C" void MaterialDestroy_detour(void* material) {
     nwn_oit_note_material_destroy(material);
     if (g_materialDestroyTrampoline) g_materialDestroyTrampoline(material);
@@ -1668,7 +1791,9 @@ extern "C" void SharedMaterialDestroy_detour(void* sharedMaterial) {
     if (g_sharedMaterialDestroyTrampoline)
         g_sharedMaterialDestroyTrampoline(sharedMaterial);
 }
+#endif
 
+#ifndef _WIN32
 extern "C" void AurTextureBindInUnit_detour(void* texture, unsigned int unit,
                                              int controllerIndex) {
     if (eng::AurTextureGetName)
@@ -2023,6 +2148,8 @@ struct A2cShadowLocations {
     GLint cameraVpInv = -1, cameraView = -1, lightVp = -1;
     GLint clipFar = -1, viewport = -1, dynamicLayers = -1;
     GLint strength = -1, bias = -1, blend = -1, pcf = -1;
+    GLint selfIllumGuard = -1;
+    GLint lamps = -1, lampCount = -1, lampLift = -1;
     GLint localDepth = -1, localVp = -1, localPos = -1;
     GLint localRadius = -1, localFade = -1, localSlots = -1;
     GLint localStrength = -1, localBias = -1, localEdgeFade = -1;
@@ -2059,6 +2186,10 @@ A2cShadowLocations* a2c_shadow_locations(GLuint program) {
     l.bias          = gl::GetUniformLocation(program, "nwnA2cShadowBias");
     l.blend         = gl::GetUniformLocation(program, "nwnA2cShadowBlend");
     l.pcf           = gl::GetUniformLocation(program, "nwnA2cShadowPcf");
+    l.selfIllumGuard = gl::GetUniformLocation(program, "nwnA2cSelfIllumGuard");
+    l.lamps          = gl::GetUniformLocation(program, "nwnA2cLamps[0]");
+    l.lampCount      = gl::GetUniformLocation(program, "nwnA2cLampCount");
+    l.lampLift       = gl::GetUniformLocation(program, "nwnA2cLampLift");
     l.localDepth    = gl::GetUniformLocation(program, "nwnA2cLocalDepth");
     l.localVp       = gl::GetUniformLocation(program, "nwnA2cLocalVP[0]");
     l.localPos      = gl::GetUniformLocation(program, "nwnA2cLocalPos[0]");
@@ -2089,6 +2220,14 @@ bool nwn_shadow_begin_a2c_receiver(unsigned int rawProgram) {
         !gl::Uniform4f || !gl::UniformMatrix4fv || !gl::ActiveTexture ||
         !gl::BindTexture || !gl::GetIntegerv)
         return false;
+#ifdef _WIN32
+    // The Windows scene-entry camera reconstruction can lag/diverge from the
+    // matrix actually uploaded by the active area material while orbiting or
+    // panning. The opaque receiver is stable because it uses this exact
+    // selected-area upload. Fail closed until it exists, then give A2C the
+    // same source of truth. Linux retains its validated frame-context path.
+    if (!g_haveWorldCameraVPInv) return false;
+#endif
 
     A2cShadowLocations* l = a2c_shadow_locations(program);
     if (!l || l->staticDepth < 0 || l->cameraVpInv < 0 ||
@@ -2119,7 +2258,11 @@ bool nwn_shadow_begin_a2c_receiver(unsigned int rawProgram) {
     gl::Uniform1i(l->staticDepth, kStaticUnit);
     if (l->dynamicDepth >= 0) gl::Uniform1i(l->dynamicDepth, kDynamicUnit);
     gl::UniformMatrix4fv(l->cameraVpInv, 1, GL_FALSE,
+#ifdef _WIN32
+                         g_worldCameraVPInv);
+#else
                          g_shadowFrameContext.viewProjectionInverse);
+#endif
     gl::UniformMatrix4fv(l->cameraView, 1, GL_FALSE,
                          g_shadowFrameContext.view);
     gl::UniformMatrix4fv(l->lightVp, kCascadeCount, GL_FALSE,
@@ -2139,6 +2282,62 @@ bool nwn_shadow_begin_a2c_receiver(unsigned int rawProgram) {
     if (l->bias >= 0)  gl::Uniform1f(l->bias, g_cascadeReceiverBias);
     if (l->blend >= 0) gl::Uniform1f(l->blend, g_cascadeBlendWidth);
     if (l->pcf >= 0)   gl::Uniform1f(l->pcf, g_cascadePcfRadius);
+    if (l->selfIllumGuard >= 0)
+        gl::Uniform1f(l->selfIllumGuard,
+#ifdef _WIN32
+                      g_liftThreshold);
+#else
+                      1.0f);
+#endif
+
+    // Match the established fullscreen receiver's completed lamp list. The
+    // list is double-buffered at the frame boundary, peak-holds each light's
+    // animated radius, and on Windows retains the engine's best shadow rank.
+    // This is what keeps a carried torch lifting the sun shadow after movement;
+    // final material brightness alone is only the self-illumination fallback.
+    float packedLamps[kMaxLampLights * 4] = {};
+    unsigned lampN = 0;
+#ifdef _WIN32
+    if (g_lampLiftEnabled && gl::Uniform4fv) {
+        unsigned order[kLampPool];
+        for (unsigned i = 0; i < g_lampLightCount; ++i) order[i] = i;
+        Vec3f eye = g_shadowFrameContext.eye;
+        eye.x = g_shadowFrameContext.viewInverse[12];
+        eye.y = g_shadowFrameContext.viewInverse[13];
+        eye.z = g_shadowFrameContext.viewInverse[14];
+        auto d2c = [&](unsigned i) {
+            const float dx = g_lampLights[i].pos[0] - eye.x;
+            const float dy = g_lampLights[i].pos[1] - eye.y;
+            const float dz = g_lampLights[i].pos[2] - eye.z;
+            return dx*dx + dy*dy + dz*dz;
+        };
+        for (unsigned a = 0; a + 1 < g_lampLightCount; ++a)
+            for (unsigned b = a + 1; b < g_lampLightCount; ++b) {
+                if (d2c(order[b]) < d2c(order[a]))
+                    std::swap(order[a], order[b]);
+            }
+        const unsigned cap = (unsigned)std::max(
+            1, std::min(lamp_upload_max(), (int)kMaxLampLights));
+        lampN = std::min(g_lampLightCount, cap);
+        for (unsigned i = 0; i < lampN; ++i) {
+            const LampEntry& e = g_lampLights[order[i]];
+            packedLamps[i*4+0] = e.pos[0];
+            packedLamps[i*4+1] = e.pos[1];
+            packedLamps[i*4+2] = e.pos[2];
+            packedLamps[i*4+3] = e.radius * e.radius;
+        }
+    }
+#endif
+    if (l->lamps >= 0 && gl::Uniform4fv)
+        gl::Uniform4fv(l->lamps, (GLsizei)kMaxLampLights, packedLamps);
+    if (l->lampCount >= 0) gl::Uniform1i(l->lampCount, (GLint)lampN);
+    if (l->lampLift >= 0)
+        gl::Uniform1f(l->lampLift,
+#ifdef _WIN32
+                      g_lampLiftEnabled ? g_localLightLift : 0.0f);
+#else
+                      0.0f);
+#endif
 
     if (l->localDepth >= 0) gl::Uniform1i(l->localDepth, kLocalUnit);
     if (l->localVp >= 0)
@@ -2659,9 +2858,9 @@ static void shadowmap_init() {
         g_localLightTrace = false;
     }
     g_localLightCapture = shadow_getenv("NWN_SHADOWMAP_LOCAL_LIGHT_CAPTURE") != nullptr;
-    if (g_localLightCapture && !g_localLightTrace) {
+    if (g_localLightCapture && !g_traceEnabled) {
         fprintf(stderr,"[shadowmap][local-light] NWN_SHADOWMAP_LOCAL_LIGHT_CAPTURE requires "
-                        "NWN_SHADOWMAP_LOCAL_LIGHT_TRACE=1 (it supplies the selected light); disabled\n");
+                        "the validated Scene::Render path (NWN_SHADOWMAP_TRACE=1); disabled\n");
         g_localLightCapture = false;
     }
     if (const char* s = shadow_getenv("NWN_SHADOWMAP_LOCAL_CUBE_UPDATE_MS")) {
@@ -3437,11 +3636,12 @@ static void shadowmap_init() {
         return;
     }
 
-#ifndef _WIN32
-    if (nwn_oit_needs_material_identity_tracking() &&
-        eng::MaterialBindAllStandardTextures && eng::MaterialGetTexture &&
-        eng::AurTextureGetName) {
-        if (eng::MaterialInitSharedMaterial) {
+    if (nwn_oit_needs_material_identity_tracking()) {
+        const int materialStage = material_hook_stage();
+        fprintf(stderr, "[oit][material-identity] Windows-safe hook stage %d/4 "
+                        "(1=create, 2=parse, 3=bind, 4=shared-init-reset; "
+                        "destructors refused)\n", materialStage);
+        if (materialStage >= 1 && eng::MaterialInitSharedMaterial) {
             g_hookMaterialInit = subhook_new((void*)eng::MaterialInitSharedMaterial,
                                              (void*)MaterialInitSharedMaterial_detour,
                                              SUBHOOK_64BIT_OFFSET);
@@ -3463,7 +3663,7 @@ static void shadowmap_init() {
                                 "tracking active\n");
             }
         }
-        if (eng::SharedMaterialParseField) {
+        if (materialStage >= 2 && eng::SharedMaterialParseField) {
             g_hookSharedMaterialParse =
                 subhook_new((void*)eng::SharedMaterialParseField,
                             (void*)SharedMaterialParseField_detour,
@@ -3488,7 +3688,34 @@ static void shadowmap_init() {
                                 "tracking active\n");
             }
         }
-        if (eng::MaterialDestroy) {
+#ifdef _WIN32
+        if (materialStage >= 4 && eng::SharedMaterialInit) {
+            g_hookSharedMaterialInit =
+                subhook_new((void*)eng::SharedMaterialInit,
+                            (void*)SharedMaterialInit_detour,
+                            SUBHOOK_64BIT_OFFSET);
+            if (g_hookSharedMaterialInit &&
+                subhook_install(g_hookSharedMaterialInit) == 0)
+                g_sharedMaterialInitTrampoline =
+                    (eng::SharedMaterialInit_t)
+                        subhook_get_trampoline(g_hookSharedMaterialInit);
+            if (!g_hookSharedMaterialInit || !g_sharedMaterialInitTrampoline) {
+                fprintf(stderr, "[oit][material-identity] warning: shared-material "
+                                "init/reset trampoline unavailable\n");
+                if (g_hookSharedMaterialInit) {
+                    subhook_remove(g_hookSharedMaterialInit);
+                    subhook_free(g_hookSharedMaterialInit);
+                    g_hookSharedMaterialInit = nullptr;
+                }
+                g_sharedMaterialInitTrampoline = nullptr;
+            } else {
+                fprintf(stderr, "[oit][material-identity] shared-material init/reset "
+                                "tracking active\n");
+            }
+        }
+#endif
+#ifndef _WIN32
+        if (materialStage >= 4 && eng::MaterialDestroy) {
             g_hookMaterialDestroy =
                 subhook_new((void*)eng::MaterialDestroy,
                             (void*)MaterialDestroy_detour, SUBHOOK_64BIT_OFFSET);
@@ -3510,7 +3737,7 @@ static void shadowmap_init() {
                                 "recycling active\n");
             }
         }
-        if (eng::SharedMaterialDestroy) {
+        if (materialStage >= 4 && eng::SharedMaterialDestroy) {
             g_hookSharedMaterialDestroy =
                 subhook_new((void*)eng::SharedMaterialDestroy,
                             (void*)SharedMaterialDestroy_detour,
@@ -3533,27 +3760,32 @@ static void shadowmap_init() {
                                 "lifetime recycling active\n");
             }
         }
-        g_hookMaterialBind = subhook_new((void*)eng::MaterialBindAllStandardTextures,
-                                         (void*)MaterialBindAllStandardTextures_detour,
-                                         SUBHOOK_64BIT_OFFSET);
-        if (g_hookMaterialBind && subhook_install(g_hookMaterialBind) == 0)
-            g_materialBindTrampoline =
-                (eng::MaterialBindAllStandardTextures_t)
-                    subhook_get_trampoline(g_hookMaterialBind);
-        if (!g_hookMaterialBind || !g_materialBindTrampoline) {
-            fprintf(stderr, "[oit][material-identity] warning: safe Material bind "
-                            "trampoline unavailable; census disabled\n");
-            if (g_hookMaterialBind) {
-                subhook_remove(g_hookMaterialBind);
-                subhook_free(g_hookMaterialBind);
-                g_hookMaterialBind = nullptr;
+#endif
+        if (materialStage >= 3 && eng::MaterialBindAllStandardTextures &&
+            eng::MaterialGetTexture && eng::AurTextureGetName) {
+            g_hookMaterialBind = subhook_new((void*)eng::MaterialBindAllStandardTextures,
+                                             (void*)MaterialBindAllStandardTextures_detour,
+                                             SUBHOOK_64BIT_OFFSET);
+            if (g_hookMaterialBind && subhook_install(g_hookMaterialBind) == 0)
+                g_materialBindTrampoline =
+                    (eng::MaterialBindAllStandardTextures_t)
+                        subhook_get_trampoline(g_hookMaterialBind);
+            if (!g_hookMaterialBind || !g_materialBindTrampoline) {
+                fprintf(stderr, "[oit][material-identity] warning: safe Material bind "
+                                "trampoline unavailable; census disabled\n");
+                if (g_hookMaterialBind) {
+                    subhook_remove(g_hookMaterialBind);
+                    subhook_free(g_hookMaterialBind);
+                    g_hookMaterialBind = nullptr;
+                }
+                g_materialBindTrampoline = nullptr;
+            } else {
+                fprintf(stderr, "[oit][material-identity] Material bind tracking active\n");
             }
-            g_materialBindTrampoline = nullptr;
-        } else {
-            fprintf(stderr, "[oit][material-identity] Material bind tracking active\n");
         }
     }
 
+#ifndef _WIN32
     if (nwn_oit_needs_texture_tracking() && eng::AurTextureBindInUnit &&
         eng::AurTextureGetName) {
         g_hookAurTextureBind = subhook_new((void*)eng::AurTextureBindInUnit,
@@ -3787,6 +4019,14 @@ static void shadowmap_fini() {
         *g_sdlPollEventSlot = (void*)g_realSdlPollEvent;
         g_sdlPollEventSlot = nullptr;
     }
+#ifdef _WIN32
+    if (g_hookSharedMaterialInit) {
+        subhook_remove(g_hookSharedMaterialInit);
+        subhook_free(g_hookSharedMaterialInit);
+        g_hookSharedMaterialInit = nullptr;
+        g_sharedMaterialInitTrampoline = nullptr;
+    }
+#endif
 #ifndef _WIN32
     if (g_hookSharedMaterialDestroy) {
         subhook_remove(g_hookSharedMaterialDestroy);
@@ -3800,6 +4040,7 @@ static void shadowmap_fini() {
         g_hookMaterialDestroy = nullptr;
         g_materialDestroyTrampoline = nullptr;
     }
+#endif
     if (g_hookSharedMaterialParse) {
         subhook_remove(g_hookSharedMaterialParse);
         subhook_free(g_hookSharedMaterialParse);
@@ -3818,6 +4059,7 @@ static void shadowmap_fini() {
         g_hookMaterialBind = nullptr;
         g_materialBindTrampoline = nullptr;
     }
+#ifndef _WIN32
     if (g_hookAurTextureBind) {
         subhook_remove(g_hookAurTextureBind);
         subhook_free(g_hookAurTextureBind);

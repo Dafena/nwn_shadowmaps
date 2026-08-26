@@ -2,9 +2,10 @@
 # Clean Linux development launcher for visual/performance A/B tests.
 #
 # Unlike run-dev.sh, this enables no census, readback, PGM dump, timing query,
-# or trace path. Stable transparency opt-ins supplied by the caller are kept:
+# or trace path. The accepted material-routing opt-in supplied by the caller is
+# kept:
 #
-#   NWN_ALPHA_MODE_ROUTING=1 NWN_OIT_MODE3=1 ./run-shadowmaps-clean.sh
+#   NWN_ALPHA_MODE_ROUTING=1 ./run-shadowmaps-clean.sh
 #
 # Set NWN_DEV_NO_BUILD=1 after the first build to keep repeated A/B launches
 # identical. No saved overlay settings are loaded unless the caller explicitly
@@ -34,8 +35,7 @@ else
 fi
 
 echo "[run-clean] shipping shadows enabled; diagnostic output/readbacks disabled" \
-     " mode-routing=${NWN_ALPHA_MODE_ROUTING:-0}" \
-     " mode3=${NWN_OIT_MODE3:-0}"
+     " mode-routing=${NWN_ALPHA_MODE_ROUTING:-0} mode3=parked"
 
 cd "$GAME_DIR"
 exec env \
@@ -49,6 +49,7 @@ exec env \
     -u NWN_OIT_FOLIAGE_REPLAY_NO_DEPTH \
     -u NWN_OIT_FOLIAGE_SHADER \
     -u NWN_OIT_FOLIAGE_VISIBLE \
+    -u NWN_OIT_MODE3 \
     -u NWN_OIT_MODE3_CENSUS \
     -u NWN_OIT_MODE3_DEPTH_CENSUS \
     -u NWN_OIT_MODE3_ORDER_CENSUS \

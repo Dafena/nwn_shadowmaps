@@ -77,7 +77,8 @@ The material-selectable A2C/OIT work described in
 [TRANSPARENCY_MODES.md](TRANSPARENCY_MODES.md) is experimental development
 work, not a supported shipping feature. Do not enable its diagnostic
 environment switches in tester packages unless the test explicitly targets
-that work.
+that work. Mode 3 OIT activation is currently hard-disabled; authored Mode 3
+materials render through NWN's native path.
 
 ## Requirements
 

@@ -1,6 +1,6 @@
 # Transparency modes and Linux evidence
 
-Updated 2026-08-22. This is the canonical record for the transparency work.
+Updated 2026-08-24. This is the canonical record for the transparency work.
 It separates observed NWN behaviour from injector experiments and future
 design. The Linux client is the only runtime authority until the maintainer
 explicitly requests Windows work.
@@ -25,7 +25,7 @@ The provisional values are:
 | `0` | Preserve native NWN rendering |
 | `1` | Native-style alpha cutoff |
 | `2` | Alpha-to-coverage; requires multisampling |
-| `3` | Weighted blended OIT |
+| `3` | Reserved/parked weighted blended OIT; currently renders natively |
 | `4` | Conventional source-over blending |
 
 The stock-path parser/bind census proved a non-invasive selector transport. A
@@ -41,10 +41,12 @@ preferred at 8x MSAA. At 2x MSAA the small sample set is conspicuously
 stippled; 4x is better. With no MSAA, A2C cannot provide fractional coverage
 and must fall back to native rendering or cutoff.
 
-Explicit Mode 3 is an accepted Linux visual prototype using a native-pivot
-opaque core plus a weighted, order-independent soft fringe. It remains behind
-diagnostic gates until private target work is lazy and all census/readback
-instrumentation is removed from its production path.
+Explicit Mode 3 produced an accepted Linux visual prototype using a
+native-pivot opaque core plus a weighted, order-independent soft fringe. That
+work is now parked. `NWN_OIT_MODE3` and every `NWN_OIT_MODE3_*_CENSUS` switch
+are ignored, and authored Mode 3 materials fail closed to native rendering.
+The implementation and evidence below are retained only for a deliberate
+future restart; Mode 3 is not an active production, shipping, or Windows target.
 
 The accepted A2C baseline has these architectural limits:
 
@@ -60,8 +62,9 @@ The accepted A2C baseline has these architectural limits:
 
 The earlier global weighted-OIT experiment was rejected: its replay path could
 disappear at particular camera angles and interfered with fog, water, lighting,
-textures, and UI. Explicit material Mode 3 now uses the separately proven
-hybrid core-plus-fringe design; it is never a global solution.
+textures, and UI. The later explicit Mode 3 prototype used the separately
+proven hybrid core-plus-fringe design; it was never a global solution and is
+now parked.
 
 ## Native MTR census
 
@@ -149,13 +152,13 @@ native meanings. They are not surrogate selectors for injector modes.
    59,273 covered pixels, 15,816 fractional pixels, and `minT=0`. Modes 0 and
    3 remained native and the screen was untouched. Evidence:
    `census-mode2-transmittance.txt`. Exact source-over/additive separation and
-   many-layer emitter fidelity are a pinned TODO, not a blocker for mode 3.
-6. **Weighted OIT opt-in:** accepted visual prototype. Strict Mode 3 uses a
+   many-layer emitter fidelity is a pinned Mode 2 TODO.
+6. **Weighted OIT opt-in:** parked after an accepted visual prototype. The
+   dormant strict Mode 3 implementation uses a
    native-pivot opaque core plus weighted OIT fringe, composes before water,
    retains stock fog/lighting, and interoperates with Mode 0/2 cutout cores.
-7. **Product surface:** active. `NWN_OIT_MODE3=1` selects the no-readback lazy
-   runtime candidate. Complete its Linux performance/regression matrix before
-   promoting it to a shipping control.
+7. **Product surface:** disabled. Mode 3 activation switches are ignored and
+   mode 3 remains native. Mode 2 A2C is the only accepted injector alpha mode.
 
 Create local savepoints after checkpoints 1, 4, 5, and 6. Do not push unless
 the maintainer explicitly requests it.
@@ -546,7 +549,12 @@ before this composite. Screen-space viewport and extent equality are the valid
 compatibility checks; requiring framebuffer identity suppresses native
 particles and then incorrectly skips their replacement.
 
-### Private mode-3 weighted-OIT proof
+### Historical private mode-3 weighted-OIT proof (disabled)
+
+Everything in this Mode 3 section records the completed Linux investigation.
+The commands and “enable” instructions below no longer activate Mode 3 because
+the runtime and census family are hard-disabled by policy. Retain them as
+reproduction notes for a future explicit restart, not as current test guidance.
 
 `NWN_OIT_MODE3_CENSUS=1` is the first checkpoint for explicit mode 3. It
 duplicates only strictly eligible mode-3 stock alpha draws into the weighted
@@ -778,15 +786,15 @@ occluder-only proof, the visible Mode 3 path remained `core-plus-fringe`, and
 the intervening card-border artifact disappeared. The hybrid visual prototype
 is accepted; evidence is appended to `census-mode3-visible.txt`.
 
-The census path remains diagnostic: its private opaque-depth reconstruction is
-eager and it performs bounded readbacks/order instrumentation. The runtime
-candidate is enabled separately with `NWN_OIT_MODE3=1` plus strict material
-routing. It performs no census readbacks, leaves the first eligible frame
-native, then arms private rendering for 120 frames after the latest visible
-Mode 3 draw. Native-only areas never allocate or clear Mode 3 targets; area
-changes and expired visibility grace release them. Performance comparisons
-must use the same clean shadowmap launch because `run-dev.sh` intentionally
-enables expensive diagnostics.
+Historical implementation note: the census path used eager private-depth
+reconstruction and bounded readbacks/order instrumentation. The former runtime
+candidate used `NWN_OIT_MODE3=1` plus strict material routing, performed no
+census readbacks, left the first eligible frame native, and armed private
+rendering for 120 frames after the latest Mode 3 draw. Those activation paths
+are now hard-disabled; this paragraph records the final prototype rather than
+an available command. Performance comparisons must still use the same clean
+shadowmap launch because `run-dev.sh` intentionally enables expensive
+diagnostics.
 
 The first production A/B also found that strict material routing itself could
 drop a native area from roughly 82 to 51 FPS even with Mode 3 disabled. This
@@ -797,7 +805,8 @@ run in the regression matrix so this cost cannot silently return.
 
 The immediate routing-only retest passed: native-area FPS returned to the clean
 shadow baseline. The hash plus native fast exit is therefore the accepted
-production routing baseline; full Mode 3 activation remains a separate gate.
+production routing baseline. Full Mode 3 activation was subsequently tested,
+accepted as prototype evidence, and then parked by maintainer decision.
 
 A native-area-first transition exposed a material-load ordering bug: concrete
 resources could cache default Mode 0 before their shared MTR fields completed,
@@ -810,9 +819,19 @@ slots; the limit therefore applies to simultaneously live identities, not a
 longplay's cumulative material history. Direct-start and transitioned-area
 behavior must both remain in the regression matrix.
 
-The complete production retest passed: native-area FPS remained at the clean
+Windows uses the same hashed lookup but not the destructor hooks. Runtime
+staging on v89.8193.37-17 proved creation, parsing, binding, texture lookup, and
+`SharedMaterial::Init`; the exported `Material` destructor trampoline crashed
+only when returning to the original function. Windows therefore overwrites a
+reused concrete pointer at `Material::InitSharedMaterial` and clears a reused
+shared pointer at `SharedMaterial::Init`. The 65536-entry arrays remain a
+fail-closed ceiling for distinct historical addresses on Windows: exhaustion
+leaves later identities native rather than risking stale routing. Long-session
+transition testing remains required before release.
+
+The final production-candidate retest passed: native-area FPS remained at the clean
 shipping-shadow baseline, then both authored Mode 2 A2C and Mode 3 hybrid OIT
 activated after transitioning into the test area. No cumulative-registry or
-transition regression remained. This is the accepted Linux production
-checkpoint for the current PR; emitter fidelity through multiple A2C layers
-remains the separately pinned compromise/TODO.
+transition regression remained. This is preserved as Linux prototype evidence,
+not as an active product checkpoint. Emitter fidelity through multiple A2C
+layers remains the separately pinned compromise/TODO.

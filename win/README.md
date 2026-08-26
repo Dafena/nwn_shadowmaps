@@ -5,13 +5,15 @@ source as the Linux injector. It is always a shipping build.
 
 ## Platform rule
 
-Linux is the default development target until the Linux injector is working.
-Windows changes are made only when explicitly requested by the maintainer.
+Linux remains the behavioural reference. On 2026-08-24 the maintainer
+explicitly requested staged Windows implementation work. Windows-specific
+repairs must remain isolated and must not redefine working Linux behaviour.
 
-The material-selectable transparency work is currently Linux-only runtime
-research. Its A2C/OIT behaviour and MTR census are not validated on Windows and
-must not drive shared renderer changes. See `../TRANSPARENCY_MODES.md` for the
-Linux evidence; do not port it without an explicit maintainer request.
+Material Mode 2 A2C is accepted on Linux but not yet validated on Windows; it
+may be ported only after the shadow-map baseline is established. Mode 3 OIT is
+parked globally and is not a Windows target. See `../TRANSPARENCY_MODES.md` for
+the Linux evidence and `../WINDOWS_IMPLEMENTATION_PLAN.md` for the ordered
+Windows checkpoints.
 
 If a behaviour works on Linux and fails on Windows, repair it in a Windows-only
 path. Do not change shared C++ or GLSL to solve a Windows-only symptom. The
@@ -36,6 +38,16 @@ x86_64-w64-mingw32-g++ -v 2>&1 | grep 'Thread model'
 The output must contain `posix`. The result is `win/version.dll`; the build
 links libgcc/libstdc++ statically and uses the system OpenGL, GDI, user32, and
 version libraries.
+
+Verify the proxy exports and the mapped engine symbols against the exact game
+executable before deployment:
+
+```bash
+make verify NWN_WIN_EXE="/path/to/Neverwinter Nights/bin/win32/nwmain.exe"
+```
+
+`check_artifact.sh` fails if the DLL is not x86-64 PE, any of the 17 proxy
+exports is absent, or any mapped MSVC symbol is absent from that executable.
 
 ## Install
 
@@ -74,6 +86,30 @@ build; their compiled defaults define shipping behaviour.
 - The Windows local-light fast path has separate caster culling, current-
   program tracking, and relaxed generation publication rules. Linux does not
   use those mechanics.
+- `Bright surfaces keep light` is a start threshold, not an intensity: lower
+  values protect a wider brightness range from the later directional-shadow
+  composite. Windows defaults it to `0` so ordinary torch-lit surfaces retain
+  their local lighting; Linux retains its separately validated `0.85` default.
+- `Local shadow update` is a persisted three-tier performance control: Low
+  rebuilds no more often than every 25 ms, Medium every 16 ms, and Ultra on
+  every rendered frame to match the directional-shadow cadence. Low remains
+  the default; the local shadow-source budget is still independently capped at
+  three lights.
+- Material identity census support maps the exact v89.8193.37-17 exports for
+  `Material`/`SharedMaterial` creation, binding, field parsing, texture access,
+  and shared initialization. These hooks are inert unless identity census or
+  strict material routing is explicitly requested, and fail closed if a safe
+  trampoline is unavailable. Although both destructor exports exist, their
+  MSVC Subhook trampolines crash on return and are permanently refused;
+  construction/init boundaries reset reused identities instead. The unsafe
+  texture-unit hook also remains disabled.
+- The v89.8193.37-17 `Material` layout stores its live `SharedMaterial*` at
+  offset `+0xD0`, independently confirmed by the exported custom-shader bind
+  routine. The read-only transition census used that association to distinguish
+  one texture's native Mode 0, authored Mode 2, and parked Mode 3 materials.
+- Visible Mode 2 A2C routing was confirmed on Windows with a four-sample live
+  framebuffer. The same run left Mode 0 and parked Mode 3 native and bound both
+  directional CSM and local-light shadow receivers to the Mode 2 shader.
 - The Windows `lightpriority` field offset is currently unverified, so priority
   sorting is disabled. `GetShadowLights()` remains the authority for source
   eligibility and order.

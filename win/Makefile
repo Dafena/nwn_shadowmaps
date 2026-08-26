@@ -35,6 +35,9 @@ OBJS = nwn_win_proxy.o nwn_shadowmap.o shadow_config.o shadow_math.o \
 
 all: $(TARGET)
 
+verify: $(TARGET)
+	./check_artifact.sh "$(TARGET)" "$(NWN_WIN_EXE)"
+
 $(TARGET): $(OBJS)
 	$(CXX) $(OBJS) version.def $(LDFLAGS) -o $@
 	@echo "--- exports (must be ALL 17 version.dll entry points) ---"
@@ -90,4 +93,4 @@ imgui_impl_opengl3.o: $(IMGUI)/backends/imgui_impl_opengl3.cpp
 
 clean:
 	rm -f $(TARGET) $(OBJS)
-.PHONY: all clean
+.PHONY: all verify clean

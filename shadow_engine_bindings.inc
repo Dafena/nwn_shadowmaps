@@ -47,7 +47,6 @@ namespace eng {
     // Windows: nwmain.exe exports all three but exports NOTHING of CNWCArea.
     using AurShadowToggle_t      = void (*)(void* aurObject);
     using AurSetDynProjLight_t   = void (*)(void* aurObject);
-#ifndef _WIN32
     using AurTextureBindInUnit_t = void (*)(void* texture, unsigned int unit,
                                             int controllerIndex);
     using AurTextureGetName_t    = const char* (*)(void* texture);
@@ -55,11 +54,12 @@ namespace eng {
     using MaterialGetTexture_t = void* (*)(void* material, int index);
     using MaterialInitSharedMaterial_t = void* (*)(void* material,
                                                    const char* name);
+    using SharedMaterialInit_t = void (*)(void* sharedMaterial,
+                                          const char* name);
     using SharedMaterialParseField_t = void (*)(void* sharedMaterial,
                                                 const char* field);
     using MaterialDestroy_t = void (*)(void* material);
     using SharedMaterialDestroy_t = void (*)(void* sharedMaterial);
-#endif
 
     SceneRender_t           SceneRender           = nullptr;
     ManageSceneBSP_t        ManageSceneBSP        = nullptr;
@@ -106,16 +106,15 @@ namespace eng {
     MtxPerspective_t        MtxPerspective        = nullptr;   // hooked
     AreaUpdateShadowingLights_t AreaUpdateShadowingLights = nullptr;
     AurShadowToggle_t       AurEnableShadowing    = nullptr;
-#ifndef _WIN32
     AurTextureBindInUnit_t  AurTextureBindInUnit  = nullptr;
     AurTextureGetName_t     AurTextureGetName     = nullptr;
     MaterialBindAllStandardTextures_t MaterialBindAllStandardTextures = nullptr;
     MaterialGetTexture_t    MaterialGetTexture    = nullptr;
     MaterialInitSharedMaterial_t MaterialInitSharedMaterial = nullptr;
+    SharedMaterialInit_t SharedMaterialInit = nullptr;
     SharedMaterialParseField_t SharedMaterialParseField = nullptr;
     MaterialDestroy_t         MaterialDestroy = nullptr;
     SharedMaterialDestroy_t   SharedMaterialDestroy = nullptr;
-#endif
     AurShadowToggle_t       AurDisableShadowing   = nullptr;
     AurSetDynProjLight_t    AurSetDynProjLight    = nullptr;
     // GLRender::SetMatrixMode(Aurora::AuroraTransStates). The enum VALUES are
@@ -232,7 +231,6 @@ static const struct { const char* mangled; void** slot; bool required; } kBindin
     {"_Z10SetLightGLPK9PartLightif",           (void**)&eng::SetLightGL,           false},
     {"_Z22GetLightAdjustedRadiusPK9PartLight", (void**)&eng::GetLightAdjustedRadius, false},
     {"_Z17GetLightFadeSpeedPK9PartLight",      (void**)&eng::GetLightFadeSpeed,      false},
-#ifndef _WIN32
     {"_ZN11CAurTexture10BindInUnitEji", (void**)&eng::AurTextureBindInUnit, false},
     {"_ZN11CAurTexture7GetNameEv",      (void**)&eng::AurTextureGetName,    false},
     {"_ZN8Material23BindAllStandardTexturesEv",
@@ -240,11 +238,12 @@ static const struct { const char* mangled; void** slot; bool required; } kBindin
     {"_ZN8Material10GetTextureEi",      (void**)&eng::MaterialGetTexture, false},
     {"_ZN8Material18InitSharedMaterialEPKc",
                               (void**)&eng::MaterialInitSharedMaterial, false},
+    {"_ZN14SharedMaterial4InitEPKc",
+                              (void**)&eng::SharedMaterialInit, false},
     {"_ZN14SharedMaterial10ParseFieldEPKc",
                               (void**)&eng::SharedMaterialParseField, false},
     {"_ZN8MaterialD1Ev",      (void**)&eng::MaterialDestroy, false},
     {"_ZN14SharedMaterialD1Ev", (void**)&eng::SharedMaterialDestroy, false},
-#endif
     {"SDL_PollEvent",                  (void**)&eng::SdlPollEventThunk,     false},
     // GLRender matrix entry points. Hooked to capture the renderer instance +
     // camera state; called directly to substitute the light's transform.

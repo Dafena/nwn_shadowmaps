@@ -41,6 +41,10 @@ maintainer explicitly requests a Windows-specific task. Windows builds may
 remain compiling when practical, but Windows runtime behaviour must not drive
 shared-code design decisions.
 
+As of 2026-08-24, the maintainer has explicitly requested planning and then
+implementation for Windows. Linux remains the behavioural reference; this
+authorization does not permit Windows fixes to regress or redefine Linux.
+
 ### Shared Linux/Proton resource directory
 
 The native Linux game starts with `/home/fede/.local/share/Neverwinter Nights`
@@ -116,17 +120,20 @@ Do not confuse a source build with a copied game-directory artifact.
 
 ## Current open work
 
-The active task is a Linux-first, material-selectable transparency system. The
-immediate checkpoint is a read-only census proving that an explicit MTR
-`NWN_ALPHA_MODE` integer reaches the injected stock alpha shader. It must not
-change a pixel or suppress/replay an engine draw.
+The accepted Linux transparency path is explicit material Mode 2 A2C. It is
+stable under camera motion, receives directional/local shadows, and preserves
+opaque intersections. Multiple overlapping coverage layers can still hide
+late emitters; that compromise is pinned rather than solved by making emitters
+depthless.
 
-The current local A2C branch is the preferred foliage baseline because it is
-stable under camera motion, but its shadow and multi-layer emitter interaction
-is not complete. The earlier global weighted-OIT replay is rejected as a
-baseline because it disappeared at some camera angles and disturbed opaque
-geometry, textures, UI, fog, and water. Weighted OIT may return only as a
-separate explicit material mode.
+Mode 3 weighted OIT is parked. Its runtime and census switches are ignored,
+authored Mode 3 materials fail closed to native rendering, and it is outside
+the Windows scope. Keep the dormant implementation and evidence intact until
+the maintainer explicitly resumes OIT work.
+
+The next active task is a Windows implementation plan followed by staged
+Windows parity work for the accepted shadow-map baseline and Mode 2 A2C. Keep
+Windows mechanics in Windows paths and validate against matched Linux scenes.
 
 Native MTR evidence is now binding:
 

@@ -86,8 +86,9 @@ bool area_scene_draw_active();
 }   // namespace nwn_core
 
 // ---------------------------------------------------------------------------
-//  OIT module (nwn_oit.cpp) -- entry points called from the shadow module's
-//  frame sequence. All are no-ops unless NWN_OIT=1.
+//  Alpha/OIT module (nwn_oit.cpp) -- entry points called from the shadow
+//  module's frame sequence. They are no-ops unless an alpha route or diagnostic
+//  is enabled. Material Mode 3 OIT is currently parked and cannot activate.
 // ---------------------------------------------------------------------------
 
 // Runs once per frame, after the engine's Scene::Render has completed. Owns its
@@ -142,6 +143,9 @@ void nwn_oit_note_foliage_fragment(unsigned int shader);
 void nwn_oit_note_emitter_fragment(unsigned int shader);
 void nwn_oit_note_texture_bind(unsigned int unit, const char* name);
 void nwn_oit_note_shared_material_field(void* sharedMaterial, const char* field);
+void nwn_oit_note_shared_material_init(void* sharedMaterial,
+                                       const char* materialName);
+void nwn_oit_note_material_shared(void* material, void* sharedMaterial);
 void nwn_oit_note_material_resource(void* material, void* sharedMaterial,
                                     const char* materialName);
 void nwn_oit_note_material_bind(void* material, const char* texture0Name);

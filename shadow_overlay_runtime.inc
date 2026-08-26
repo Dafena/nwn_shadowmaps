@@ -1123,10 +1123,21 @@ static void draw_static_receiver(void* scene) {
                 }
             }
             {
-                // Nearest 8 lamps to the camera; w carries range SQUARED.
+                // A bounded lamp set; w carries range SQUARED.
                 unsigned order[kLampPool];
                 for (unsigned i = 0; i < g_lampLightCount; ++i) order[i] = i;
-                const Vec3f eye = g_shadowFrameContext.eye;
+                Vec3f eye = g_shadowFrameContext.eye;
+#ifdef _WIN32
+                // The Scene::Render eye argument is not the world-camera eye
+                // on Windows.  The frozen inverse view is authoritative and
+                // already drives the working cascade fit; its translation is
+                // the actual camera position.  Sun lift follows the nearest
+                // ordinary SetLightGL census entries, never the unrelated
+                // GetShadowLights(mode) shadow-caster lists.
+                eye.x = g_shadowFrameContext.viewInverse[12];
+                eye.y = g_shadowFrameContext.viewInverse[13];
+                eye.z = g_shadowFrameContext.viewInverse[14];
+#endif
                 auto d2c = [&](unsigned i) {
                     const float dx = g_lampLights[i].pos[0]-eye.x;
                     const float dy = g_lampLights[i].pos[1]-eye.y;
@@ -1134,8 +1145,10 @@ static void draw_static_receiver(void* scene) {
                     return dx*dx+dy*dy+dz*dz;
                 };
                 for (unsigned a2 = 0; a2 + 1 < g_lampLightCount; ++a2)
-                    for (unsigned b2 = a2 + 1; b2 < g_lampLightCount; ++b2)
-                        if (d2c(order[b2]) < d2c(order[a2])) std::swap(order[a2], order[b2]);
+                    for (unsigned b2 = a2 + 1; b2 < g_lampLightCount; ++b2) {
+                        if (d2c(order[b2]) < d2c(order[a2]))
+                            std::swap(order[a2], order[b2]);
+                    }
                 float packed[kMaxLampLights*4] = {};
                 const unsigned cap = (unsigned)std::max(1, std::min(lamp_upload_max(),
                                                                     (int)kMaxLampLights));

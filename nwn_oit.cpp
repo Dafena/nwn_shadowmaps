@@ -315,10 +315,10 @@ bool  g_materialModeRouting = false; // fail-closed authored mode dispatch
 bool  g_a2cTransmittanceCensus = false; // private mode-2 product(1-alpha) proof
 bool  g_a2cEmitterCensus = false; // private emitter colour + opaque-depth proof
 bool  g_a2cEmitterVisible = false; // replace proven late emitters through mode-2 T
-bool  g_mode3Runtime = false; // production candidate: lazy hybrid Mode 3
+bool  g_mode3Runtime = false; // parked lazy hybrid Mode 3; forced false by policy
 bool  g_mode3OitCensus = false; // private weighted-OIT proof; native retained
 bool  g_mode3StabilityCensus = false; // bounded resolved-texture camera census
-bool  g_mode3DepthCensus = false; // private bucket-0/2 opaque depth reconstruction
+bool  g_mode3DepthCensus = false; // historical private opaque-depth reconstruction
 bool  g_mode3OrderCensus = false; // fog + late bucket/FBO ordering, read-only
 bool  g_mode3VisibleCensus = false; // pre-water screen composite; native retained
 bool  g_mode3AlphaNormalize = false; // cutout pivot -> opaque core + soft fringe
@@ -342,6 +342,12 @@ float g_testColor[3] = { 1.0f, 0.25f, 0.25f };
 float g_testAlpha = 0.35f;
 float g_alphaGain = 1.0f;       // preserve authored alpha unless explicitly tuned
 float g_coreCutoff = 0.50f;     // solid/depth core; lower alpha remains soft OIT
+
+// Mode 3 is intentionally parked. Keep the implementation and its evidence in
+// tree, but do not let environment switches activate either the visible runtime
+// or its private census family until the maintainer explicitly resumes OIT
+// work. Authored NWN_ALPHA_MODE=3 materials therefore fail closed to native.
+constexpr bool kMode3OitAvailable = false;
 
 bool mode3_requested() {
     return g_mode3Runtime || g_mode3OitCensus;
@@ -425,8 +431,13 @@ void read_settings() {
                         "NWN_A2C_EMITTER_CENSUS=1; native emitters retained\n");
     }
     const char* mode3OitCensus = getenv("NWN_OIT_MODE3_CENSUS");
-    g_mode3OitCensus = (mode3OitCensus && *mode3OitCensus &&
-                        *mode3OitCensus != '0');
+    const bool mode3OitCensusRequested = mode3OitCensus && *mode3OitCensus &&
+                                         *mode3OitCensus != '0';
+    g_mode3OitCensus = kMode3OitAvailable && mode3OitCensusRequested;
+    if (mode3OitCensusRequested && !kMode3OitAvailable)
+        fprintf(stderr, "[oit][mode3-private] Mode 3 is parked by project "
+                        "policy; census disabled and authored mode 3 remains "
+                        "native\n");
     if (g_mode3OitCensus && !g_materialModeRouting) {
         g_mode3OitCensus = false;
         fprintf(stderr, "[oit][mode3-private] requires "
@@ -439,7 +450,13 @@ void read_settings() {
                         "before proving mode 3\n");
     }
     const char* mode3Runtime = getenv("NWN_OIT_MODE3");
-    g_mode3Runtime = (mode3Runtime && *mode3Runtime && *mode3Runtime != '0');
+    const bool mode3RuntimeRequested = mode3Runtime && *mode3Runtime &&
+                                       *mode3Runtime != '0';
+    g_mode3Runtime = kMode3OitAvailable && mode3RuntimeRequested;
+    if (mode3RuntimeRequested && !kMode3OitAvailable)
+        fprintf(stderr, "[oit][mode3-runtime] Mode 3 is parked by project "
+                        "policy; request ignored and authored mode 3 remains "
+                        "native\n");
     if (g_mode3Runtime && !g_materialModeRouting) {
         g_mode3Runtime = false;
         fprintf(stderr, "[oit][mode3-runtime] requires "
@@ -560,9 +577,8 @@ void read_settings() {
                         "Read-only; native shader selection and draw state remain intact.\n");
     if (g_materialModeRouting)
         fprintf(stderr, "[oit][mode-route] strict material routing enabled: "
-                        "mode 2 may use A2C; mode 3 requires an explicit "
-                        "runtime/proof switch; every unknown/excluded mode remains "
-                        "native.\n");
+                        "mode 2 may use A2C; mode 3 is parked; every other, "
+                        "unknown, or excluded mode remains native.\n");
     if (g_a2cTransmittanceCensus)
         fprintf(stderr, "[a2c][transmittance] private mode-2 census enabled: "
                         "product(1-alpha) is measured; visible use remains "
@@ -590,7 +606,7 @@ void read_settings() {
                         "screen/native remain untouched.\n");
     if (g_mode3DepthCensus)
         fprintf(stderr, "[oit][mode3-depth] private opaque-depth reconstruction "
-                        "enabled: immediate bucket-0/2 depth-only duplicates; "
+                        "enabled: immediate opaque depth-only duplicates; "
                         "scene depth is not imported and native mode 3 remains.\n");
     if (g_mode3OrderCensus)
         fprintf(stderr, "[oit][mode3-order] one-frame fog/late-pass census "
@@ -1269,6 +1285,8 @@ struct SharedMaterialMode {
     int sampleFramebuffer;
     bool transparency;
     bool volumetric;
+    bool initialized;
+    char name[128];
 };
 SharedMaterialMode g_sharedMaterialModes[65536] = {};
 unsigned g_sharedMaterialModeCount = 0;
@@ -2769,6 +2787,14 @@ void nwn_oit_note_shared_material_field(void* sharedMaterial,
     if (parsed == None) return;
 
     SharedMaterialMode* entry = find_shared_material(sharedMaterial);
+    // On the Windows build ParseField precedes SharedMaterial::Init. If this
+    // address belonged to a completed earlier material, the first new field is
+    // therefore the safe reuse boundary. Clear stale routing once, then retain
+    // all fields parsed for this construction until Init marks it complete.
+    if (entry && entry->initialized) {
+        *entry = {};
+        entry->sharedMaterial = sharedMaterial;
+    }
     if (!entry) {
         if (!g_sharedMaterialFreeCount && g_sharedMaterialModeCount >=
             sizeof(g_sharedMaterialModes) / sizeof(g_sharedMaterialModes[0]))
@@ -2786,6 +2812,72 @@ void nwn_oit_note_shared_material_field(void* sharedMaterial,
     else if (parsed == SampleFramebuffer) entry->sampleFramebuffer = value;
     else if (parsed == Volumetric) entry->volumetric = value != 0;
 
+}
+
+void nwn_oit_note_shared_material_init(void* sharedMaterial,
+                                       const char* materialName) {
+    if ((!g_materialIdentityCensus && !g_materialModeRouting) || !sharedMaterial)
+        return;
+    SharedMaterialMode* entry = find_shared_material(sharedMaterial);
+    if (!entry) {
+        if (!g_sharedMaterialFreeCount && g_sharedMaterialModeCount >=
+            sizeof(g_sharedMaterialModes) / sizeof(g_sharedMaterialModes[0]))
+            return;
+        const unsigned index = g_sharedMaterialFreeCount
+            ? g_sharedMaterialFree[--g_sharedMaterialFreeCount]
+            : g_sharedMaterialModeCount++;
+        entry = &g_sharedMaterialModes[index];
+        *entry = {};
+        entry->sharedMaterial = sharedMaterial;
+        index_shared_material(index);
+    }
+    entry->initialized = true;
+    if (materialName && *materialName) {
+        const size_t length = strnlen(materialName, sizeof(entry->name));
+        bool printable = length > 0 && length < sizeof(entry->name);
+        for (size_t i = 0; printable && i < length; ++i) {
+            const unsigned char c = (unsigned char)materialName[i];
+            printable = c >= 0x20 && c <= 0x7e;
+        }
+        if (printable) {
+            std::memcpy(entry->name, materialName, length);
+            entry->name[length] = '\0';
+        }
+    }
+}
+
+void nwn_oit_note_material_shared(void* material, void* sharedMaterial) {
+    if ((!g_materialIdentityCensus && !g_materialModeRouting) || !material)
+        return;
+    MaterialResourceIdentity* entry = find_material_resource(material);
+    if (!entry) {
+        if (!g_materialResourceFreeCount && g_materialResourceCount >=
+            sizeof(g_materialResources) / sizeof(g_materialResources[0]))
+            return;
+        const unsigned index = g_materialResourceFreeCount
+            ? g_materialResourceFree[--g_materialResourceFreeCount]
+            : g_materialResourceCount++;
+        entry = &g_materialResources[index];
+        *entry = {};
+        entry->material = material;
+        index_material_resource(index);
+    }
+    entry->sharedMaterial = sharedMaterial;
+    entry->sharedRoute = shared_material_route(sharedMaterial);
+    if (entry->sharedRoute) {
+        entry->mode = entry->sharedRoute->mode;
+        entry->sampleFramebuffer = entry->sharedRoute->sampleFramebuffer;
+        entry->transparency = entry->sharedRoute->transparency;
+        entry->volumetric = entry->sharedRoute->volumetric;
+        if (!entry->name[0] && entry->sharedRoute->name[0])
+            std::memcpy(entry->name, entry->sharedRoute->name,
+                        sizeof(entry->name));
+    } else {
+        entry->mode = 0;
+        entry->sampleFramebuffer = 0;
+        entry->transparency = false;
+        entry->volumetric = false;
+    }
 }
 
 void nwn_oit_note_material_resource(void* material, void* sharedMaterial,

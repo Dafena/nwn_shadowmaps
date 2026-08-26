@@ -75,15 +75,17 @@ Mode 2 A2C is camera-stable, preserves opaque depth intersections, and receives
 directional/local shadows, with 8x MSAA giving the preferred visual result.
 Multiple covered layers still limit emitter fidelity.
 
-Explicit Mode 3 is an accepted diagnostic hybrid prototype: native-pivot
-coverage forms an opaque depth-writing core and weighted OIT handles only its
-soft fringe. Production activation, lazy private target work, and a clean
-performance matrix remain outstanding.
+Explicit Mode 3 reached an accepted diagnostic hybrid prototype: native-pivot
+coverage formed an opaque depth-writing core and weighted OIT handled only its
+soft fringe. It is now parked. Runtime and census activation switches are
+ignored, authored Mode 3 materials remain native, and OIT is outside the
+current shipping and Windows scope.
 
 An earlier weighted-OIT replay is not the current baseline. Although it could
 blend smoothly, it disappeared at some camera angles and interfered with
-textures, opaque geometry, UI, fog, and water. Weighted OIT will return only as
-an explicitly selected material mode after a read-only MTR parameter census.
+textures, opaque geometry, UI, fog, and water. Any future OIT return requires a
+new explicit maintainer decision and must remain material-selected rather than
+global.
 
 The native Linux MTR census mapped regular transparency to bucket 1,
 `sample_framebuffer 1` to bucket 5, `sample_framebuffer 2` to bucket 6, and
@@ -121,7 +123,7 @@ controls include:
 | Sun | strength, bias, cascade overlap, PCF, composite |
 | Area | day/night fade |
 | Local light | enable, strength, falloff, cone angle, lamp lift, edge fade, slope bias, normal bias, minimum separation, map size |
-| Performance | cascade count, moving/static caster policy, world-map size/extent, receiver and capture A/B controls |
+| Performance | cascade count, local-shadow update (25 ms / 16 ms / every frame), moving/static caster policy, world-map size/extent, receiver and capture A/B controls |
 | Diagnostics | receiver debug modes, frame-cost and target status |
 
 Shipping builds hide controls that can remove the effect, omit diagnostic PGM

@@ -924,8 +924,12 @@ extern "C" void* LightGetShadowLights_trace_detour(void* self, int mode) {
                     else
                         fprintf(stderr,"%s%p[undecoded]", i ? "," : "", candidate);
                 }
-                if (decoded && !info.ambientOnly)
-                    lamp_list_add(candidate, info.pos.x, info.pos.y, info.pos.z, info.radius, false);
+                if (decoded && !info.ambientOnly) {
+#ifndef _WIN32
+                    lamp_list_add(candidate, info.pos.x, info.pos.y, info.pos.z,
+                                  info.radius, false, (int)i);
+#endif
+                }
             }
             if (g_localLightTrace && shouldLog)
                 fprintf(stderr,"%s\n", count > shown ? ",..." : "");
@@ -961,7 +965,7 @@ extern "C" void* LightGetShadowLights_trace_detour(void* self, int mode) {
                 const bool changed = preferred.key != g_engineShadowLightKey;
                 g_engineShadowLightKey = preferred.key;
                 g_haveEngineShadowLight = true;
-                if (changed)
+                if (changed && g_localLightTrace)
                     fprintf(stderr, "[shadowmap][local-light] engine-priority shadow light=%p pos=(%.2f,%.2f,%.2f) r=%.2f\n",
                             preferred.key, preferred.info.pos.x, preferred.info.pos.y,
                             preferred.info.pos.z, preferred.info.radius);
