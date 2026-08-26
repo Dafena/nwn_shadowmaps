@@ -10,6 +10,15 @@
 // provide a value. The environment therefore remains authoritative.
 static const char* const kShippingDefaultEnv[][2] = {
     {"NWN_SHADOWMAP_TRACE",                         "1"},
+#ifdef _WIN32
+    // Despite its historical name, TRACE selects the validated Scene::Render
+    // path that owns cascade fitting, replay, and the fullscreen receiver.
+    // The clean Linux launcher enables the same path.  Bound only its textual
+    // census to one frame/event on launcher-less Windows runs; disabling TRACE
+    // falls back to the obsolete single-map/stencil-visible path.
+    {"NWN_SHADOWMAP_TRACE_FRAMES",                  "1"},
+    {"NWN_SHADOWMAP_TRACE_EVENTS",                  "1"},
+#endif
     {"NWN_SHADOWMAP_CASCADE_LIGHT_CAPTURE",         "1"},
     {"NWN_SHADOWMAP_CASCADE_LIGHT_BUCKET",          "0"},
     {"NWN_SHADOWMAP_STATIC_RECEIVER",               "1"},
@@ -31,11 +40,9 @@ static const char* const kShippingDefaultEnv[][2] = {
     {"NWN_SHADOWMAP_STATIC_WORLD",                  "1"},
     {"NWN_SHADOWMAP_STATIC_WORLD_SIZE",             "8192"},
     {"NWN_SHADOWMAP_STATIC_WORLD_EXTENT",           "128"},
-    {"NWN_SHADOWMAP_LOCAL_LIGHT_TRACE",             "1"},
     {"NWN_SHADOWMAP_LOCAL_LIGHT_CAPTURE",           "1"},
     {"NWN_SHADOWMAP_LOCAL_LIGHT_RECEIVER",          "1"},
-    {"NWN_SHADOWMAP_MAX_LAMPS",                     "8"},
-    {"NWN_SHADOWMAP_LOCAL_LIGHT_SIZE",              "256"},
+    {"NWN_SHADOWMAP_LOCAL_LIGHT_SIZE",              "1024"},
 };
 #endif
 

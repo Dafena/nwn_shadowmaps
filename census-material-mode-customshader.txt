@@ -1,0 +1,57 @@
+[oit][material-mode-census] bucket=0 program=155 fragment=154 location=-1 mode=0 alphaDiscard=missing/-9999.0000 route=late-or-auxiliary-observation-only
+[oit][material-mode-census] bucket=1 program=188 fragment=187 location=2 mode=0 alphaDiscard=0.2000 route=ordinary-alpha-candidate
+[oit][material-mode-census] bucket=1 program=188 fragment=187 location=2 mode=2 alphaDiscard=0.2000 route=ordinary-alpha-candidate
+[oit][material-mode-census] bucket=2 program=167 fragment=166 location=-1 mode=0 alphaDiscard=missing/-9999.0000 route=late-or-auxiliary-observation-only
+[oit][material-mode-census] bucket=3 program=188 fragment=187 location=2 mode=3 alphaDiscard=0.2000 route=ordinary-alpha-candidate
+[oit][material-mode] injected dormant NWN_ALPHA_MODE census into fragment=102
+[oit][material-mode] injected dormant NWN_ALPHA_MODE census into fragment=105
+[oit][material-mode] injected dormant NWN_ALPHA_MODE census into fragment=106
+[oit][material-mode] injected dormant NWN_ALPHA_MODE census into fragment=108
+[oit][material-mode] injected dormant NWN_ALPHA_MODE census into fragment=111
+[oit][material-mode] injected dormant NWN_ALPHA_MODE census into fragment=114
+[oit][material-mode] injected dormant NWN_ALPHA_MODE census into fragment=115
+[oit][material-mode] injected dormant NWN_ALPHA_MODE census into fragment=117
+[oit][material-mode] injected dormant NWN_ALPHA_MODE census into fragment=120
+[oit][material-mode] injected dormant NWN_ALPHA_MODE census into fragment=123
+[oit][material-mode] injected dormant NWN_ALPHA_MODE census into fragment=124
+[oit][material-mode] injected dormant NWN_ALPHA_MODE census into fragment=126
+[oit][material-mode] injected dormant NWN_ALPHA_MODE census into fragment=133
+[oit][material-mode] injected dormant NWN_ALPHA_MODE census into fragment=136
+[oit][material-mode] injected dormant NWN_ALPHA_MODE census into fragment=139
+[oit][material-mode] injected dormant NWN_ALPHA_MODE census into fragment=142
+[oit][material-mode] injected dormant NWN_ALPHA_MODE census into fragment=145
+[oit][material-mode] injected dormant NWN_ALPHA_MODE census into fragment=148
+[oit][material-mode] injected dormant NWN_ALPHA_MODE census into fragment=15
+[oit][material-mode] injected dormant NWN_ALPHA_MODE census into fragment=151
+[oit][material-mode] injected dormant NWN_ALPHA_MODE census into fragment=154
+[oit][material-mode] injected dormant NWN_ALPHA_MODE census into fragment=157
+[oit][material-mode] injected dormant NWN_ALPHA_MODE census into fragment=160
+[oit][material-mode] injected dormant NWN_ALPHA_MODE census into fragment=163
+[oit][material-mode] injected dormant NWN_ALPHA_MODE census into fragment=166
+[oit][material-mode] injected dormant NWN_ALPHA_MODE census into fragment=169
+[oit][material-mode] injected dormant NWN_ALPHA_MODE census into fragment=172
+[oit][material-mode] injected dormant NWN_ALPHA_MODE census into fragment=175
+[oit][material-mode] injected dormant NWN_ALPHA_MODE census into fragment=178
+[oit][material-mode] injected dormant NWN_ALPHA_MODE census into fragment=18
+[oit][material-mode] injected dormant NWN_ALPHA_MODE census into fragment=187
+[oit][material-mode] injected dormant NWN_ALPHA_MODE census into fragment=190
+[oit][material-mode] injected dormant NWN_ALPHA_MODE census into fragment=196
+[oit][material-mode] injected dormant NWN_ALPHA_MODE census into fragment=24
+[oit][material-mode] injected dormant NWN_ALPHA_MODE census into fragment=33
+[oit][material-mode] injected dormant NWN_ALPHA_MODE census into fragment=42
+[oit][material-mode] injected dormant NWN_ALPHA_MODE census into fragment=45
+[oit][material-mode] injected dormant NWN_ALPHA_MODE census into fragment=51
+[oit][material-mode] injected dormant NWN_ALPHA_MODE census into fragment=6
+[oit][material-mode] injected dormant NWN_ALPHA_MODE census into fragment=60
+[oit][material-mode] injected dormant NWN_ALPHA_MODE census into fragment=69
+[oit][material-mode] injected dormant NWN_ALPHA_MODE census into fragment=72
+[oit][material-mode] injected dormant NWN_ALPHA_MODE census into fragment=78
+[oit][material-mode] injected dormant NWN_ALPHA_MODE census into fragment=84
+[oit][material-mode] injected dormant NWN_ALPHA_MODE census into fragment=87
+[oit][material-mode] injected dormant NWN_ALPHA_MODE census into fragment=88
+[oit][material-mode] injected dormant NWN_ALPHA_MODE census into fragment=90
+[oit][material-mode] injected dormant NWN_ALPHA_MODE census into fragment=93
+[oit][material-mode] injected dormant NWN_ALPHA_MODE census into fragment=96
+[oit][material-mode] injected dormant NWN_ALPHA_MODE census into fragment=97
+[oit][material-mode] injected dormant NWN_ALPHA_MODE census into fragment=99
+[oit][material-mode] NWN_ALPHA_MODE census enabled. Valid non-negative modes are read-only; no draw is redirected, suppressed, replayed or restated.

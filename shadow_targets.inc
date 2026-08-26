@@ -88,7 +88,12 @@ static double        g_localJoinLast = 0.0;
 // Level for each published slot this capture, in slot order.
 static float         g_localJoinLevel[kLocalSlotsMax] = {};
 
-static GLuint g_localLightDepthTex     = 0;
+// Double-buffered local depth. Receivers sample only DepthTex (the last
+// completed generation); in-band bucket replays fill WriteDepthTex. Publishing
+// swaps the names after bucket 3, so A2C foliage never samples a texture that
+// bucket 0 has just cleared and only partially refilled.
+static GLuint g_localLightDepthTex      = 0;
+static GLuint g_localLightWriteDepthTex = 0;
 static bool   g_localLightTargetUsable = false;
 // SUN-PATH state. capture_local_light_shadow() publishes the slots and sets
 // these; replay_bucket_into_local_light_layers() consumes them from inside the
@@ -115,10 +120,11 @@ static unsigned g_localInlineDraws[kLocalSlotsMax] = {};
 static unsigned g_localCubeDynamicSkipNoColour = 0;
 static unsigned g_localCubeDynamicSkipStencil = 0;
 static unsigned g_localCubeDynamicSkipNoProgram = 0;
-// Quality selector: Low=66ms, Medium=33ms, High=25ms, Extreme=16ms.
-// High is the default: it tracks a walking creature well without trying to
-// submit six copies of the dynamic stage every 60 Hz frame.
-static int    g_localCubeQuality = 2;
+// Local-shadow update selector exposed by the shipping panel:
+// Low=25ms, Medium=16ms, Ultra=every rendered frame.
+// Low preserves the established shipping cost; Ultra intentionally matches
+// the directional-shadow refresh cadence.
+static int    g_localCubeQuality = 0;
 // LOCAL SHADOW SOURCES -- how many lights get a shadow map, 1..3.
 //
 // There used to be three METHODS here (Legacy / Emitter / High) selected by the
@@ -145,12 +151,11 @@ static inline int lamp_upload_max() {
     // injector-side control: a second copy of an engine setting can only ever
     // disagree with it.
     //
-    // HISTORY, because this was reverted once: tying it to the engine on
-    // 2026-08-15 regressed Windows, which reports 64 against the old shipping
-    // default of 8 -- eight times as many lamps feeding the sun-shadow lift, and
-    // local lighting visibly changed. Restored at the maintainer's explicit
-    // second request after the carried-torch bug (the actual cause of what
-    // looked like a lift problem) was fixed.
+    // HISTORY: Windows temporarily retained an injector-side shipping cap of
+    // 8 after the shared path had moved back to the engine value.  Zooming the
+    // camera out then let nearby area lamps displace the carried torch from the
+    // lift set.  The shadow-map capture budget is a separate three-light cap;
+    // following the engine here only governs the cheap sun-lift loop.
     //
     // NWN_SHADOWMAP_MAX_LAMPS still overrides for A/B; 0 means follow the game.
     if (g_lampUploadMax > 0) return g_lampUploadMax;
@@ -211,12 +216,11 @@ static inline float local_face_fov_deg(int) { return g_localLightFovDeg; }
 // ZERO on purpose: the gate is `now - last < interval`, and `0 < 0` is false,
 // so a zero interval rebuilds every frame. That is the pre-cadence behaviour,
 // kept as a deliberate choice rather than an accident.
-static constexpr double kLocalCubeCadenceSeconds[] =
-    {0.066, 0.033, 0.025, 0.016, 0.0};
+static constexpr double kLocalCubeCadenceSeconds[] = {0.025, 0.016, 0.0};
 static constexpr int kLocalCubeQualityCount =
     (int)(sizeof(kLocalCubeCadenceSeconds) / sizeof(kLocalCubeCadenceSeconds[0]));
 static constexpr int kLocalCubeQualityMax = kLocalCubeQualityCount - 1;
-static double g_localCubeUpdateSeconds = kLocalCubeCadenceSeconds[2];
+static double g_localCubeUpdateSeconds = kLocalCubeCadenceSeconds[0];
 // Forget the engine's current shadow-light selection, so the next area starts
 // from NWN's own answer rather than the previous area's.
 static void reset_engine_shadow_light_anchor() {
@@ -322,7 +326,10 @@ static double injector_target_mib() {
     if (g_sceneDepthTex)     bytes += (double)g_sceneDepthW * g_sceneDepthH * depth24;
     if (g_localLightDepthTex)
         bytes += (double)g_localLightCaptureSize * g_localLightCaptureSize *
-                 kLocalLightFaces * depth24;
+                 g_localLightLayers * depth24;
+    if (g_localLightWriteDepthTex)
+        bytes += (double)g_localLightCaptureSize * g_localLightCaptureSize *
+                 g_localLightLayers * depth24;
     return bytes / (1024.0 * 1024.0);
 }
 

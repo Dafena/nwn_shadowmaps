@@ -15,7 +15,7 @@ static void create_local_light_target() {
 
     GLint prevFBO = 0, prevTex = 0;
     gl::GetIntegerv(GL_FRAMEBUFFER_BINDING, &prevFBO);
-    gl::GetIntegerv(GL_TEXTURE_BINDING_2D, &prevTex);
+    gl::GetIntegerv(GL_TEXTURE_BINDING_2D_ARRAY, &prevTex);
     while (gl::GetError() != GL_NO_ERROR) {}   // drain pre-existing errors
 
     // SIX FACES, as a depth 2D ARRAY. A point light needs the whole sphere:
@@ -48,26 +48,41 @@ static void create_local_light_target() {
     // compare-mode texture through a non-shadow sampler is undefined.
     gl::TexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_COMPARE_MODE, 0 /*GL_NONE*/);
 
+    gl::GenTextures(1, &g_localLightWriteDepthTex);
+    gl::BindTexture(GL_TEXTURE_2D_ARRAY, g_localLightWriteDepthTex);
+    gl::TexImage3D(GL_TEXTURE_2D_ARRAY, 0, GL_DEPTH_COMPONENT24,
+                   g_localLightCaptureSize, g_localLightCaptureSize,
+                   g_localLightLayers, 0,
+                   GL_DEPTH_COMPONENT, GL_UNSIGNED_INT, nullptr);
+    gl::TexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+    gl::TexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+    gl::TexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    gl::TexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    gl::TexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_COMPARE_MODE, 0 /*GL_NONE*/);
+
     const GLenum errTex = gl::GetError();
 
     gl::GenFramebuffers(1, &g_localLightFbo);
     gl::BindFramebuffer(GL_FRAMEBUFFER, g_localLightFbo);
     gl::FramebufferTextureLayer(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT,
-                                g_localLightDepthTex, 0, 0);
+                                g_localLightWriteDepthTex, 0, 0);
     gl::DrawBuffer(GL_NONE);
     gl::ReadBuffer(GL_NONE);
     const GLenum status = gl::CheckFramebufferStatus(GL_FRAMEBUFFER);
     const GLenum errFbo = gl::GetError();
 
-    g_localLightTargetUsable = (status == GL_FRAMEBUFFER_COMPLETE) &&
+    g_localLightTargetUsable = g_localLightDepthTex &&
+                               g_localLightWriteDepthTex &&
+                               (status == GL_FRAMEBUFFER_COMPLETE) &&
                                errTex == GL_NO_ERROR && errFbo == GL_NO_ERROR;
 
     gl::BindFramebuffer(GL_FRAMEBUFFER, (GLuint)prevFBO);
-    gl::BindTexture(GL_TEXTURE_2D, (GLuint)prevTex);
+    gl::BindTexture(GL_TEXTURE_2D_ARRAY, (GLuint)prevTex);
 
-    fprintf(stderr, "[shadowmap][local-light] target %dx%dx6 fbo=%u tex=%u status=%s usable=%s\n",
+    fprintf(stderr, "[shadowmap][local-light] ping-pong target %dx%dx%d fbo=%u read=%u write=%u status=%s usable=%s\n",
             g_localLightCaptureSize, g_localLightCaptureSize,
-            g_localLightFbo, g_localLightDepthTex, fbo_status_str(status),
+            g_localLightLayers, g_localLightFbo, g_localLightDepthTex,
+            g_localLightWriteDepthTex, fbo_status_str(status),
             g_localLightTargetUsable ? "yes" : "no");
 }
 
@@ -131,7 +146,9 @@ static void capture_local_light_shadow(void* scene) {
             g_localLightLayers = want;
             gl::DeleteFramebuffers(1, &g_localLightFbo);
             if (g_localLightDepthTex) gl::DeleteTextures(1, &g_localLightDepthTex);
+            if (g_localLightWriteDepthTex) gl::DeleteTextures(1, &g_localLightWriteDepthTex);
             g_localLightFbo = 0; g_localLightDepthTex = 0;
+            g_localLightWriteDepthTex = 0;
             g_localLightTargetUsable = false;
             g_haveLocalLightVP = false;
             g_localLightSlotCount = 0;
@@ -149,8 +166,10 @@ static void capture_local_light_shadow(void* scene) {
                 g_localLightLayers / (1024.0*1024.0));
         if (g_localLightFbo)      gl::DeleteFramebuffers(1, &g_localLightFbo);
         if (g_localLightDepthTex) gl::DeleteTextures(1, &g_localLightDepthTex);
+        if (g_localLightWriteDepthTex) gl::DeleteTextures(1, &g_localLightWriteDepthTex);
         g_localLightFbo = 0;
         g_localLightDepthTex = 0;
+        g_localLightWriteDepthTex = 0;
         g_localLightTargetUsable = false;
         g_localVisibleDynamicPrepared = false;
         g_localVisibleDynamicCaptureActive = false;
@@ -462,6 +481,14 @@ static void capture_local_light_shadow(void* scene) {
             if (!j.key || j.live || j.radius <= 0.0f) continue;
             if (!bestFading || j.level > bestFading->level) bestFading = &j;
         }
+#ifdef _WIN32
+        // NWN's Windows list churns while moving.  Never let a cosmetic
+        // retirement fade exceed the advertised capture budget there: the
+        // extra 2048^2 capture was the measured movement stutter.
+        const unsigned publishLimit = (unsigned)slotBudget;
+#else
+        const unsigned publishLimit = (unsigned)kLocalLightFaces;
+#endif
         for (int pass = 0; pass < 2; ++pass) {
             for (auto& j : g_localJoin) {
                 if (!j.key || j.radius <= 0.0f) continue;
@@ -470,7 +497,7 @@ static void capture_local_light_shadow(void* scene) {
                     if (&j != bestFading || fadingPublished) continue;
                     ++fadingPublished;
                 }
-                if (slotCount >= (unsigned)kLocalLightFaces) break;
+                if (slotCount >= publishLimit) break;
                 slots[slotCount].pos[0] = j.pos[0];
                 slots[slotCount].pos[1] = j.pos[1];
                 slots[slotCount].pos[2] = j.pos[2];
@@ -576,20 +603,14 @@ static void capture_local_light_shadow(void* scene) {
             const Vec3f lp = { slots[i].pos[0], slots[i].pos[1],
                                slots[i].pos[2] + g_localLightHeight, 1.0f };
             build_lookat(lp, aim, viewI);
-            mat4_mul(projI, viewI, g_localLightFaceVP[slot]);
+            mat4_mul(projI, viewI, g_localVisibleVP[slot]);
             std::memcpy(g_localVisibleView[slot], viewI, sizeof(viewI));
             std::memcpy(g_localVisibleProj[slot], projI, sizeof(projI));
-            std::memcpy(g_localVisibleVP[slot], g_localLightFaceVP[slot],
-                        sizeof(g_localLightFaceVP[slot]));
-            g_localLightSlotPos[slot][0] = slots[i].pos[0];
-            g_localLightSlotPos[slot][1] = slots[i].pos[1];
-            g_localLightSlotPos[slot][2] = slots[i].pos[2];
-            g_localLightSlotRadius[slot] = r;
-            g_localLightSlotFade[slot] = slots[i].fade;
-            g_localVisibleSlotFade[slot] = slots[i].fade;
-            std::memcpy(g_localVisibleSlotPos[slot], g_localLightSlotPos[slot],
-                        sizeof(g_localLightSlotPos[slot]));
+            g_localVisibleSlotPos[slot][0] = slots[i].pos[0];
+            g_localVisibleSlotPos[slot][1] = slots[i].pos[1];
+            g_localVisibleSlotPos[slot][2] = slots[i].pos[2];
             g_localVisibleSlotRadius[slot] = r;
+            g_localVisibleSlotFade[slot] = slots[i].fade;
         }
     }
     // From here on "slot" is what the receiver and the replay both iterate.
@@ -610,28 +631,9 @@ static void capture_local_light_shadow(void* scene) {
     g_localInlinePolicyEpoch = g_localLightCapturePolicyEpoch;
     g_localInlinePrepared = true;
 
-    // Publish what the receiver needs, tagged with this frame's serial. The
-    // world position/radius drive a simple distance falloff so the shadow
-    // fades out at the edge of the light's reach instead of ending abruptly
-    // at the depth map's frustum boundary.
-    mat4_mul(g_localLightProj, g_localLightView, g_localLightVP);
-    g_localLightWorldPos[0] = info.pos.x;
-    g_localLightWorldPos[1] = info.pos.y;
-    g_localLightWorldPos[2] = info.pos.z;
-    // The attenuation uses the SAME held radius as the frustum. Using the
-    // flickering value here made the shadow fade in and out with the flame.
-    g_localLightWorldRadius = stableRadius;
-    g_haveLocalLightVP = true;
-    g_localLightVPFrame = g_shadowFrameContext.serial;
-    // PUBLISH THE SLOT COUNT. Only the visible-capture path used to set this,
-    // because the bucket replay was a one-shot fallback that ran after a
-    // successful publish had already set it. As a standing mode ("0 - legacy")
-    // nothing sets it, the receiver uploads nwnLocalSlots = 0, and the shader's
-    // per-slot loop never executes -- the map is filled correctly and then
-    // never sampled.
-    g_localLightSlotCount = slotCount;
-    g_localLightCompletedPolicyEpoch = g_localLightCapturePolicyEpoch;
-    g_localLightLastCaptureTime = now_seconds();
+    // Do not publish matrices, slots, or freshness here. The write texture is
+    // still empty at this point; the next area render fills it in-band. Bucket
+    // 3 completion atomically swaps the texture and this staged metadata.
 
     // SUN-PATH is finished here: everything below is the standalone replay it
     // exists to avoid. Running both would draw every caster twice.

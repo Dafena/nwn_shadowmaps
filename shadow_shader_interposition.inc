@@ -390,14 +390,340 @@ static bool inject_marker(std::string& source) {
     return false;
 }
 
+// Add the accumulation side of the foliage experiment without activating it.
+// The stock fragment template has one compatibility output and centralises
+// alpha testing through ALPHA_DISCARD_VALUE, which gives us two stable source
+// anchors. nwnOitPass defaults to zero in OpenGL, so every ordinary camera and
+// shadow draw remains byte-for-byte equivalent until the future late replay
+// explicitly sets the uniform.
+static bool inject_oit_foliage_branch(std::string& source) {
+    if (!nwn_oit_wants_foliage_shader_branch()) return false;
+    std::string patched = source;
+    const bool explicitContinuousAlpha =
+        patched.find("#define NWN_CONTINUOUS_ALPHA_SHADER 1") !=
+        std::string::npos;
+
+    static const char* kOutput = "out vec4 compat_glFragColor;";
+    static const char* kOutputs =
+        "layout(location=0) out vec4 compat_glFragColor;\n"
+        "layout(location=1) out vec4 nwnOitSum;\n"
+        "layout(location=2) out vec4 nwnOitTranslucence;\n"
+        "uniform int nwnOitPass;\n"
+        "uniform int nwnOitFringeOnly;\n"
+        "uniform float nwnOitCutoff;\n"
+        "uniform float nwnOitAlphaGain;\n"
+        "uniform int nwnOitNormalizeCutout;\n"
+        "uniform float nwnOitNormalizePivot;\n"
+        "uniform int nwnOitCoreResetPass;\n"
+        "uniform int nwnOitDepthPass;\n"
+        "uniform int nwnOitOpaqueCore;\n"
+        "uniform int nwnA2cPass;\n"
+        "uniform int nwnA2cEmitterPass;\n"
+        "uniform sampler2DMS nwnA2cEmitterOpaqueDepth;\n"
+        "uniform vec4 nwnA2cEmitterViewport;\n"
+        "uniform float nwnA2cEmitterDepthBias;\n"
+        "uniform int nwnA2cEmitterSamples;\n"
+        "uniform sampler2DArrayShadow nwnA2cStaticDepth;\n"
+        "uniform sampler2DArrayShadow nwnA2cDynamicDepth;\n"
+        "uniform mat4 nwnA2cCameraVPInv;\n"
+        "uniform mat4 nwnA2cCameraView;\n"
+        "uniform mat4 nwnA2cLightVP[4];\n"
+        "uniform vec4 nwnA2cClipFar;\n"
+        "uniform vec4 nwnA2cViewport;\n"
+        "uniform int nwnA2cDynamicLayers;\n"
+        "uniform float nwnA2cShadowStrength;\n"
+        "uniform float nwnA2cShadowBias;\n"
+        "uniform float nwnA2cShadowBlend;\n"
+        "uniform float nwnA2cShadowPcf;\n"
+        "uniform float nwnA2cSelfIllumGuard;\n"
+        "uniform vec4 nwnA2cLamps[128];\n"
+        "uniform int nwnA2cLampCount;\n"
+        "uniform float nwnA2cLampLift;\n"
+        "uniform sampler2DArray nwnA2cLocalDepth;\n"
+        "uniform mat4 nwnA2cLocalVP[32];\n"
+        "uniform vec4 nwnA2cLocalPos[32];\n"
+        "uniform float nwnA2cLocalRadius[32];\n"
+        "uniform float nwnA2cLocalFade[32];\n"
+        "uniform int nwnA2cLocalSlots;\n"
+        "uniform float nwnA2cLocalStrength;\n"
+        "uniform float nwnA2cLocalBias;\n"
+        "uniform float nwnA2cLocalEdgeFade;\n"
+        "uniform float nwnA2cLocalSoft;\n"
+        "uniform float nwnA2cLocalNormalBias;\n"
+        "uniform float nwnA2cLocalMinSep;\n"
+        "uniform float nwnA2cLocalTanHalfFov;\n"
+        "uniform float nwnA2cLocalLift;\n"
+        "uniform float nwnA2cLocalFalloff;\n"
+        "uniform vec2 nwnA2cLampFalloff;";
+    const size_t outputAt = patched.find(kOutput);
+    if (outputAt == std::string::npos) return false;
+    patched.replace(outputAt, std::strlen(kOutput), kOutputs);
+
+    // The template is concatenated from guarded includes and can contain the
+    // same inactive definition more than once. Replace every exact definition;
+    // the preprocessor will still select the same one it selected originally.
+    static const char* kDiscard =
+        "#define ALPHA_DISCARD_VALUE fAlphaDiscardValue";
+    static const char* kOitDiscard =
+        "#define ALPHA_DISCARD_VALUE (((nwnOitPass != 0) || (nwnA2cPass != 0)) ? 0.01 : "
+        "((nwnOitDepthPass != 0) ? 0.25 : "
+        "((nwnOitOpaqueCore != 0) ? nwnOitCutoff : fAlphaDiscardValue)))";
+    size_t searchAt = 0;
+    unsigned discardDefinitions = 0;
+    while ((searchAt = patched.find(kDiscard, searchAt)) != std::string::npos) {
+        patched.replace(searchAt, std::strlen(kDiscard), kOitDiscard);
+        searchAt += std::strlen(kOitDiscard);
+        ++discardDefinitions;
+    }
+    // Explicit custom shaders can compute coverage independently of
+    // inc_standard's ALPHA_DISCARD_VALUE path. Their final gl_FragColor alpha
+    // is authoritative, so the injected tail remains valid even when there is
+    // no stock discard macro to rewrite.
+    if (!discardDefinitions && !explicitContinuousAlpha) return false;
+
+    const size_t mainAt = patched.rfind("void main");
+    if (mainAt == std::string::npos) return false;
+    const size_t open = patched.find('{', mainAt);
+    if (open == std::string::npos) return false;
+    int braces = 0;
+    size_t close = std::string::npos;
+    for (size_t i = open; i < patched.size(); ++i) {
+        if (patched[i] == '{') ++braces;
+        else if (patched[i] == '}' && --braces == 0) {
+            close = i;
+            break;
+        }
+    }
+    if (close == std::string::npos) return false;
+
+    static const char* kBody =
+        "\n    // smooth-alpha MRT branch injected by libnwn_shadowmap.so\n"
+        "    if (nwnA2cEmitterPass != 0) {\n"
+        "        ivec2 nwnEmitterPixel=ivec2(gl_FragCoord.xy-nwnA2cEmitterViewport.xy);\n"
+        "        float nwnOpaqueDepth=1.0;\n"
+        "        for(int nwnSample=0;nwnSample<nwnA2cEmitterSamples&&nwnSample<16;++nwnSample)\n"
+        "            nwnOpaqueDepth=min(nwnOpaqueDepth,texelFetch(nwnA2cEmitterOpaqueDepth,nwnEmitterPixel,nwnSample).r);\n"
+        "        if(gl_FragCoord.z>nwnOpaqueDepth+nwnA2cEmitterDepthBias) discard;\n"
+        "    } else if (nwnOitCoreResetPass != 0) {\n"
+        "        gl_FragColor = vec4(0.0);\n"
+        "        nwnOitSum = vec4(0.0);\n"
+        "        nwnOitTranslucence = vec4(1.0, 0.0, 0.0, 0.0);\n"
+        "    } else if (nwnOitPass != 0) {\n"
+        "        float nwnOitAlpha = clamp(gl_FragColor.a, 0.0, 1.0);\n"
+        "        if (nwnOitAlpha <= 0.01) discard;\n"
+        "        if (nwnOitNormalizeCutout != 0)\n"
+        "            nwnOitAlpha = clamp(nwnOitAlpha / max(nwnOitNormalizePivot, 0.01), 0.0, 1.0);\n"
+        "        nwnOitAlpha = 1.0 - pow(1.0 - nwnOitAlpha, max(nwnOitAlphaGain, 0.01));\n"
+        "        if (nwnOitFringeOnly != 0 && nwnOitAlpha >= nwnOitCutoff) discard;\n"
+        "        gl_FragColor = vec4(gl_FragColor.rgb * nwnOitAlpha, 1.0);\n"
+        "        nwnOitSum = vec4(nwnOitAlpha, 0.0, 0.0, 1.0);\n"
+        "        nwnOitTranslucence = vec4(0.0, 0.0, 0.0, 1.0 - nwnOitAlpha);\n"
+        "    } else if (nwnA2cPass != 0) {\n"
+        "        float nwnDirLit = nwnA2cDirectionalShadow();\n"
+        "        if (nwnA2cSelfIllumGuard < 1.0) {\n"
+        "            float nwnLum = max(gl_FragColor.r, max(gl_FragColor.g, gl_FragColor.b));\n"
+        "            float nwnKeepShadow = 1.0-smoothstep(nwnA2cSelfIllumGuard,1.0,nwnLum);\n"
+        "            nwnDirLit = 1.0-(1.0-nwnDirLit)*nwnKeepShadow;\n"
+        "        }\n"
+        "        gl_FragColor.rgb *= min(nwnDirLit, nwnA2cLocalShadow());\n"
+        "    } else if (nwnOitOpaqueCore != 0) {\n"
+        "        // Stock shaders already test ALPHA_DISCARD_VALUE, but custom\n"
+        "        // shaders may compute their real coverage only in the final\n"
+        "        // output. Apply the same core cutoff to that final alpha.\n"
+        "        if (clamp(gl_FragColor.a, 0.0, 1.0) < nwnOitCutoff) discard;\n"
+        "        gl_FragColor.a = 1.0;\n"
+        "    }\n";
+    patched.insert(close, kBody);
+
+    static const char* kA2cShadowHelpers =
+        "float nwnA2cLayerLit(int layer, vec4 worldPos) {\n"
+        "    vec4 lp = nwnA2cLightVP[layer] * worldPos;\n"
+        "    if (lp.w <= 0.0) return 1.0;\n"
+        "    vec3 s = lp.xyz / lp.w * 0.5 + 0.5;\n"
+        "    if (s.x <= 0.0 || s.x >= 1.0 || s.y <= 0.0 || s.y >= 1.0 || s.z <= 0.0 || s.z >= 1.0) return 1.0;\n"
+        "    vec2 texel = 1.0 / vec2(textureSize(nwnA2cStaticDepth, 0).xy);\n"
+        "    float total = 0.0;\n"
+        "    for (int y=-1; y<=1; ++y) for (int x=-1; x<=1; ++x) {\n"
+        "        vec2 uv = s.xy + vec2(float(x),float(y)) * texel * nwnA2cShadowPcf;\n"
+        "        float a = texture(nwnA2cStaticDepth, vec4(uv,float(layer),s.z-nwnA2cShadowBias));\n"
+        "        float b = layer < nwnA2cDynamicLayers ? texture(nwnA2cDynamicDepth, vec4(uv,float(layer),s.z-nwnA2cShadowBias)) : 1.0;\n"
+        "        total += min(a,b);\n"
+        "    }\n"
+        "    return total / 9.0;\n"
+        "}\n"
+        "float nwnA2cDirectionalShadow() {\n"
+        "    if (nwnA2cShadowStrength <= 0.0) return 1.0;\n"
+        "    vec2 uv = (gl_FragCoord.xy - nwnA2cViewport.xy) / nwnA2cViewport.zw;\n"
+        "    vec4 w = nwnA2cCameraVPInv * vec4(uv*2.0-1.0, gl_FragCoord.z*2.0-1.0, 1.0);\n"
+        "    if (abs(w.w) < 1e-6) return 1.0;\n"
+        "    w /= w.w;\n"
+        "    float z = -((nwnA2cCameraView*w).z);\n"
+        "    if (z <= 0.0 || z > nwnA2cClipFar.w) return 1.0;\n"
+        "    int layer = z <= nwnA2cClipFar.x ? 0 : (z <= nwnA2cClipFar.y ? 1 : (z <= nwnA2cClipFar.z ? 2 : 3));\n"
+        "    float lit = nwnA2cLayerLit(layer,w);\n"
+        "    if (nwnA2cShadowBlend > 0.0 && layer < 3) {\n"
+        "        float edge = layer==0 ? nwnA2cClipFar.x : (layer==1 ? nwnA2cClipFar.y : nwnA2cClipFar.z);\n"
+        "        float from = max(0.0, edge-nwnA2cShadowBlend);\n"
+        "        if (z > from) lit = mix(lit,nwnA2cLayerLit(layer+1,w),smoothstep(from,edge,z));\n"
+        "    }\n"
+        "    float shade=nwnA2cShadowStrength*(1.0-lit);\n"
+        "    float lampLit=0.0;\n"
+        "    if(shade>0.0&&nwnA2cLampLift>0.0){\n"
+        "        for(int li=0;li<nwnA2cLampCount&&li<128;++li){\n"
+        "            float r2=nwnA2cLamps[li].w; if(r2<=0.0) continue;\n"
+        "            vec3 off=w.xyz-nwnA2cLamps[li].xyz;\n"
+        "            float d2=dot(off,off); if(d2>=r2) continue;\n"
+        "            float f=d2/r2;\n"
+        "            float att=(1.0-f)/max(1e-4,nwnA2cLampFalloff.x+nwnA2cLampFalloff.y*f);\n"
+        "            lampLit=max(lampLit,clamp(att,0.0,1.0));\n"
+        "        }\n"
+        "    }\n"
+        "    shade*=1.0-clamp(nwnA2cLampLift*lampLit,0.0,1.0);\n"
+        "    return 1.0-shade;\n"
+        "}\n"
+        "float nwnA2cLocalShadow() {\n"
+        "    if (nwnA2cLocalStrength <= 0.0 || nwnA2cLocalSlots <= 0) return 1.0;\n"
+        "    vec2 uv = (gl_FragCoord.xy - nwnA2cViewport.xy) / nwnA2cViewport.zw;\n"
+        "    vec4 w = nwnA2cCameraVPInv * vec4(uv*2.0-1.0, gl_FragCoord.z*2.0-1.0, 1.0);\n"
+        "    if (abs(w.w) < 1e-6) return 1.0;\n"
+        "    w /= w.w;\n"
+        "    vec3 dxw=dFdx(w.xyz), dyw=dFdy(w.xyz);\n"
+        "    vec3 nrm=cross(dxw,dyw);\n"
+        "    float nl=length(nrm); nrm=nl>1e-6?nrm/nl:vec3(0.0);\n"
+        "    float step2=max(dot(dxw,dxw),dot(dyw,dyw));\n"
+        "    nrm*=1.0-smoothstep(0.02,0.09,step2);\n"
+        "    float best=0.0;\n"
+        "    for(int sl=0;sl<nwnA2cLocalSlots&&sl<32;++sl){\n"
+        "        float rr=nwnA2cLocalRadius[sl]; if(rr<=0.0) continue;\n"
+        "        vec3 off=w.xyz-nwnA2cLocalPos[sl].xyz;\n"
+        "        float d2=dot(off,off); if(d2>=rr*rr) continue;\n"
+        "        float dist=sqrt(max(d2,1e-8));\n"
+        "        float texw=nwnA2cLocalTanHalfFov*dist/float(textureSize(nwnA2cLocalDepth,0).x);\n"
+        "        vec3 nlight=nrm*(dot(nrm,nwnA2cLocalPos[sl].xyz-w.xyz)>=0.0?1.0:-1.0);\n"
+        "        vec4 lp=nwnA2cLocalVP[sl]*vec4(w.xyz+nlight*texw*nwnA2cLocalNormalBias,1.0);\n"
+        "        if(lp.w<=0.0) continue;\n"
+        "        vec3 s=lp.xyz/lp.w*0.5+0.5;\n"
+        "        if(s.x<=0.0||s.x>=1.0||s.y<=0.0||s.y>=1.0||s.z<=0.0||s.z>=1.0) continue;\n"
+        "        vec2 eg=min(s.xy,vec2(1.0)-s.xy);\n"
+        "        float edge=clamp(min(eg.x,eg.y)/max(1e-4,nwnA2cLocalEdgeFade),0.0,1.0);\n"
+        "        edge*=clamp((1.0-s.z)/max(1e-4,nwnA2cLocalEdgeFade*0.5),0.0,1.0);\n"
+        "        edge=edge*edge*(3.0-2.0*edge);\n"
+        "        float zn=max(0.05,min(0.5,rr*0.01));\n"
+        "        float zf=max(20.0,rr*2.0+max(0.0,nwnA2cLocalLift));\n"
+        "        float dzdd=zn*zf/max(1e-6,dist*dist*(zf-zn));\n"
+        "        float need=nwnA2cLocalBias+nwnA2cLocalMinSep*dzdd;\n"
+        "        float lit=0.0;\n"
+        "        if(nwnA2cLocalSoft<=0.0){\n"
+        "            float st=texture(nwnA2cLocalDepth,vec3(s.xy,float(sl))).r;\n"
+        "            lit=(s.z-need<=st)?1.0:0.0;\n"
+        "        }else{\n"
+        "            vec2 tx=1.0/vec2(textureSize(nwnA2cLocalDepth,0).xy);\n"
+        "            for(int y=-1;y<=1;++y)for(int x=-1;x<=1;++x){\n"
+        "                float st=texture(nwnA2cLocalDepth,vec3(s.xy+vec2(float(x),float(y))*tx*nwnA2cLocalSoft,float(sl))).r;\n"
+        "                lit+=(s.z-need<=st)?1.0:0.0;\n"
+        "            }\n"
+        "            lit/=9.0;\n"
+        "        }\n"
+        "        float f=d2/(rr*rr);\n"
+        "        float att=clamp((1.0-f)/max(1e-4,nwnA2cLampFalloff.x+nwnA2cLampFalloff.y*f),0.0,1.0);\n"
+        "        att=pow(att,max(0.05,nwnA2cLocalFalloff));\n"
+        "        best=max(best,clamp(1.0-lit,0.0,1.0)*att*edge*nwnA2cLocalFade[sl]);\n"
+        "    }\n"
+        "    return 1.0-nwnA2cLocalStrength*best;\n"
+        "}\n";
+    patched.insert(mainAt, kA2cShadowHelpers);
+    source.swap(patched);
+    return true;
+}
+
+// Material-mode discovery is intentionally separate from the much larger OIT
+// branch. NWN only uploads custom MTR parameters for active uniforms, so the
+// reserved negative guard keeps NWN_ALPHA_MODE live without changing any
+// documented mode (all valid modes are non-negative). The census never sets
+// this uniform itself and never changes GL state.
+static bool inject_material_mode_census(std::string& source) {
+    if (!nwn_oit_wants_material_mode_census() ||
+        source.find("NWN_ALPHA_MODE") != std::string::npos)
+        return false;
+
+    // The stock template contains several preprocessor-selected main
+    // definitions. rfind("void main") can select an inactive branch, which
+    // makes both the declaration and use disappear before link. Put the
+    // declaration in unconditional global scope immediately after #version,
+    // then instrument every candidate main; the preprocessor keeps exactly the
+    // guard belonging to the active variant.
+    const size_t versionAt = source.find("#version");
+    if (versionAt == std::string::npos) return false;
+    const size_t versionEnd = source.find('\n', versionAt);
+    if (versionEnd == std::string::npos) return false;
+    static const char* declaration = "uniform int NWN_ALPHA_MODE;\n";
+    source.insert(versionEnd + 1, declaration);
+
+    static const char* guard =
+        "\n    // Negative values are reserved; valid census modes are inert.\n"
+        "    if (NWN_ALPHA_MODE < 0) discard;\n";
+    size_t searchAt = versionEnd + 1 + std::strlen(declaration);
+    unsigned mains = 0;
+    while ((searchAt = source.find("void main", searchAt)) != std::string::npos) {
+        const size_t open = source.find('{', searchAt);
+        if (open == std::string::npos) break;
+        source.insert(open + 1, guard);
+        searchAt = open + 1 + std::strlen(guard);
+        ++mains;
+    }
+    return mains != 0;
+}
+
+// Particle emitters use a different stock fragment family from alpha-discard
+// foliage. Give every ordinary scene-colour fragment a tiny, inert opaque-depth
+// branch; live draw classification still requires the selected area's measured
+// particle bucket/blend signature, so UI and non-particle materials never
+// activate it.
+static bool inject_a2c_emitter_branch(std::string& source) {
+    if (!nwn_oit_wants_a2c_emitter_shader_branch() ||
+        source.find("nwnA2cEmitterPass") != std::string::npos ||
+        source.find("gl_FragColor") == std::string::npos)
+        return false;
+    const size_t mainAt = source.rfind("void main");
+    if (mainAt == std::string::npos) return false;
+    static const char* declarations =
+        "uniform int nwnA2cEmitterPass;\n"
+        "uniform sampler2DMS nwnA2cEmitterOpaqueDepth;\n"
+        "uniform vec4 nwnA2cEmitterViewport;\n"
+        "uniform float nwnA2cEmitterDepthBias;\n"
+        "uniform int nwnA2cEmitterSamples;\n";
+    source.insert(mainAt, declarations);
+    const size_t shiftedMain = mainAt + std::strlen(declarations);
+    const size_t open = source.find('{', shiftedMain);
+    if (open == std::string::npos) return false;
+    int braces = 0;
+    size_t close = std::string::npos;
+    for (size_t i = open; i < source.size(); ++i) {
+        if (source[i] == '{') ++braces;
+        else if (source[i] == '}' && --braces == 0) { close = i; break; }
+    }
+    if (close == std::string::npos) return false;
+    static const char* body =
+        "\nif(nwnA2cEmitterPass!=0){\n"
+        " ivec2 p=ivec2(gl_FragCoord.xy-nwnA2cEmitterViewport.xy);\n"
+        " float d=1.0;\n"
+        " for(int s=0;s<nwnA2cEmitterSamples&&s<16;++s)\n"
+        "  d=min(d,texelFetch(nwnA2cEmitterOpaqueDepth,p,s).r);\n"
+        " if(gl_FragCoord.z>d+nwnA2cEmitterDepthBias) discard;\n"
+        "}\n";
+    source.insert(close, body);
+    return true;
+}
+
 extern "C" void my_shader_source(GLuint shader, GLsizei count,
                                    const char* const* string, const GLint* length) {
     const bool dumpVertex = shadow_getenv("NWN_SHADOWMAP_DUMP_VERTEX") != nullptr;
     const bool dumpFragment = shadow_getenv("NWN_SHADOWMAP_DUMP_FRAGMENT") != nullptr;
     const bool staticAlphaProbe = g_cascadeStaticAlphaCapture ||
                                   g_cascadeStaticAlphaReceiver;
+    const bool oitFoliageProbe = nwn_oit_needs_shader_sources();
     if (!g_realShaderSource || (!g_injectTest && !dumpVertex && !dumpFragment &&
-                                !staticAlphaProbe) ||
+                                !staticAlphaProbe && !oitFoliageProbe) ||
         count <= 0 || !string) {
         if (g_realShaderSource) g_realShaderSource(shader, count, string, length);
         return;
@@ -412,17 +738,49 @@ extern "C" void my_shader_source(GLuint shader, GLsizei count,
     // `mzmap_006` has no custom shader; it selects NWN's compiled stock alpha
     // variant (`NO_DISCARD 0`) which exposes fAlphaDiscardValue. Persist only
     // the real fragment object identity; source and runtime shader stay intact.
-    if (staticAlphaProbe &&
+    const bool stockAlphaVariant =
         combined.find("#define NO_DISCARD 0") != std::string::npos &&
-        combined.find("fAlphaDiscardValue") != std::string::npos) {
-        bool seen = false;
-        for (GLuint id : g_cascadeStaticAlphaFragments)
-            if (id == shader) { seen = true; break; }
-        if (!seen) {
-            g_cascadeStaticAlphaFragments.push_back(shader);
-            fprintf(stderr, "[shadowmap][alpha] classified static AlphaDiscard fragment=%u\n",
-                    shader);
+        combined.find("fAlphaDiscardValue") != std::string::npos;
+    const bool customContinuousAlphaVariant =
+        combined.find("#define NWN_CONTINUOUS_ALPHA_SHADER 1") !=
+        std::string::npos;
+    bool oitFoliageInjected = false;
+    bool materialModeInjected = false;
+    bool a2cEmitterInjected = false;
+    if (stockAlphaVariant || customContinuousAlphaVariant) {
+        if (staticAlphaProbe) {
+            bool seen = false;
+            for (GLuint id : g_cascadeStaticAlphaFragments)
+                if (id == shader) { seen = true; break; }
+            if (!seen) {
+                g_cascadeStaticAlphaFragments.push_back(shader);
+                fprintf(stderr, "[shadowmap][alpha] classified static AlphaDiscard fragment=%u\n",
+                        shader);
+            }
         }
+        // The shadow classifier historically needed only the two stock-source
+        // markers above. Keep that accepted behaviour unchanged. OIT is more
+        // specific: its future MRT transform needs the ordinary fragment
+        // colour output, so do not register a vertex or non-colour stage that
+        // happens to carry the same preprocessor text.
+        if (oitFoliageProbe &&
+            combined.find("gl_FragColor") != std::string::npos) {
+            nwn_oit_note_foliage_fragment(shader);
+            materialModeInjected = inject_material_mode_census(combined);
+            if (materialModeInjected)
+                fprintf(stderr, "[oit][material-mode] injected dormant "
+                                "NWN_ALPHA_MODE census into fragment=%u\n", shader);
+            oitFoliageInjected = inject_oit_foliage_branch(combined);
+            if (oitFoliageInjected)
+                fprintf(stderr, "[oit][foliage] injected inert MRT branch into "
+                                "fragment=%u\n", shader);
+        }
+    }
+    if (oitFoliageProbe && !oitFoliageInjected &&
+        combined.find("gl_FragColor") != std::string::npos) {
+        a2cEmitterInjected = inject_a2c_emitter_branch(combined);
+        if (a2cEmitterInjected)
+            nwn_oit_note_emitter_fragment(shader);
     }
     // Static casters drift because their vertex transform is still unknown.
     // Dump only vertex-stage sources on explicit request; this is read-only
@@ -437,7 +795,7 @@ extern "C" void my_shader_source(GLuint shader, GLsizei count,
             dumped.push_back(shader);
             char path[96];
             snprintf(path, sizeof(path), "nwn_shadow_vertex_%u.glsl", shader);
-            FILE* fp = fopen(path, "wb");
+            FILE* fp = open_dump_file(path);
             if (fp) {
                 (void)fwrite(combined.data(), 1, combined.size(), fp);
                 fclose(fp);
@@ -457,7 +815,7 @@ extern "C" void my_shader_source(GLuint shader, GLsizei count,
             dumped.push_back(shader);
             char path[96];
             snprintf(path, sizeof(path), "nwn_shadow_fragment_%u.glsl", shader);
-            FILE* fp = fopen(path, "wb");
+            FILE* fp = open_dump_file(path);
             if (fp) {
                 (void)fwrite(combined.data(), 1, combined.size(), fp);
                 fclose(fp);
@@ -465,7 +823,9 @@ extern "C" void my_shader_source(GLuint shader, GLsizei count,
             }
         }
     }
-    if (!inject_marker(combined)) {
+    const bool markerInjected = inject_marker(combined);
+    if (!materialModeInjected && !oitFoliageInjected &&
+        !a2cEmitterInjected && !markerInjected) {
         g_realShaderSource(shader, count, string, length);
         return;
     }
@@ -474,7 +834,7 @@ extern "C" void my_shader_source(GLuint shader, GLsizei count,
     g_realShaderSource(shader, 1, &patched, &patchedLen);
     static int logged = 0;
     if (logged++ < 4)
-        fprintf(stderr, "[shadowmap] injected runtime marker into shader %u\n", shader);
+        fprintf(stderr, "[shadowmap] submitted patched runtime shader %u\n", shader);
 }
 
 // Uniform push only -- chaining is the caller's job, because we reach this from
@@ -1163,7 +1523,7 @@ static void local_visible_set_layer_transform(const NativeTransformSlot* slot,
 // attachment and the matrices change per light.
 static bool begin_local_visible_dynamic_pass(SavedState& st) {
     if (!g_localVisibleDynamicCaptureActive || !g_localLightTargetUsable ||
-        !g_localLightFbo || !g_localLightDepthTex || !gl::FramebufferTextureLayer)
+        !g_localLightFbo || !g_localLightWriteDepthTex || !gl::FramebufferTextureLayer)
         return false;
     st = bind_local_light_target();
     return true;
@@ -1184,7 +1544,7 @@ static bool local_visible_attach_layer(int layer) {
     // fluctuating -> a flat 50). On this driver binding a different FBO per
     // draw costs more than re-attaching to one already bound.
     gl::FramebufferTextureLayer(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT,
-                                g_localLightDepthTex, 0, layer);
+                                g_localLightWriteDepthTex, 0, layer);
     return true;
 }
 
@@ -1633,7 +1993,8 @@ static void trace_normal_geometry_draw(GLsizei count, bool indexed) {
     // through glDrawRangeElements and glMultiDraw*. Deliberately ABOVE the
     // census early-outs below: an observer must see every engine draw, not only
     // the ones the bounded Phase 3e census happens to still be counting.
-    if (nwn_core::g_drawObserver && !nwn_core::g_ownedPass && !g_inOurPass)
+    if (nwn_core::g_drawObserver &&
+        (!nwn_core::g_ownedPass || nwn_oit_observes_owned_draws()) && !g_inOurPass)
         nwn_core::g_drawObserver();
     if (!g_cascadeGeometryTrace || !g_traceGeometryActive ||
         !g_traceFrameActive || g_traceGeometryBuckets >= g_traceGeometryMaxBuckets ||
@@ -1674,6 +2035,48 @@ static void trace_normal_geometry_draw(GLsizei count, bool indexed) {
     if (g_traceGeometryProgramCount < sizeof(g_traceGeometryPrograms) / sizeof(g_traceGeometryPrograms[0]))
         g_traceGeometryPrograms[g_traceGeometryProgramCount++] = (GLuint)program;
 }
+
+static inline void finish_observed_engine_draw() {
+    if (nwn_core::g_drawObserverAfter &&
+        (!nwn_core::g_ownedPass || nwn_oit_observes_owned_draws()) && !g_inOurPass)
+        nwn_core::g_drawObserverAfter();
+}
+
+#define DUPLICATE_OIT_FRINGE(drawCall)                                      \
+    do {                                                                    \
+        if (nwn_oit_begin_mode3_depth_duplicate()) {                        \
+            drawCall;                                                       \
+            nwn_oit_end_mode3_depth_duplicate();                            \
+        }                                                                   \
+        if (nwn_oit_begin_immediate_fringe()) {                             \
+            drawCall;                                                       \
+            nwn_oit_end_immediate_fringe();                                 \
+        }                                                                   \
+    } while (0)
+
+#define DUPLICATE_A2C_OPAQUE_DEPTH(drawCall)                                \
+    do {                                                                    \
+        if (nwn_oit_begin_opaque_depth_duplicate()) {                       \
+            drawCall;                                                       \
+            nwn_oit_end_opaque_depth_duplicate();                           \
+        }                                                                   \
+    } while (0)
+
+#define DUPLICATE_MODE3_OPAQUE_DEPTH(drawCall)                              \
+    do {                                                                    \
+        if (nwn_oit_begin_mode3_depth_duplicate()) {                        \
+            drawCall;                                                       \
+            nwn_oit_end_mode3_depth_duplicate();                            \
+        }                                                                   \
+    } while (0)
+
+#define DUPLICATE_A2C_PRIVATE_EMITTER(drawCall)                             \
+    do {                                                                    \
+        if (nwn_oit_begin_private_emitter_duplicate()) {                    \
+            drawCall;                                                       \
+            nwn_oit_end_private_emitter_duplicate();                        \
+        }                                                                   \
+    } while (0)
 
 // Resolve the source-classified fragment against the program actually bound
 // immediately before this native draw. Shader/program IDs change per launch,
@@ -1859,7 +2262,18 @@ extern "C" void NWN_GL_INTERPOSE(glDrawElements)(GLenum mode, GLsizei count, GLe
                              dlsym(RTLD_NEXT, "glDrawElements");
     shadow_before_draw();
     trace_normal_geometry_draw(count, true);
-    if (g_nextDrawElements) g_nextDrawElements(mode, count, type, indices);
+    const bool suppressNative = nwn_oit_suppress_current_draw();
+    if (g_nextDrawElements && !suppressNative)
+        g_nextDrawElements(mode, count, type, indices);
+    if (g_nextDrawElements)
+        DUPLICATE_OIT_FRINGE(g_nextDrawElements(mode, count, type, indices));
+    if (g_nextDrawElements)
+        DUPLICATE_A2C_OPAQUE_DEPTH(g_nextDrawElements(mode, count, type, indices));
+    if (g_nextDrawElements)
+        DUPLICATE_MODE3_OPAQUE_DEPTH(g_nextDrawElements(mode, count, type, indices));
+    if (g_nextDrawElements)
+        DUPLICATE_A2C_PRIVATE_EMITTER(g_nextDrawElements(mode, count, type, indices));
+    finish_observed_engine_draw();
     note_cascade_replay_draws(1);
     note_local_light_draws(1);
     SavedState st;
@@ -1882,7 +2296,18 @@ extern "C" void NWN_GL_INTERPOSE(glDrawArrays)(GLenum mode, GLint first, GLsizei
                            dlsym(RTLD_NEXT, "glDrawArrays");
     shadow_before_draw();
     trace_normal_geometry_draw(count, false);
-    if (g_nextDrawArrays) g_nextDrawArrays(mode, first, count);
+    const bool suppressNative = nwn_oit_suppress_current_draw();
+    if (g_nextDrawArrays && !suppressNative)
+        g_nextDrawArrays(mode, first, count);
+    if (g_nextDrawArrays)
+        DUPLICATE_OIT_FRINGE(g_nextDrawArrays(mode, first, count));
+    if (g_nextDrawArrays)
+        DUPLICATE_A2C_OPAQUE_DEPTH(g_nextDrawArrays(mode, first, count));
+    if (g_nextDrawArrays)
+        DUPLICATE_MODE3_OPAQUE_DEPTH(g_nextDrawArrays(mode, first, count));
+    if (g_nextDrawArrays)
+        DUPLICATE_A2C_PRIVATE_EMITTER(g_nextDrawArrays(mode, first, count));
+    finish_observed_engine_draw();
     note_cascade_replay_draws(1);
     note_local_light_draws(1);
     SavedState st;
@@ -1935,8 +2360,22 @@ extern "C" void my_draw_range_elements(GLenum mode, GLuint start, GLuint end,
                                         GLsizei count, GLenum type,
                                         const void* indices) {
     trace_normal_geometry_draw(count, true);
-    if (g_realDrawRangeElements)
+    const bool suppressNative = nwn_oit_suppress_current_draw();
+    if (g_realDrawRangeElements && !suppressNative)
         g_realDrawRangeElements(mode, start, end, count, type, indices);
+    if (g_realDrawRangeElements)
+        DUPLICATE_OIT_FRINGE(g_realDrawRangeElements(mode, start, end, count,
+                                                      type, indices));
+    if (g_realDrawRangeElements)
+        DUPLICATE_A2C_OPAQUE_DEPTH(g_realDrawRangeElements(mode, start, end, count,
+                                                            type, indices));
+    if (g_realDrawRangeElements)
+        DUPLICATE_MODE3_OPAQUE_DEPTH(g_realDrawRangeElements(
+            mode, start, end, count, type, indices));
+    if (g_realDrawRangeElements)
+        DUPLICATE_A2C_PRIVATE_EMITTER(g_realDrawRangeElements(
+            mode, start, end, count, type, indices));
+    finish_observed_engine_draw();
     note_cascade_replay_draws(1);
     note_local_light_draws(1);
     SavedState st;
@@ -1956,8 +2395,20 @@ extern "C" void my_multi_draw_arrays(GLenum mode, const GLint* first,
                                      const GLsizei* count, GLsizei drawcount) {
     if (count) for (GLsizei i = 0; i < drawcount; ++i)
         trace_normal_geometry_draw(count[i], false);
-    if (g_realMultiDrawArrays)
+    const bool suppressNative = nwn_oit_suppress_current_draw();
+    if (g_realMultiDrawArrays && !suppressNative)
         g_realMultiDrawArrays(mode, first, count, drawcount);
+    if (g_realMultiDrawArrays)
+        DUPLICATE_OIT_FRINGE(g_realMultiDrawArrays(mode, first, count, drawcount));
+    if (g_realMultiDrawArrays)
+        DUPLICATE_A2C_OPAQUE_DEPTH(g_realMultiDrawArrays(mode, first, count, drawcount));
+    if (g_realMultiDrawArrays)
+        DUPLICATE_MODE3_OPAQUE_DEPTH(g_realMultiDrawArrays(
+            mode, first, count, drawcount));
+    if (g_realMultiDrawArrays)
+        DUPLICATE_A2C_PRIVATE_EMITTER(g_realMultiDrawArrays(
+            mode, first, count, drawcount));
+    finish_observed_engine_draw();
     note_cascade_replay_draws((unsigned)std::max(0, drawcount));
     note_local_light_draws((unsigned)std::max(0, drawcount));
     SavedState st;
@@ -1978,8 +2429,22 @@ extern "C" void my_multi_draw_elements(GLenum mode, const GLsizei* count,
                                        GLsizei drawcount) {
     if (count) for (GLsizei i = 0; i < drawcount; ++i)
         trace_normal_geometry_draw(count[i], true);
-    if (g_realMultiDrawElements)
+    const bool suppressNative = nwn_oit_suppress_current_draw();
+    if (g_realMultiDrawElements && !suppressNative)
         g_realMultiDrawElements(mode, count, type, indices, drawcount);
+    if (g_realMultiDrawElements)
+        DUPLICATE_OIT_FRINGE(g_realMultiDrawElements(mode, count, type, indices,
+                                                      drawcount));
+    if (g_realMultiDrawElements)
+        DUPLICATE_A2C_OPAQUE_DEPTH(g_realMultiDrawElements(mode, count, type,
+                                                            indices, drawcount));
+    if (g_realMultiDrawElements)
+        DUPLICATE_MODE3_OPAQUE_DEPTH(g_realMultiDrawElements(
+            mode, count, type, indices, drawcount));
+    if (g_realMultiDrawElements)
+        DUPLICATE_A2C_PRIVATE_EMITTER(g_realMultiDrawElements(
+            mode, count, type, indices, drawcount));
+    finish_observed_engine_draw();
     note_cascade_replay_draws((unsigned)std::max(0, drawcount));
     note_local_light_draws((unsigned)std::max(0, drawcount));
     SavedState st;
@@ -1999,8 +2464,22 @@ extern "C" void my_draw_elements_base_vertex(GLenum mode, GLsizei count,
                                                GLenum type, const void* indices,
                                                GLint basevertex) {
     trace_normal_geometry_draw(count, true);
-    if (g_realDrawElementsBaseVertex)
+    const bool suppressNative = nwn_oit_suppress_current_draw();
+    if (g_realDrawElementsBaseVertex && !suppressNative)
         g_realDrawElementsBaseVertex(mode, count, type, indices, basevertex);
+    if (g_realDrawElementsBaseVertex)
+        DUPLICATE_OIT_FRINGE(g_realDrawElementsBaseVertex(mode, count, type,
+                                                          indices, basevertex));
+    if (g_realDrawElementsBaseVertex)
+        DUPLICATE_A2C_OPAQUE_DEPTH(g_realDrawElementsBaseVertex(mode, count, type,
+                                                                indices, basevertex));
+    if (g_realDrawElementsBaseVertex)
+        DUPLICATE_MODE3_OPAQUE_DEPTH(g_realDrawElementsBaseVertex(
+            mode, count, type, indices, basevertex));
+    if (g_realDrawElementsBaseVertex)
+        DUPLICATE_A2C_PRIVATE_EMITTER(g_realDrawElementsBaseVertex(
+            mode, count, type, indices, basevertex));
+    finish_observed_engine_draw();
     note_cascade_replay_draws(1);
     note_local_light_draws(1);
     SavedState st;
@@ -2022,9 +2501,23 @@ extern "C" void my_draw_range_elements_base_vertex(GLenum mode, GLuint start,
                                                      GLenum type, const void* indices,
                                                      GLint basevertex) {
     trace_normal_geometry_draw(count, true);
-    if (g_realDrawRangeElementsBaseVertex)
+    const bool suppressNative = nwn_oit_suppress_current_draw();
+    if (g_realDrawRangeElementsBaseVertex && !suppressNative)
         g_realDrawRangeElementsBaseVertex(mode, start, end, count, type,
                                            indices, basevertex);
+    if (g_realDrawRangeElementsBaseVertex)
+        DUPLICATE_OIT_FRINGE(g_realDrawRangeElementsBaseVertex(
+            mode, start, end, count, type, indices, basevertex));
+    if (g_realDrawRangeElementsBaseVertex)
+        DUPLICATE_A2C_OPAQUE_DEPTH(g_realDrawRangeElementsBaseVertex(
+            mode, start, end, count, type, indices, basevertex));
+    if (g_realDrawRangeElementsBaseVertex)
+        DUPLICATE_MODE3_OPAQUE_DEPTH(g_realDrawRangeElementsBaseVertex(
+            mode, start, end, count, type, indices, basevertex));
+    if (g_realDrawRangeElementsBaseVertex)
+        DUPLICATE_A2C_PRIVATE_EMITTER(g_realDrawRangeElementsBaseVertex(
+            mode, start, end, count, type, indices, basevertex));
+    finish_observed_engine_draw();
     note_cascade_replay_draws(1);
     note_local_light_draws(1);
     SavedState st;
@@ -2047,8 +2540,22 @@ extern "C" void my_draw_elements_instanced(GLenum mode, GLsizei count,
                                             GLenum type, const void* indices,
                                             GLsizei instances) {
     for (GLsizei i = 0; i < instances; ++i) trace_normal_geometry_draw(count, true);
-    if (g_realDrawElementsInstanced)
+    const bool suppressNative = nwn_oit_suppress_current_draw();
+    if (g_realDrawElementsInstanced && !suppressNative)
         g_realDrawElementsInstanced(mode, count, type, indices, instances);
+    if (g_realDrawElementsInstanced)
+        DUPLICATE_OIT_FRINGE(g_realDrawElementsInstanced(
+            mode, count, type, indices, instances));
+    if (g_realDrawElementsInstanced)
+        DUPLICATE_A2C_OPAQUE_DEPTH(g_realDrawElementsInstanced(
+            mode, count, type, indices, instances));
+    if (g_realDrawElementsInstanced)
+        DUPLICATE_MODE3_OPAQUE_DEPTH(g_realDrawElementsInstanced(
+            mode, count, type, indices, instances));
+    if (g_realDrawElementsInstanced)
+        DUPLICATE_A2C_PRIVATE_EMITTER(g_realDrawElementsInstanced(
+            mode, count, type, indices, instances));
+    finish_observed_engine_draw();
     note_cascade_replay_draws((unsigned)std::max(0, instances));
     note_local_light_draws((unsigned)std::max(0, instances));
     SavedState st;
@@ -2069,9 +2576,23 @@ extern "C" void my_draw_elements_instanced_base_vertex(GLenum mode, GLsizei coun
                                                         GLenum type, const void* indices,
                                                         GLsizei instances, GLint basevertex) {
     for (GLsizei i = 0; i < instances; ++i) trace_normal_geometry_draw(count, true);
-    if (g_realDrawElementsInstancedBaseVertex)
+    const bool suppressNative = nwn_oit_suppress_current_draw();
+    if (g_realDrawElementsInstancedBaseVertex && !suppressNative)
         g_realDrawElementsInstancedBaseVertex(mode, count, type, indices,
                                                instances, basevertex);
+    if (g_realDrawElementsInstancedBaseVertex)
+        DUPLICATE_OIT_FRINGE(g_realDrawElementsInstancedBaseVertex(
+            mode, count, type, indices, instances, basevertex));
+    if (g_realDrawElementsInstancedBaseVertex)
+        DUPLICATE_A2C_OPAQUE_DEPTH(g_realDrawElementsInstancedBaseVertex(
+            mode, count, type, indices, instances, basevertex));
+    if (g_realDrawElementsInstancedBaseVertex)
+        DUPLICATE_MODE3_OPAQUE_DEPTH(g_realDrawElementsInstancedBaseVertex(
+            mode, count, type, indices, instances, basevertex));
+    if (g_realDrawElementsInstancedBaseVertex)
+        DUPLICATE_A2C_PRIVATE_EMITTER(g_realDrawElementsInstancedBaseVertex(
+            mode, count, type, indices, instances, basevertex));
+    finish_observed_engine_draw();
     note_cascade_replay_draws((unsigned)std::max(0, instances));
     note_local_light_draws((unsigned)std::max(0, instances));
     SavedState st;
@@ -2090,10 +2611,15 @@ extern "C" void my_draw_elements_instanced_base_vertex(GLenum mode, GLsizei coun
                                                                              instances, basevertex), (void)0);
 }
 
-// This resolver hook is inert unless the explicit trace-only geometry census
-// is enabled. It catches direct GL function pointers at the time NWN asks the
-// driver for them and returns forwarding wrappers with exactly the requested
-// ABI. No renderer state is observed or changed here.
+#undef DUPLICATE_OIT_FRINGE
+#undef DUPLICATE_A2C_OPAQUE_DEPTH
+#undef DUPLICATE_MODE3_OPAQUE_DEPTH
+#undef DUPLICATE_A2C_PRIVATE_EMITTER
+
+// This resolver hook is inert unless the geometry census or another module's
+// draw observer needs it. It catches direct GL function pointers at the time
+// NWN asks the driver for them and returns forwarding wrappers with exactly the
+// requested ABI. No renderer state is observed or changed here.
 #ifndef _WIN32
 extern "C" void* glXGetProcAddressARB(const unsigned char* name) {
     if (!g_realGlXGetProcAddressARB)
@@ -2101,7 +2627,8 @@ extern "C" void* glXGetProcAddressARB(const unsigned char* name) {
             dlsym(RTLD_NEXT, "glXGetProcAddressARB");
     if (!g_realGlXGetProcAddressARB) return nullptr;
     void* real = g_realGlXGetProcAddressARB(name);
-    if (!g_cascadeGeometryTrace || !name || !real) return real;
+    if ((!g_cascadeGeometryTrace && !nwn_oit_needs_draw_observer()) ||
+        !name || !real) return real;
     static unsigned drawRequests = 0;
     if (std::strncmp((const char*)name, "glDraw", 6) == 0 && drawRequests++ < 48)
         fprintf(stderr, "[shadowmap][geom] resolver request %s -> %p\n", name, real);
@@ -2152,4 +2679,3 @@ extern "C" void* glXGetProcAddressARB(const unsigned char* name) {
     return real;
 }
 #endif
-

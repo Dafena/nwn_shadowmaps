@@ -1,0 +1,4 @@
+[oit][mode-route] mtr=tcm02_leaves04 mode=0 bucket=1 program=152 transparency=1 sampleFramebuffer=0 volumetric=0 samples=8 action=native-non-a2c-mode
+[oit][mode-route] mtr=tcm02_leaves04_1 mode=2 bucket=1 program=152 transparency=1 sampleFramebuffer=0 volumetric=0 samples=8 action=a2c-mode-2
+[oit][mode-route] mtr=tcm02_leaves04_2 mode=3 bucket=3 program=152 transparency=1 sampleFramebuffer=0 volumetric=0 samples=8 action=oit-mode-3-private
+[oit][mode3-private] proof draws=1 color=56172/1931520 maxRgb=0.3071 sum=56198 fractionalSum=28477 maxSum=1.3721 trans=56198 fractionalT=56198 minT=0.0983 sourceFbo=2 viewport=0,0 1920x1006 depth=disabled-private-proof screen=untouched native=retained

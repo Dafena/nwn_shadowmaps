@@ -74,24 +74,92 @@ extern int g_currentBucket;
 // a valid hook point: it is reached only from the glDrawArrays/glDrawElements
 // interposers, which is not where this engine's geometry goes.
 //
-// Observers must not issue GL commands that alter state the engine is relying
-// on mid-bucket, and are not called for injector-owned passes.
+// A pre-observer may make a tightly scoped per-draw state change only when it
+// registers the matching post-observer and restores that state immediately.
+// Observers are not called for injector-owned passes unless explicitly opted in.
 extern void (*g_drawObserver)();
+// Optional companion invoked immediately after the native draw. A module that
+// temporarily changes per-draw GL state in g_drawObserver restores it here.
+extern void (*g_drawObserverAfter)();
+bool area_scene_draw_active();
 
 }   // namespace nwn_core
 
 // ---------------------------------------------------------------------------
-//  OIT module (nwn_oit.cpp) -- entry points called from the shadow module's
-//  frame sequence. All are no-ops unless NWN_OIT=1.
+//  Alpha/OIT module (nwn_oit.cpp) -- entry points called from the shadow
+//  module's frame sequence. They are no-ops unless an alpha route or diagnostic
+//  is enabled. Material Mode 3 OIT is currently parked and cannot activate.
 // ---------------------------------------------------------------------------
 
 // Runs once per frame, after the engine's Scene::Render has completed. Owns its
 // own lazy init, its own GL resolution, and full save/restore of every GL state
 // it touches.
-void nwn_oit_frame(void);
+void nwn_oit_frame(void* scene);
+void nwn_oit_bucket_begin(void* scene, int bucket);
+void nwn_oit_bucket_complete(void* scene, int bucket);
+bool nwn_oit_begin_immediate_fringe(void);
+void nwn_oit_end_immediate_fringe(void);
+bool nwn_oit_begin_opaque_depth_duplicate(void);
+void nwn_oit_end_opaque_depth_duplicate(void);
+bool nwn_oit_begin_mode3_depth_duplicate(void);
+void nwn_oit_end_mode3_depth_duplicate(void);
+bool nwn_oit_begin_private_emitter_duplicate(void);
+void nwn_oit_end_private_emitter_duplicate(void);
+bool nwn_oit_suppress_current_draw(void);
+
+// Called at Scene::Render entry, once a GL context is current. It installs
+// read-only observers before the engine issues this frame's draws. No targets
+// are allocated and no GL state is changed when only a census is enabled.
+void nwn_oit_prepare(void);
 
 // Release GL objects. Safe to call when never initialised.
 void nwn_oit_shutdown(void);
 
 // True when the module is enabled AND live (for the settings panel / logging).
 bool nwn_oit_active(void);
+
+// Read-only foliage discovery. These are deliberately tiny coordination entry
+// points rather than shared renderer state: the shadow TU already owns the
+// engine's glShaderSource and draw interposers, while nwn_oit.cpp owns the
+// candidate registry and the census verdicts.
+//
+// NWN_OIT_FOLIAGE_CENSUS=1 enables all three requirements below without
+// enabling NWN_OIT's synthetic Phase-1 composite.
+bool nwn_oit_needs_shader_sources(void);
+bool nwn_oit_needs_draw_observer(void);
+bool nwn_oit_needs_bucket_hook(void);
+bool nwn_oit_needs_texture_tracking(void);
+bool nwn_oit_needs_material_identity_tracking(void);
+bool nwn_oit_wants_material_mode_census(void);
+bool nwn_oit_wants_foliage_shader_branch(void);
+bool nwn_oit_wants_a2c_emitter_shader_branch(void);
+bool nwn_oit_observes_owned_draws(void);
+
+// Called only for a stable stock fragment-source signature
+// (`NO_DISCARD 0` + `fAlphaDiscardValue`). Shader IDs are process-local and
+// are never persisted; the OIT module joins them to the currently bound
+// program with glGetAttachedShaders at draw time.
+void nwn_oit_note_foliage_fragment(unsigned int shader);
+void nwn_oit_note_emitter_fragment(unsigned int shader);
+void nwn_oit_note_texture_bind(unsigned int unit, const char* name);
+void nwn_oit_note_shared_material_field(void* sharedMaterial, const char* field);
+void nwn_oit_note_shared_material_init(void* sharedMaterial,
+                                       const char* materialName);
+void nwn_oit_note_material_shared(void* material, void* sharedMaterial);
+void nwn_oit_note_material_resource(void* material, void* sharedMaterial,
+                                    const char* materialName);
+void nwn_oit_note_material_bind(void* material, const char* texture0Name);
+void nwn_oit_note_material_destroy(void* material);
+void nwn_oit_note_shared_material_destroy(void* sharedMaterial);
+
+// Re-enter one native bucket through the shadow module's proven fault and
+// recursion guards. OIT owns the surrounding GL target/state; this function
+// owns only the engine call and reports whether it returned safely.
+bool nwn_core_replay_bucket(void* scene, int bucket);
+
+// Bind/upload the current directional CSM state for one source-classified A2C
+// foliage draw. The shadow module owns the cascade textures and matrices; the
+// A2C module owns draw classification and brackets this call with the matching
+// end function so borrowed texture units are restored immediately.
+bool nwn_shadow_begin_a2c_receiver(unsigned int program);
+void nwn_shadow_end_a2c_receiver(void);

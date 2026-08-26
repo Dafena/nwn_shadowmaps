@@ -1,115 +1,65 @@
-# Shadow injector refactoring checkpoint
+# Source layout
 
-Updated: 2026-08-13
+The source refactor is complete in this repository. The active tree is the
+repository root; there is no nested checkout that should be built or deployed.
 
-## Frozen working baseline
+## Translation units
 
-The user-confirmed single-local-light implementation is preserved at:
+`nwn_shadowmap.cpp` remains the root translation unit for renderer state and
+hooks. The following files are included into it deliberately:
 
-`../savepoints/2026-08-13-refactored-single-light-runtime-confirmed`
+| Module | Responsibility |
+| --- | --- |
+| `shadow_gl_api.inc` | OpenGL types, constants, function pointers, and binding |
+| `shadow_engine_bindings.inc` | NWN engine types, symbols, and resolver table |
+| `shadow_targets.inc` | Shadow texture/FBO allocation and target status |
+| `shadow_diagnostics_settings.inc` | Readback, dumps, settings load/save, defaults |
+| `shadow_replay.inc` | Matrix-stack replay for sun, world, and local targets |
+| `shadow_shader_interposition.inc` | Shader injection and draw interception |
+| `shadow_fullscreen_receiver.inc` | Receiver shader and scene-depth/color copies |
+| `shadow_overlay_runtime.inc` | Overlay lifecycle, input, and frame ordering |
+| `shadow_trace_cascade.inc` | Scene tracing, cascade setup, and bucket detours |
+| `shadow_local_lights.inc` | Engine-selected local-light state and capture setup |
 
-That snapshot is the recovery source of truth. It is the modular refactor after
-an in-game confirmation and has working sun CSM, NWN's engine-selected local
-light, visible dynamic casters (`render 1` regardless of the MDL `shadow`
-flag), exclusion of invisible stencil proxy geometry, alpha materials, and the
-settings overlay. Supporting additional local shadow lights begins only after
-this checkpoint.
+Private shared state is the reason these remain same-translation-unit modules.
+Do not move a module to a separate object merely to make the file tree look
+cleaner; that changes visibility and initialization assumptions.
 
-## Refactoring rules
+Separate objects are intentionally limited to pure or independently owned
+code:
 
-1. Preserve behavior before improving architecture.
-2. NWN engine decisions remain authoritative, especially
-   `LightManager::GetShadowLights()` order.
-3. Do not alter renderer timing, capture publication, GL restoration, caster
-   classification, settings keys, launcher defaults, or exported symbols in a
-   mechanical extraction.
-4. Build development and shipping variants after every extraction.
-5. Compare the shared library's exported dynamic-symbol set with the frozen
-   savepoint and run `ldd -r` before asking for an in-game test.
-6. Start coupled renderer sections as `.inc` implementation modules in the same
-   translation unit. This reduces the monolith without splitting global state
-   or changing initialization order. Promote a module to a separate `.cpp`
-   only when its interface is small and explicit.
-7. Pure helpers with no renderer state may be separate object files immediately.
+- `shadow_config.{h,cpp}` — memoized environment lookup and shipping defaults;
+- `shadow_math.{h,cpp}` — pure vector/matrix/projection helpers;
+- `nwn_overlay_imgui.cpp` — the only file allowed to include Dear ImGui;
+- `nwn_oit.cpp` — opt-in transparency census, source/program classification,
+  and experimental A2C/OIT mechanics; its accepted contract is documented in
+  `TRANSPARENCY_MODES.md`;
+- `nwn_platform_win.cpp` — Windows proxy and platform mechanics.
 
-## Current module map
+## Build dependencies
 
-| Module | Form | Ownership |
-| --- | --- | --- |
-| `nwn_shadowmap.cpp` | translation-unit root | Hook lifecycle, shared renderer state, capture scheduling, receiver orchestration |
-| `shadow_config.{h,cpp}` | separate object | Shipping defaults and memoized environment lookup |
-| `shadow_math.{h,cpp}` | separate object | Vector/quaternion helpers, matrix operations and projection builders |
-| `shadow_gl_api.inc` | same-TU implementation | Headerless OpenGL types/constants/function-pointer surface and GL resolver helpers |
-| `shadow_engine_bindings.inc` | same-TU implementation | Mangled engine symbols, binding table and resolution helpers |
-| `shadow_targets.inc` | same-TU implementation | Shadow target allocation, texture/FBO lifecycle and target validation |
-| `shadow_diagnostics_settings.inc` | same-TU implementation | Readback/dump diagnostics and persisted settings helpers |
-| `shadow_replay.inc` | same-TU implementation | Engine bucket replay, replay guards and draw accounting |
-| `shadow_shader_interposition.inc` | same-TU implementation | Shader interception, visible-draw classification and duplication bridges |
-| `shadow_fullscreen_receiver.inc` | same-TU implementation | Fullscreen receiver program, uniforms, depth reconstruction and composite draw |
-| `shadow_overlay_runtime.inc` | same-TU implementation | Overlay runtime, input toggle and live settings application |
-| `shadow_trace_cascade.inc` | same-TU implementation | Trace probes, cascade construction/capture and cascade diagnostics |
-| `shadow_local_lights.inc` | same-TU implementation | Engine-selected local-light capture, visible dynamic casters and local targets |
-| `nwn_overlay_imgui.cpp` | existing separate object | ImGui settings overlay |
-| `nwn_oit.cpp` | existing separate object | OIT implementation |
+Both `Makefile` and `win/Makefile` list the included `.inc` files as
+dependencies. If a new included module is added, update both dependency lists.
+Otherwise an include-only change can leave one target using an old object.
 
-The root source has fallen from approximately 12,843 to 3,024 lines. The eight
-new subsystem modules total 9,136 lines; no large implementation was deleted or
-rewritten. They are included at the exact positions occupied by their original
-source ranges, preserving declaration order and internal linkage.
+The Linux development build is `libnwn_shadowmap.so`; the Linux shipping build
+is `libnwn_shadowmap_deploy.so`; the Windows build is `win/version.dll`.
+`make portable` builds the shipping Linux library in Debian 11 to keep the
+glibc/glibc++ floor suitable for distribution.
 
-This is a deliberate intermediate architecture. Same-TU modules make each
-renderer subsystem small enough for bounded inspection and Codex context while
-retaining the monolith's shared private state. Promote them to independent
-`.cpp` objects only after their interfaces have been made explicit and runtime
-behavior has passed another gate.
+## Refactor invariants
 
-## Verification completed
+- Preserve the exported Linux symbol surface unless an ABI change is intended.
+- Keep ImGui headers inside `nwn_overlay_imgui.cpp`.
+- Keep platform mechanics behind `nwn_platform.h`; keep shipping policy behind
+  `NWN_SHIP`.
+- Keep Windows-only local-light mechanics behind
+  `NWN_WIN_LOCAL_FASTPATH`.
+- Validate generated receiver shaders with `python3 check_shaders.py`.
+- Runtime-test renderer changes on the actual platform before calling them
+  complete.
 
-- Development build: pass.
-- Shipping/deploy build: pass.
-- `ldd -r`: no unresolved relocations.
-- Exported dynamic-symbol set: identical to the frozen working `.so`.
-- Configuration and math symbols use hidden visibility and do not expand ABI.
-- Preprocessed root before and after the subsystem split is byte-for-byte
-  identical (`g++ -E -P`), SHA-256
-  `2341d35523c4671c4f04485adb76975a99f777370a6f3423e82497247a4c5aa7`.
-- `run-shadowmap-trace.sh` now resolves both nested `refactored/` and older
-  one-level layouts, or accepts `NWN_SHADOWMAP_GAME_DIR`; it no longer looks for
-  `nwmain-linux` inside `csm_claude/`.
-- In-game test of the refactored build: **passed**. The maintainer confirmed the
-  split works correctly and preserves the accepted single-light behavior.
-
-## Active workspace and next feature
-
-`refactored/` is now the authoritative workplace. The parent tree and all
-savepoints are read-only references. The source-budget activation is compiled
-through `shadow_local_lights.inc`: persisted `local_cube_sources` owns the 1--3
-expensive source budget (NWN's native maximum), while `g_lampUploadMax` remains
-lift/census only. It preserves engine priority, visible-caster classification,
-and exact one-source fallback behavior. Both builds pass and are clean under
-`ldd -r`. Publication is atomic at source-set level: every requested slot must
-receive a visible draw, otherwise the cleared partial generation is withheld.
-
-**Multi-source is CONFIRMED IN GAME (2026-08-13).** The "next gate is a
-two-source in-game confirmation" line this paragraph used to end on is done;
-the maintainer runs three sources.
-
-### How the budget relates to NWN's own slider (audited 2026-08-13)
-
-Two separate limits, and the distinction matters because only one of them is
-ours:
-
-| | set by | caps |
-| --- | --- | --- |
-| NWN's `Shadow Casting Lights` (`max-casting-lights`, default 3) | the game's video options | how many lights `LightManager::GetShadowLights()` returns -- our CANDIDATES |
-| `local_cube_sources` (panel: "Local shadow sources") | this injector | how many of those candidates we consume, clamped 1..3 |
-
-No code reads `NumShadowCastingLights` directly. The game's slider reaches us
-only by sizing the engine list we consume verbatim, which is exactly the
-"NWN stays authoritative" rule.
-
-**The compiled default is 1, not 3.** `shadow_targets.inc` initialises
-`g_localCubeSourceBudget = 1` and `settings_reset_defaults()` sets 1. A
-maintainer .ini carrying `local_cube_sources=3` is a SAVED value -- "Restore
-defaults" drops it back to one source, and a fresh install or a tester starts at
-one. Change both sites together if the shipped default should be three.
+The current implementation and active blocker are documented in
+[SHADOWMAP_STATUS.md](SHADOWMAP_STATUS.md) and
+[CURRENT_TASK.md](CURRENT_TASK.md). Transparency evidence and mode ownership
+are documented in [TRANSPARENCY_MODES.md](TRANSPARENCY_MODES.md).

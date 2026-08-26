@@ -1,0 +1,3 @@
+[oit][mode-route] mtr=tcm02_leaves04 mode=0 bucket=1 program=152 transparency=1 sampleFramebuffer=0 volumetric=0 samples=8 action=native-non-a2c-mode
+[oit][mode-route] mtr=tcm02_leaves04_1 mode=2 bucket=1 program=152 transparency=1 sampleFramebuffer=0 volumetric=0 samples=8 action=a2c-mode-2
+[oit][mode-route] mtr=tcm02_leaves04_2 mode=3 bucket=3 program=152 transparency=1 sampleFramebuffer=0 volumetric=0 samples=8 action=native-non-a2c-mode

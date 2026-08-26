@@ -62,6 +62,49 @@ def grab(lines, idx):
     return "".join(out)
 
 
+def named_string(path, name):
+    """Extract a named C++ string-literal initializer that need not start
+    with #version. Used to assemble the foliage fragment injected at runtime."""
+    lines = open(path, encoding="utf-8", errors="replace").read().split("\n")
+    decl = re.compile(rf'static\s+const\s+char\s*\*\s*{re.escape(name)}\s*=')
+    for i, line in enumerate(lines):
+        if not decl.search(line.strip()):
+            continue
+        j = i
+        while j < len(lines) and '"' not in lines[j]:
+            j += 1
+        return grab(lines, j)
+    raise RuntimeError(f"missing C++ string initializer {name} in {path}")
+
+
+def injected_foliage_shader():
+    path = "shadow_shader_interposition.inc"
+    outputs = named_string(path, "kOutputs")
+    helpers = named_string(path, "kA2cShadowHelpers")
+    body = named_string(path, "kBody")
+    return ("#version 330 compatibility\n"
+            "#define gl_FragColor compat_glFragColor\n" + outputs + "\n" +
+            helpers + "\nvoid main(){\n"
+            "  gl_FragColor=vec4(0.6,0.7,0.8,0.5);\n" + body + "\n}\n")
+
+
+def injected_emitter_shader():
+    path = "shadow_shader_interposition.inc"
+    declarations = named_string(path, "declarations")
+    body = named_string(path, "body")
+    return ("#version 330 compatibility\n" + declarations +
+            "\nvoid main(){ gl_FragColor=vec4(1.0);\n" + body + "\n}\n")
+
+
+def injected_material_mode_shader():
+    path = "shadow_shader_interposition.inc"
+    declaration = named_string(path, "declaration")
+    guard = named_string(path, "guard")
+    return ("#version 330 compatibility\n" + declaration +
+            "\nvoid main(){\n" + guard +
+            "\n  gl_FragColor=vec4(1.0);\n}\n")
+
+
 def main():
     if not shutil.which("glslangValidator"):
         print("glslangValidator not found (install `glslang`)", file=sys.stderr)
@@ -90,6 +133,51 @@ def main():
             print(f"FAIL  {label:22s} {path}:{idx + 1}")
             print(res.stdout.strip() or res.stderr.strip())
             failures += 1
+    try:
+        src = injected_foliage_shader()
+        tmp = "/tmp/nwn_shadow_check_foliage.frag"
+        open(tmp, "w").write(src)
+        res = subprocess.run(["glslangValidator", tmp],
+                             capture_output=True, text=True)
+        if res.returncode == 0:
+            print(f"ok    {'a2c foliage injection':22s} {len(src):6d} bytes")
+        else:
+            print("FAIL  a2c foliage injection shadow_shader_interposition.inc")
+            print(res.stdout.strip() or res.stderr.strip())
+            failures += 1
+    except Exception as exc:
+        print(f"FAIL  a2c foliage injection extraction: {exc}")
+        failures += 1
+    try:
+        src = injected_emitter_shader()
+        tmp = "/tmp/nwn_shadow_emitter_check.frag"
+        open(tmp, "w").write(src)
+        res = subprocess.run(["glslangValidator", tmp],
+                             capture_output=True, text=True)
+        if res.returncode == 0:
+            print(f"ok    {'a2c emitter injection':22s} {len(src):6d} bytes")
+        else:
+            print("FAIL  a2c emitter injection")
+            print(res.stdout.strip() or res.stderr.strip())
+            failures += 1
+    except Exception as exc:
+        print(f"FAIL  a2c emitter injection assembly: {exc}")
+        failures += 1
+    try:
+        src = injected_material_mode_shader()
+        tmp = "/tmp/nwn_shadow_material_mode_check.frag"
+        open(tmp, "w").write(src)
+        res = subprocess.run(["glslangValidator", tmp],
+                             capture_output=True, text=True)
+        if res.returncode == 0:
+            print(f"ok    {'material mode census':22s} {len(src):6d} bytes")
+        else:
+            print("FAIL  material mode census injection")
+            print(res.stdout.strip() or res.stderr.strip())
+            failures += 1
+    except Exception as exc:
+        print(f"FAIL  material mode census assembly: {exc}")
+        failures += 1
     return 1 if failures else 0
 
 

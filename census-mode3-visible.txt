@@ -1,0 +1,58 @@
+Mode-3 first visible pre-water checkpoint — 2026-08-23 (Linux)
+
+Launch evidence: /tmp/nwn-mode3-visible-prewater-20260823.log
+
+[oit][mode3-private] proof draws=1 color=106341/1931520 maxRgb=0.1407 sum=106456 fractionalSum=106456 maxSum=0.6426 trans=106456 fractionalT=106456 minT=0.4600 resolved=106456 fractionalResolved=106456 resolvedMaxRgb=0.1183 resolvedMinT=0.4600 sourceFbo=2 viewport=0,0 1920x1006 opaqueDepthDraws=216 depth=duplicate-static-plus-dynamic screen=untouched native=retained
+[oit][mode3-visible] first pre-water composite draws=1 sourceFbo=2 destinationFbo=2 timing=after-bucket-3-before-water-bucket-6 native=retained diagnostic=double-layer
+
+Accepted:
+- The private resolve composited successfully into scene FBO 2 at the proven
+  post-bucket-3/pre-water insertion point.
+- Native mode 3 remained visible; this was intentionally a double-layer test.
+
+Failed visual criterion:
+- Solid foliage regions remained too translucent and a farther physical layer
+  appeared more opaque than the nearer layer.
+- The private numbers corroborate this: minT=0.4600 means maximum accumulated
+  opacity was only about 0.54 even in the strongest covered pixel.
+
+Next gate:
+- Normalize mode-3 foliage alpha by the material's live native discard pivot:
+  alpha >= pivot becomes opaque, alpha below the pivot remains a smooth fringe.
+- Keep native mode 3 retained until the normalized private layer is proven.
+
+Normalization follow-up: /tmp/nwn-mode3-alpha-normalize-20260823.log
+
+[oit][mode3-private] proof draws=1 color=106794/1931520 maxRgb=0.6230 sum=106892 fractionalSum=5003 maxSum=2.0000 trans=106892 fractionalT=5090 minT=0.0000 resolved=106892 fractionalResolved=5090 resolvedMaxRgb=0.3940 resolvedMinT=0.0000
+[oit][mode3-visible] first pre-water composite draws=1 sourceFbo=2 destinationFbo=2 timing=after-bucket-3-before-water-bucket-6 nativeCutoff=0.2000 alphaNormalize=1 native=retained diagnostic=double-layer
+
+Normalization result:
+- Solid coverage reached full opacity (`minT=0.0000`).
+- Only 5,090 of 106,892 covered pixels remained fractional.
+- Two opaque physical layers produced `maxSum=2.0`; weighted color averaging
+  therefore exposed the farther layer through the nearer one even though final
+  alpha was opaque. This is not an alpha-strength failure.
+- Next gate is a hybrid cutout core: alpha >= native pivot writes real scene
+  and private depth and resets prior farther OIT at those pixels; only the
+  sub-pivot normalized fringe enters weighted OIT.
+
+Hybrid follow-up: /tmp/nwn-mode3-hybrid-foliage-20260823.log
+
+[oit][mode3-private] proof draws=1 color=8657/1931520 maxRgb=0.4834 sum=8673 fractionalSum=8587 maxSum=1.9697 trans=8673 fractionalT=8673 minT=0.0002 resolved=8673 fractionalResolved=8673 resolvedMaxRgb=0.3696 resolvedMinT=0.0002 sourceFbo=2 viewport=0,0 1920x1006 opaqueDepthDraws=217 depth=duplicate-static-plus-dynamic screen=untouched native=retained
+[oit][mode3-visible] first pre-water composite draws=1 sourceFbo=2 destinationFbo=2 timing=after-bucket-3-before-water-bucket-6 nativeCutoff=0.2000 alphaNormalize=1 hybrid=1 native=opaque-core diagnostic=core-plus-fringe
+
+Cross-mode occluder follow-up: /tmp/nwn-mode3-hybrid-occluders-20260823.log
+
+[oit][mode3-hybrid] native mode-2 cutout joins private depth/reset as occluder-only; visible route unchanged, color excluded
+[oit][mode3-hybrid] native mode-0 cutout joins private depth/reset as occluder-only; visible route unchanged, color excluded
+[oit][mode3-private] proof draws=1 color=1974/1931520 maxRgb=0.2581 sum=1976 fractionalSum=1959 maxSum=1.9189 trans=1976 fractionalT=1975 minT=0.0001 resolved=1976 fractionalResolved=1975 resolvedMaxRgb=0.2581 resolvedMinT=0.0001 sourceFbo=2 viewport=0,0 1920x1006 opaqueDepthDraws=221 depth=duplicate-static-plus-dynamic screen=untouched native=retained
+
+Accepted visual result:
+- Native-pivot coverage behaves as a nearest opaque surface while the
+  sub-pivot edge remains smoothly blended and camera-stable.
+- Intervening Mode 0 and Mode 2 cutout cores remove farther Mode 3 fringe at
+  covered pixels without changing their visible native/A2C routes.
+- The bright rim against a torch is expected fractional-coverage/background
+  leakage, not an OIT sorting failure.
+- This remains a diagnostic prototype. Production activation, lazy private
+  depth/MRT work, and a clean performance A/B are the next checkpoint.

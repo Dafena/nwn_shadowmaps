@@ -87,7 +87,7 @@ static constexpr unsigned kSettingsMax = 64;
 // too. On an older file the keys listed in settings_retuned() are ignored and
 // the file is rewritten at the new version; everything else the user set is
 // preserved.
-static constexpr int kSettingsVersion = 6;
+static constexpr int kSettingsVersion = 8;
 
 // Keys whose defaults changed in a local-light tuning pass.  Version 5 also
 // makes these controls live on the cube receiver; reset the old 1-unit
@@ -100,6 +100,10 @@ static constexpr int kSettingsVersion = 6;
 // reach them; the compiled-in default IS the shipped behaviour, and a stale
 // file must not be allowed to pin the old one.
 static bool settings_retuned(const char* key) {
+    // Version 8 replaces the old five-rung experimental cadence index with a
+    // stable three-rung product control.  Old numeric indices do not preserve
+    // their meaning, so migrate them to the new Low default.
+    if (std::strcmp(key, "local_cube_quality") == 0) return true;
     static const char* kV2[] = {
         "local_min_sep", "local_normal_bias", "local_soft",
     };
@@ -116,6 +120,16 @@ static bool settings_retuned(const char* key) {
         "csm_blend", "csm_pcf", "csm_composite",
     };
     for (const char* k : kV6) if (std::strcmp(k, key) == 0) return true;
+#ifdef _WIN32
+    // Version 7 (2026-08-24): native Windows confirmation established that
+    // ordinary torch-lit surfaces require the full colour guard (threshold
+    // zero) to survive the later directional-shadow composite.  A v6 file
+    // contains the old shared 0.85 default and would silently reintroduce the
+    // bug now that product settings are enabled. Linux keeps both its default
+    // and any user-selected value.
+    static const char* kV7Windows[] = { "selfillum_guard" };
+    for (const char* k : kV7Windows) if (std::strcmp(k, key) == 0) return true;
+#endif
     return false;
 }
 
@@ -150,10 +164,7 @@ static unsigned settings_table(SettingRef* out, unsigned max) {
     // "Light supported" removed: the count follows the engine. Persisting a
     // duplicate would let a saved value fight it.
     //addi("max_lamps",        &g_lampUploadMax);          // "Light supported"
-    // "Local shadow update" is gone: the sun-path fill refills every frame
-    // from the engine's bucket pass, so a cadence could only throttle slot
-    // re-computation, which is trivial.
-    //addi("local_cube_quality", &g_localCubeQuality);
+    addi("local_cube_quality", &g_localCubeQuality);      // "Local shadow update"
     addi("local_cube_sources", &g_localCubeSourceBudget);
     addf("selfillum_guard",    &g_liftThreshold);          // "Bright surfaces keep light"
     addb("lamp_lift",          &g_lampLiftEnabled);        // "Lights lift sun shadow"
@@ -258,23 +269,23 @@ static void settings_reset_defaults() {
     g_localLightEmittersCast   = true;
     g_pendingLocalSize         = 1024;  // Low -- the bottom of the panel's ladder
     g_localLightDynamicOnly    = true;
-    g_localCubeQuality         = kLocalCubeQualityMax;   // every frame
+    g_localCubeQuality         = 0;   // Low: 25 ms; Ultra is explicit opt-in
 #if NWN_SHIP
     g_localCubeSourceBudget    = 3;   // shipping: always three; NWN gates it
 #else
     g_localCubeSourceBudget    = 1;   // dev: start cheap
 #endif
     g_lampLiftEnabled          = true;
-    g_liftThreshold            = 0.85f;  // only genuinely glowing surfaces
-    g_localCubeUpdateSeconds   = kLocalCubeCadenceSeconds[g_localCubeQuality];
-#if NWN_SHIP
-    // Match the shipping default (kWinDefaultEnv MAX_LAMPS=8): on Windows each
-    // of these also casts a shadow, so Restore defaults must not quietly hand
-    // someone 32 per-light captures a frame.
-    g_lampUploadMax            = 0;   // follow the engine
+#ifdef _WIN32
+    // Lower means a wider brightness range keeps the engine's local lighting.
+    // Zero is the confirmed Windows parity value; Linux retains its validated
+    // conservative threshold below.
+    g_liftThreshold            = 0.0f;
 #else
-    g_lampUploadMax            = 0;   // follow the engine
+    g_liftThreshold            = 0.85f;  // only genuinely glowing surfaces
 #endif
+    g_localCubeUpdateSeconds   = kLocalCubeCadenceSeconds[g_localCubeQuality];
+    g_lampUploadMax            = 0;   // follow the engine
     // Resolutions own GL textures, so they go through the same staged Apply the
     // panel uses rather than being written straight to the live values.
     g_pendingCascadeSize  = 2048;
@@ -285,8 +296,26 @@ static void settings_reset_defaults() {
 
 static bool settings_path(char* buf, size_t n) {
     const char* dir = shadow_getenv("NWN_SHADOWMAP_OUT_DIR");
-    if (dir && *dir) std::snprintf(buf, n, "%s/nwn_shadowmap_settings.ini", dir);
-    else             std::snprintf(buf, n, "nwn_shadowmap_settings.ini");
+    if (dir && *dir) {
+        std::snprintf(buf, n, "%s/nwn_shadowmap_settings.ini", dir);
+        return true;
+    }
+#ifdef _WIN32
+    // A proxy DLL must not rely on the process working directory. Steam,
+    // shortcuts, and launchers may all choose a different one, while the
+    // product contract says settings live beside the exact nwmain.exe that
+    // loaded us. This is also where the opt-in Windows log is anchored.
+    char exe[MAX_PATH] = {};
+    const DWORD got = GetModuleFileNameA(nullptr, exe, MAX_PATH);
+    if (got > 0 && got < MAX_PATH) {
+        if (char* slash = std::strrchr(exe, '\\')) {
+            slash[1] = '\0';
+            std::snprintf(buf, n, "%snwn_shadowmap_settings.ini", exe);
+            return true;
+        }
+    }
+#endif
+    std::snprintf(buf, n, "nwn_shadowmap_settings.ini");
     return true;
 }
 
@@ -299,7 +328,7 @@ static void save_settings();   // defined below; load rewrites a stale file
 // the panel saying "High" while the scheduler still used an environment/default
 // cadence until a live combo-box edit happened.
 static const char* local_cube_quality_name(int quality) {
-    static const char* names[] = {"Low", "Medium", "High", "Extreme", "Ultra"};
+    static const char* names[] = {"Low", "Medium", "Ultra"};
     static_assert(sizeof(names)/sizeof(names[0]) == kLocalCubeQualityCount,
                   "quality names must match the cadence table");
     quality = std::max(0, std::min(kLocalCubeQualityMax, quality));
@@ -342,10 +371,9 @@ static void apply_local_cube_runtime_settings(bool startup, const char* source) 
         false;
     g_localCubeUpdateSeconds = cadence;
 
-    // Current local depth storage is single-buffered. Quality remains a saved
-    // UI preference for the future ping-pong implementation; capture itself
-    // stays per-frame so a cleared staging map cannot become visible as flicker.
-    // Source/range changes still advance the epoch for diagnostics.
+    // The cadence gates staging before any clear, so a skipped update retains
+    // the last complete map. Source/range changes still advance the epoch and
+    // force an immediate replacement capture.
     if (capturePolicyChanged) {
         ++g_localLightCapturePolicyEpoch;
         g_localLightLastCaptureTime = -1.0;
@@ -517,7 +545,7 @@ static void settings_tick() {
     // Reconcile a live combo-box edit immediately and reset the old capture
     // deadline when its cadence changes.
     apply_local_cube_runtime_settings(false, "panel");
-    static double last[32] = {};
+    static double last[kSettingsMax] = {};
     static bool primed = false;
     SettingRef table[kSettingsMax];
     const unsigned count = settings_table(table, kSettingsMax);

@@ -739,7 +739,7 @@ static void replay_bucket_into_local_light_layers(void* scene, int bucket) {
     // ones. No warm-up, no clear-between.
     if (g_localLightDynamicOnly && bucket < 2) return;
     if (!g_localInlinePrepared || !g_localLightTargetUsable ||
-        !g_localLightDepthTex || !gl::FramebufferTextureLayer ||
+        !g_localLightWriteDepthTex || !gl::FramebufferTextureLayer ||
         !g_shadowFrameContext.valid)
         return;
     if (g_localInlinePolicyEpoch != g_localLightCapturePolicyEpoch) return;
@@ -812,7 +812,7 @@ static void replay_bucket_into_local_light_layers(void* scene, int bucket) {
 
     for (unsigned layer = 0; layer < slots && layer < (unsigned)kLocalLightFaces; ++layer) {
         gl::FramebufferTextureLayer(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT,
-                                    g_localLightDepthTex, 0, (int)layer);
+                                    g_localLightWriteDepthTex, 0, (int)layer);
         // Clear ONCE per frame, on the first bucket that touches this layer --
         // clearing per bucket would erase the previous bucket's casters.
         //
@@ -857,6 +857,44 @@ static void replay_bucket_into_local_light_layers(void* scene, int bucket) {
     if (eng::SetMatrixMode) eng::SetMatrixMode(oldMode);
 
     restore_state(outer);
+
+    // Buckets 0..3 are the complete local caster generation. Publish only
+    // after the final alpha-card bucket has been replayed; until this exact
+    // point every receiver continues sampling the previous read texture and
+    // its matching matrices/slot metadata.
+    if (bucket == 3) {
+        bool complete = true;
+        for (unsigned layer = 0; layer < slots; ++layer)
+            complete = complete &&
+                       g_localInlineLayerFrame[layer] == g_shadowFrameContext.serial;
+        if (complete) {
+            std::swap(g_localLightDepthTex, g_localLightWriteDepthTex);
+            for (unsigned layer = 0; layer < slots; ++layer) {
+                std::memcpy(g_localLightFaceVP[layer], g_localVisibleVP[layer],
+                            sizeof(g_localLightFaceVP[layer]));
+                std::memcpy(g_localLightSlotPos[layer], g_localVisibleSlotPos[layer],
+                            sizeof(g_localLightSlotPos[layer]));
+                g_localLightSlotRadius[layer] = g_localVisibleSlotRadius[layer];
+                g_localLightSlotFade[layer] = g_localVisibleSlotFade[layer];
+            }
+            std::memcpy(g_localLightVP, g_localVisibleVP[0], sizeof(g_localLightVP));
+            std::memcpy(g_localLightWorldPos, g_localVisibleSlotPos[0],
+                        sizeof(g_localLightWorldPos));
+            g_localLightWorldRadius = g_localVisibleSlotRadius[0];
+            g_localLightSlotCount = slots;
+            g_haveLocalLightVP = true;
+            g_localLightVPFrame = g_shadowFrameContext.serial;
+            g_localLightCompletedPolicyEpoch = g_localInlinePolicyEpoch;
+            g_localLightLastCaptureTime = now_seconds();
+            g_localInlinePrepared = false;
+            static bool reported = false;
+            if (!reported) {
+                reported = true;
+                fprintf(stderr, "[shadowmap][local-light] complete ping-pong generation published: read=%u write=%u slots=%u\n",
+                        g_localLightDepthTex, g_localLightWriteDepthTex, slots);
+            }
+        }
+    }
 }
 
 static void replay_bucket_into_cascade_layers(void* scene, int bucket, bool staticTarget) {
@@ -1235,4 +1273,3 @@ static void clear_target() {
     gl::ClearDepth(1.0);
     gl::Clear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 }
-
