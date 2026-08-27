@@ -400,8 +400,16 @@ void read_settings() {
                                 *materialIdentityCensus &&
                                 *materialIdentityCensus != '0');
     const char* materialModeRouting = getenv("NWN_ALPHA_MODE_ROUTING");
+#ifdef _WIN32
+    // Native Windows is distributed as a drop-in proxy DLL, so accepted
+    // material routing must work without a launcher or environment wrapper.
+    // Keep an explicit zero as an escape hatch for native-rendering A/B tests.
+    g_materialModeRouting = !(materialModeRouting && *materialModeRouting &&
+                              *materialModeRouting == '0');
+#else
     g_materialModeRouting = (materialModeRouting && *materialModeRouting &&
                              *materialModeRouting != '0');
+#endif
     const char* transmittanceCensus = getenv("NWN_A2C_TRANSMITTANCE_CENSUS");
     g_a2cTransmittanceCensus = (transmittanceCensus && *transmittanceCensus &&
                                 *transmittanceCensus != '0');

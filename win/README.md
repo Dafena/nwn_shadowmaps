@@ -9,11 +9,12 @@ Linux remains the behavioural reference. On 2026-08-24 the maintainer
 explicitly requested staged Windows implementation work. Windows-specific
 repairs must remain isolated and must not redefine working Linux behaviour.
 
-Material Mode 2 A2C is accepted on Linux but not yet validated on Windows; it
-may be ported only after the shadow-map baseline is established. Mode 3 OIT is
-parked globally and is not a Windows target. See `../TRANSPARENCY_MODES.md` for
-the Linux evidence and `../WINDOWS_IMPLEMENTATION_PLAN.md` for the ordered
-Windows checkpoints.
+Material Mode 2 A2C is accepted and validated on both Linux and Windows. Native
+Windows enables strict material routing by default so the proxy DLL needs no
+launcher flags; set `NWN_ALPHA_MODE_ROUTING=0` only for an explicit native-path
+A/B test. Mode 3 OIT is parked globally and is not a Windows target. See
+`../TRANSPARENCY_MODES.md` for the evidence and
+`../WINDOWS_IMPLEMENTATION_PLAN.md` for the completed Windows checkpoints.
 
 If a behaviour works on Linux and fails on Windows, repair it in a Windows-only
 path. Do not change shared C++ or GLSL to solve a Windows-only symptom. The
@@ -67,6 +68,13 @@ WINEDLLOVERRIDES=version=n,b
 The DLL carries shipping defaults, so no batch launcher is required. Environment
 variables still override those defaults.
 
+Strict material routing is one of those Windows shipping defaults. Materials
+declaring `parameter int NWN_ALPHA_MODE 2` use A2C whenever the live framebuffer
+is multisampled; unmarked materials and every excluded route remain native. Set
+`NWN_ALPHA_MODE_ROUTING=0` to disable routing for troubleshooting.
+The validated four-stage material hook pipeline also defaults to complete;
+`NWN_WIN_MATERIAL_HOOK_STAGE` is retained only for diagnostic downgrades.
+
 ## Logging and settings
 
 The shipping build is quiet by default. Set `NWN_SHADOWMAP_LOG=1` before
@@ -95,12 +103,12 @@ build; their compiled defaults define shipping behaviour.
   every rendered frame to match the directional-shadow cadence. Low remains
   the default; the local shadow-source budget is still independently capped at
   three lights.
-- Material identity census support maps the exact v89.8193.37-17 exports for
+- Material identity transport maps the exact v89.8193.37-17 exports for
   `Material`/`SharedMaterial` creation, binding, field parsing, texture access,
-  and shared initialization. These hooks are inert unless identity census or
-  strict material routing is explicitly requested, and fail closed if a safe
-  trampoline is unavailable. Although both destructor exports exist, their
-  MSVC Subhook trampolines crash on return and are permanently refused;
+  and shared initialization. These hooks support default-on strict material
+  routing and fail closed if a safe trampoline is unavailable. Although both
+  destructor exports exist, their MSVC Subhook trampolines crash on return and
+  are permanently refused;
   construction/init boundaries reset reused identities instead. The unsafe
   texture-unit hook also remains disabled.
 - The v89.8193.37-17 `Material` layout stores its live `SharedMaterial*` at
