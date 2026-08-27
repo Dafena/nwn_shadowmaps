@@ -30,7 +30,7 @@ As of 2026-08-26:
 - The repository has a Windows build. Windows-specific local-light fast paths
   are isolated behind `NWN_WIN_LOCAL_FASTPATH`; shared Linux behaviour must not
   be changed to solve a Windows-only problem.
-- The Linux tree contains opt-in material transparency modes. Mode 2 A2C is
+- The renderer contains explicit material transparency modes. Mode 2 A2C is
   the preferred foliage baseline because it remains stable under camera
   rotation and receives directional/local shadows; multiple covered layers
   still limit emitter fidelity. Mode 3 weighted OIT is parked: its runtime and

@@ -20,7 +20,11 @@ runtime tests confirm material creation, shared-MTR parsing, standard-texture
 binding/name lookup, and shared-material initialization. The exported
 destructors exist but their Subhook trampolines are unsafe on this executable,
 so Windows refuses them and resets reused shared identities at
-`SharedMaterial::Init`. Visible Mode 2 parity is not enabled yet.
+`SharedMaterial::Init`. Visible Mode 2 parity is complete and strict material
+routing is now a Windows shipping default; `NWN_ALPHA_MODE_ROUTING=0` remains
+an explicit troubleshooting opt-out. The validated material hook pipeline also
+defaults to stage 4/4; lower `NWN_WIN_MATERIAL_HOOK_STAGE` values are diagnostic
+downgrades rather than shipping requirements.
 
 ## Checkpoints
 

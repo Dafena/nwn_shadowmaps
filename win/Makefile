@@ -4,9 +4,10 @@
 #
 # Output: version.dll (PE32+, matching nwmain.exe). Drop it next to
 # nwmain.exe in bin/win32 and launch the game normally -- no launcher script,
-# no env wrapper. Settings come from environment variables exactly as on Linux
-# (set them before launching), and the injector writes nwn_shadowmap_win.log
-# beside the exe because a GUI process has no usable stderr.
+# no env wrapper. Accepted Mode 2 material routing defaults on for Windows;
+# environment variables can still override shipping defaults. The injector
+# writes nwn_shadowmap_win.log beside the exe when logging is requested because
+# a GUI process has no usable stderr.
 #
 # Same sources as the .so: the engine logic is shared, with nwn_platform.h
 # shimming dlsym/mprotect/sysconf and four #ifdef'd sites (symbol resolution,

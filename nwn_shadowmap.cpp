@@ -1630,14 +1630,14 @@ static eng::SharedMaterialParseField_t g_sharedMaterialParseTrampoline = nullptr
 
 static int material_hook_stage() {
 #ifdef _WIN32
-    // Prove each MSVC detour independently. A non-null subhook trampoline did
-    // not prevent the first combined Windows census build from crashing, so
-    // concrete creation, parsing, hot-path binding, and shared initialization
-    // advance one stage. Windows destructors are permanently refused: their
-    // exported prologues produced nominal trampolines that crashed on return.
-    // at a time. Fail closed at stage 1 unless the tester explicitly asks for
-    // more. Linux retains its already validated complete hook set.
-    int stage = 1;
+    // The four MSVC detours were introduced one checkpoint at a time after the
+    // first combined census build crashed. Native Windows testing subsequently
+    // validated the complete creation, parsing, hot-path binding, and shared
+    // initialization pipeline, so shipping builds must default to stage 4 or
+    // authored NWN_ALPHA_MODE fields can never reach the renderer. Keep the
+    // environment override only for diagnostic downgrades. Windows destructors
+    // remain permanently refused because their trampolines crashed on return.
+    int stage = 4;
     if (const char* value = std::getenv("NWN_WIN_MATERIAL_HOOK_STAGE"))
         stage = std::atoi(value);
     return std::max(0, std::min(4, stage));
