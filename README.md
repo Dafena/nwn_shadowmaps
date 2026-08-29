@@ -12,7 +12,7 @@ Both targets are built from the same renderer source.
 
 ## Current state
 
-As of 2026-08-26:
+As of 2026-08-29:
 
 - Directional sun shadows use cascaded, injector-owned depth arrays and a
   fullscreen composite. Static world geometry can use a world-anchored map;
@@ -27,6 +27,12 @@ As of 2026-08-26:
   Local-light shadows remain independent of the area's sun/moon policy.
 - The Dear ImGui settings panel is live. Development builds expose diagnostics;
   shipping builds keep only user-facing controls.
+- Linux automatically observes NWN area rain and applies gradual wetness to
+  static scene geometry. Flat opaque surfaces can form compact procedural
+  puddles with fog-aware reflection, refraction, and normal-based impacts;
+  non-puddle and static-alpha surfaces receive animated wet noise. Dynamic
+  characters and native water are excluded. Top-down rain occlusion is future
+  work, and Windows currently retains no-op rain stubs.
 - The repository has a Windows build. Windows-specific local-light fast paths
   are isolated behind `NWN_WIN_LOCAL_FASTPATH`; shared Linux behaviour must not
   be changed to solve a Windows-only problem.
@@ -74,6 +80,7 @@ ABI:
 | `shadow_targets.inc` | Texture/FBO allocation and validation |
 | `shadow_replay.inc` | Sun, static-world, and local bucket replay |
 | `shadow_local_lights.inc` | Engine-selected local-light state and capture setup |
+| `rain_runtime.inc` | Linux rain authority, wetness state, and receiver classification |
 | `shadow_shader_interposition.inc` | Shader interception and draw wrappers |
 | `shadow_fullscreen_receiver.inc` | Receiver shader construction and scene copies |
 | `shadow_overlay_runtime.inc` | Overlay runtime, input, and frame ordering |
@@ -129,8 +136,9 @@ the development library defaults GPU cost reporting and capture dumps on. The
 base scene trace remains enabled
 with a one-frame/one-event output cap because its hooks supply the camera,
 scene, and light state required by the shadow renderer. It ignores saved panel
-settings by default so repeated A/B runs are comparable. The accepted
-transparency opt-in `NWN_ALPHA_MODE_ROUTING=1` remains caller-controlled.
+settings by default so repeated A/B runs are comparable. Accepted Mode 2 A2C
+routing is enabled by default on Linux and Windows; set
+`NWN_ALPHA_MODE_ROUTING=0` only for a native-rendering A/B comparison.
 `NWN_OIT_MODE3` is intentionally unavailable.
 
 For a normal development run, press `Ctrl+Shift+F11` in a loaded area to open

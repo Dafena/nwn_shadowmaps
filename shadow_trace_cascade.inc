@@ -369,11 +369,18 @@ static void trace_scene_enter(void* scene) {
     // Installed lazily from the render path: by the first area frame SDL is
     // certainly wired up, and it retries if the slot is not populated yet.
     if (!g_overlayLegacy) install_sdl_pollevent_patch();
+#ifndef _WIN32
+    // The shipping Linux trace/CSM path historically did not need the generic
+    // program interposer. Rain classification does: it tracks program identity
+    // and skinmesh uploads without a driver query on every draw.
+    if (rain_needs_draw_observer()) install_useprogram_patch();
+#endif
+    install_rain_uniform_patch();
     install_light_vector_trace_patch();
     install_geometry_trace_patch();
     if (shadow_getenv("NWN_SHADOWMAP_DUMP_VERTEX") || shadow_getenv("NWN_SHADOWMAP_DUMP_FRAGMENT") ||
         g_cascadeStaticAlphaCapture || g_cascadeStaticAlphaReceiver ||
-        nwn_oit_needs_shader_sources())
+        nwn_oit_needs_shader_sources() || rain_needs_shader_sources())
         install_shadersource_patch();
     if (g_cascadeMatrixTrace || g_cascadeLightCapture) install_uniform_matrix_patch();
 
@@ -401,6 +408,7 @@ static void trace_scene_enter(void* scene) {
         }
     }
     if (scene != g_areaScene) return;
+    rain_scene_begin(scene);
     // The normal trace remains bounded.  The visible static receiver is
     // different: its frame context and private depth must advance forever or
     // it would compare a new screen depth against an old camera/light frame.
@@ -438,6 +446,7 @@ static void trace_scene_enter(void* scene) {
 }
 
 static void trace_scene_exit(void* scene) {
+    rain_scene_end(scene);
     // The area-light vector is discovered while the original normal pass is
     // running.  Allocate only after that pass, once the real direction and a
     // frozen cascade fit both exist.  This touches private GL objects only;

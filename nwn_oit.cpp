@@ -407,8 +407,11 @@ void read_settings() {
     g_materialModeRouting = !(materialModeRouting && *materialModeRouting &&
                               *materialModeRouting == '0');
 #else
-    g_materialModeRouting = (materialModeRouting && *materialModeRouting &&
-                             *materialModeRouting != '0');
+    // Linux now matches the accepted drop-in Windows behaviour: authored
+    // Mode 2 A2C works without a launcher or environment wrapper. Keep an
+    // explicit zero as the native-rendering A/B escape hatch.
+    g_materialModeRouting = !(materialModeRouting && *materialModeRouting &&
+                              *materialModeRouting == '0');
 #endif
     const char* transmittanceCensus = getenv("NWN_A2C_TRANSMITTANCE_CENSUS");
     g_a2cTransmittanceCensus = (transmittanceCensus && *transmittanceCensus &&

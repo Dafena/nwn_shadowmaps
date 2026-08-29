@@ -1,8 +1,8 @@
 # Current task
 
-Updated 2026-08-26. Linux remains the behavioural reference, and the
-maintainer has now explicitly requested planning and implementation work for
-Windows.
+Updated 2026-08-29. Linux remains the behavioural reference. The
+injector-owned automatic rain/puddle system is accepted on Linux. A Windows
+port remains a separate, explicitly requested task.
 
 ## Accepted Linux baseline
 
@@ -42,6 +42,44 @@ Native Linux NWN intentionally follows aliases in
 Linux and Proton share the same development resources. The `users/fede` and
 `users/steamuser` development paths resolve to the same inode. Do not deploy
 duplicate overrides into the unaliased home `development` directory.
+
+## Accepted Linux rain/puddle baseline
+
+The automatic Linux implementation lives in `rain_runtime.inc`:
+
+- `CNWCArea::SetWeather(unsigned char, float)` is the authoritative automatic
+  weather source. Linux disassembly confirms weather values 0 clear, 1 rain,
+  2 snow and density in the 0..100 range. The injector normalizes density and
+  maintains gradual wetness accumulation/drying without module configuration.
+  Wetness is scoped to the current `CNWCArea`: area and save-load transitions
+  reset inherited wetness immediately, while weather changes within one area
+  retain the accepted fade.
+- The selected `g_areaScene` gate is mandatory. Draw classification tracks
+  NWN's `skinmesh` uniform from its own `glUniform1i` uploads, avoiding a
+  synchronous driver query per draw. Static opaque bucket 0 receives the full
+  effect. Static alpha/card bucket 1 receives orientation-aware wet noise and
+  normal impacts without puddles. Dynamic body/hair buckets, skinned
+  characters, native water, and unknown/out-of-bucket draws are excluded.
+- The weather hook uses Linux's established remove/call/reinstall fallback
+  because this executable's function prologue does not yield a Subhook
+  trampoline. Native Linux runtime testing confirmed clear, snow, and rain
+  transitions, area changes, and save loading.
+- Eligible opaque surfaces gain gradual wet film and compact world-anchored
+  procedural puddles. Standing water is limited by geometric and smoothed
+  surface flatness; steep geometry only becomes wet. Puddles reuse NWN's
+  framebuffer and water-noise inputs for bounded screen-space reflection,
+  refraction, and animated normal ripples. Non-puddle wet surfaces use moving
+  micro-normal noise and smaller normal-only rain impacts.
+- Rain contributions fade through NWN fog. Mode 2 A2C remains enabled by
+  default and was kept outside the rain shader's RGB-only static-alpha work.
+- Top-down rain occlusion is deliberately deferred. Covered outdoor geometry
+  may therefore become wet until a future occlusion feature is implemented.
+- Windows currently compiles no-op rain stubs only. Do not add Windows rain
+  bindings without an explicit port request. If the future Windows port fails
+  while Linux works, ask the maintainer before changing shared behaviour.
+
+The feature requires no environment variable, module edit, hak, shader
+override, or user-authored material marker.
 
 ## Next work
 

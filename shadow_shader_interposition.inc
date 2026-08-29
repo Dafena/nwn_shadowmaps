@@ -722,8 +722,10 @@ extern "C" void my_shader_source(GLuint shader, GLsizei count,
     const bool staticAlphaProbe = g_cascadeStaticAlphaCapture ||
                                   g_cascadeStaticAlphaReceiver;
     const bool oitFoliageProbe = nwn_oit_needs_shader_sources();
+    const bool rainShaderProbe = rain_needs_shader_sources();
     if (!g_realShaderSource || (!g_injectTest && !dumpVertex && !dumpFragment &&
-                                !staticAlphaProbe && !oitFoliageProbe) ||
+                                !staticAlphaProbe && !oitFoliageProbe &&
+                                !rainShaderProbe) ||
         count <= 0 || !string) {
         if (g_realShaderSource) g_realShaderSource(shader, count, string, length);
         return;
@@ -747,6 +749,8 @@ extern "C" void my_shader_source(GLuint shader, GLsizei count,
     bool oitFoliageInjected = false;
     bool materialModeInjected = false;
     bool a2cEmitterInjected = false;
+    const bool rainInjected = rainShaderProbe &&
+                              rain_patch_shader_source(combined);
     if (stockAlphaVariant || customContinuousAlphaVariant) {
         if (staticAlphaProbe) {
             bool seen = false;
@@ -824,7 +828,7 @@ extern "C" void my_shader_source(GLuint shader, GLsizei count,
         }
     }
     const bool markerInjected = inject_marker(combined);
-    if (!materialModeInjected && !oitFoliageInjected &&
+    if (!rainInjected && !materialModeInjected && !oitFoliageInjected &&
         !a2cEmitterInjected && !markerInjected) {
         g_realShaderSource(shader, count, string, length);
         return;
@@ -1781,6 +1785,7 @@ extern "C" void my_use_program(GLuint prog) {
     // succeed (no GL context at DLL attach), so every gl:: pointer below is
     // still null. Forward and return until the render path binds them.
     if (!g_glBound) return;
+    rain_note_program(prog);
     static bool said = false;
     if (!said) { said = true;
         fprintf(stderr, "[shadowmap] program binds arriving via GLEW pointer\n"); }
@@ -1930,6 +1935,7 @@ static void dump_quad_program_source(unsigned prog, int bucket) {
 // NWN exactly once and with its unmodified state.
 static void trace_normal_geometry_draw(GLsizei count, bool indexed) {
     if (g_overlayPassActive) return;   // UI draws are not scene geometry
+    rain_observe_draw(g_curProgram, count);
     // The engine's own shadow pass, counted HERE and not in shadow_before_draw().
     // That function is reached from only 2 of the 10 draw wrappers -- this engine
     // draws mostly through glDrawRangeElements and glMultiDraw* -- so a counter

@@ -2125,6 +2125,7 @@ static bool set_light_view_direct(const Vec3f& eye, const float dir[3]) {
     return true;
 }
 
+#include "rain_runtime.inc"
 #include "shadow_shader_interposition.inc"
 #include "shadow_fullscreen_receiver.inc"
 #include "shadow_overlay_runtime.inc"
@@ -2745,6 +2746,7 @@ extern "C" void SceneRender_detour(void* self) {
         }
     }
     install_useprogram_patch();
+    install_rain_uniform_patch();
     install_uniform_matrix_patch();
     install_shadersource_patch();
     install_geometry_trace_patch();
@@ -2781,8 +2783,10 @@ extern "C" void SceneRender_detour(void* self) {
     void* tramp = subhook_get_trampoline(g_hook);
     g_renderingScene = self;
     g_inSceneRender = true;
+    rain_scene_begin(self);
     if (tramp) reinterpret_cast<eng::SceneRender_t>(tramp)(self);
     else       CALL_ORIGINAL(g_hook, eng::SceneRender, self);
+    rain_scene_end(self);
     g_inSceneRender = false;
     g_renderingScene = nullptr;
 
@@ -3627,6 +3631,7 @@ static void shadowmap_init() {
         fprintf(stderr, "[shadowmap] symbol resolution failed; hook NOT installed.\n");
         return;
     }
+    install_rain_engine_hooks();
 
     g_hook = subhook_new(reinterpret_cast<void*>(eng::SceneRender),
                          reinterpret_cast<void*>(SceneRender_detour),
@@ -4019,6 +4024,7 @@ static void shadowmap_fini() {
         *g_sdlPollEventSlot = (void*)g_realSdlPollEvent;
         g_sdlPollEventSlot = nullptr;
     }
+    uninstall_rain_engine_hooks();
 #ifdef _WIN32
     if (g_hookSharedMaterialInit) {
         subhook_remove(g_hookSharedMaterialInit);
