@@ -768,13 +768,12 @@ extern "C" void SceneRenderDrawBucket_trace_detour(void* self, int bucket) {
         const bool staticTarget = staticBucketCapture || staticAlphaBucketCapture;
         replay_bucket_into_cascade_layers(self, bucket, staticTarget);
     }
-#ifndef _WIN32
     // Weather owns a separate straight-down static depth target. Its replay is
-    // requested here, adjacent to the proven cascade bucket replay, and is a
-    // Linux-only module until the weather system receives an explicit port.
+    // requested here, adjacent to the proven cascade bucket replay. Linux and
+    // Windows now share this renderer; only weather discovery and GL hook
+    // transport differ by platform.
     if (self == g_areaScene)
         weather_runtime::capture_precipitation_occlusion_bucket(self, bucket);
-#endif
     // SUN-PATH local lights fill from here for the same reason the cascades do:
     // the engine has just rendered this bucket for the CAMERA, so replaying it
     // now captures exactly the visible casters. Area scene only, and never from

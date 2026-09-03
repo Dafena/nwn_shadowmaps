@@ -2,8 +2,9 @@
 
 Updated 2026-09-03. Linux remains the behavioural reference. The automatic
 clear/rain/snow weather-effects system, including precipitation occlusion and
-height-aware snow deformation, is accepted on Linux. A Windows weather port
-remains a separate, explicitly requested task.
+height-aware snow deformation, is accepted on Linux and ported to native
+Windows. The shared renderer is intentionally identical; only engine discovery
+and OpenGL interception differ by platform.
 
 ## Accepted Linux baseline
 
@@ -44,9 +45,9 @@ Linux and Proton share the same development resources. The `users/fede` and
 `users/steamuser` development paths resolve to the same inode. Do not deploy
 duplicate overrides into the unaliased home `development` directory.
 
-## Accepted Linux weather-effects baseline
+## Accepted cross-platform weather-effects baseline
 
-The automatic Linux implementation lives in `weather_runtime.inc`:
+The automatic implementation lives in `weather_runtime.inc`:
 
 - `CNWCArea::SetWeather(unsigned char, float)` is the authoritative automatic
   weather source. Linux disassembly confirms weather values 0 clear, 1 rain,
@@ -64,10 +65,16 @@ The automatic Linux implementation lives in `weather_runtime.inc`:
   effect. Static alpha/card bucket 1 receives orientation-aware wet noise and
   normal impacts without puddles. Dynamic body/hair buckets, skinned
   characters, native water, and unknown/out-of-bucket draws are excluded.
-- The weather hook uses Linux's established remove/call/reinstall fallback
+- The Linux weather hook uses the established remove/call/reinstall fallback
   because this executable's function prologue does not yield a Subhook
   trampoline. Native Linux runtime testing confirmed clear, snow, and rain
   transitions, area changes, and save loading.
+- Windows resolves private active-area `StartWeather`/`StopWeather` calls from
+  the validated client network-decoder path around exported
+  `CNWMessage::ReadBYTE`/`ReadBOOL`. At scene start it reads the newly active
+  client area's stored weather byte and reapplies that state. This area-load
+  synchronization handles weather changed while an interior had no weather
+  surface and is client-side, so it works for local and multiplayer clients.
 - Eligible opaque surfaces gain gradual wet film and compact world-anchored
   procedural puddles. Standing water is limited by geometric and smoothed
   surface flatness; steep geometry only becomes wet. Puddles reuse NWN's
@@ -117,10 +124,6 @@ The automatic Linux implementation lives in `weather_runtime.inc`:
   layer visible on dark tilesets that do not already use snow textures. Near
   full accumulation a continuous minimum blanket and 97% snow composite stop
   bright local lights from revealing the base texture as a lifted-snow halo.
-- Windows currently compiles no-op weather stubs only. Do not add Windows weather
-  bindings without an explicit port request. If the future Windows port fails
-  while Linux works, ask the maintainer before changing shared behaviour.
-
 The feature requires no environment variable, module edit, hak, shader
 override, or user-authored material marker.
 
@@ -131,6 +134,11 @@ native-water exclusion, crowded creature trails, player-trail priority, and
 the 8192x8192 occlusion target all behaved correctly with no noticed
 performance regression. A 16K depth target is supported by the configured
 path but consumes about 1 GiB of VRAM and was not part of that runtime pass.
+Native Windows confirmation covers rain optics without flicker, snow
+accumulation and trails, lighting, precipitation occlusion (including static
+transparent blockers), interior reset, and weather changed indoors being
+adopted on the next exterior load. Linux separately reconfirmed the same
+interior-to-exterior transition using the clean full-effects launcher.
 
 ## Next work
 
@@ -153,8 +161,10 @@ Mode 0, authored Mode 2, and parked Mode 3 materials. Visible Windows Mode 2
 A2C is also confirmed: Mode 2 alone selected A2C with live MSAA, while Mode 0
 and parked Mode 3 remained native. Directional/local A2C reception, stable
 camera motion, engine-budget sun lifting across camera zoom, and selectable
-local-shadow refresh are confirmed. Checkpoint 7 is complete; checkpoint 8
-regression/performance is next. Keep Windows-only mechanics behind Windows
+local-shadow refresh are confirmed. The weather port is complete and uses the
+accepted Linux shader/runtime behavior with Windows-only bindings. Final
+cross-platform regression/performance and a crowded Windows multiplayer trail
+recheck remain. Keep Windows-only mechanics behind Windows
 paths and do not alter working Linux behaviour to solve a Windows symptom.
 Mode 3 OIT is explicitly outside the Windows scope. The staged plan and exit
 criteria are in

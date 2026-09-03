@@ -1,6 +1,6 @@
 # Implementation status
 
-Updated 2026-08-21. This file describes the current tree only. It is not a
+Updated 2026-09-03. This file describes the current tree only. It is not a
 phase history and it does not describe deleted launchers or experiments.
 
 ## Development priority
@@ -67,12 +67,35 @@ does so in shipping defaults so the scene does not receive two shadow systems.
 The game's **Creature Shadow Detail** should remain **Best**; NWN's Off setting
 uses a blob fallback rather than meaning “no shadows”.
 
+### Weather effects
+
+- One shared renderer provides automatic clear/rain/snow surface effects on
+  Linux and Windows without module, hak, shader-file, or material changes.
+- Linux observes exported `CNWCArea::SetWeather`. Windows resolves the private
+  client `StartWeather`/`StopWeather` path and resynchronizes from the active
+  client area's stored weather when a scene loads. The Windows check is
+  client-side and therefore applies to local and multiplayer games.
+- Rain provides gradual wet film, fog-aware procedural puddles, bounded
+  screen-space reflection/refraction, water-noise ripples, and normal-only
+  impacts. Puddles remain restricted to sufficiently flat static geometry;
+  steeper upward surfaces receive wet film and impacts instead.
+- Snow provides lit raised accumulation, bounded parallax, and a 512x512
+  world-space deformation texture. Up to 16 characters retain independent
+  64-segment histories; the player owns the protected slot and retirement pool.
+- A cached top-down static depth map blocks rain and snow beneath opaque and
+  static-transparent cover while preserving alpha-discard holes. Its
+  height-aware comparison keeps roofs exposed and geometry below sheltered.
+- Interiors clear accumulated surface state immediately. Rain/snow changes
+  crossfade, and weather changed while indoors is applied on the next exterior
+  load. Linux and Windows have both passed that transition test.
+
 ## Experimental transparency path
 
-The repository contains opt-in Linux material transparency experiments in
+The repository contains opt-in material transparency experiments in
 `nwn_oit.cpp`. They are not part of the accepted shipping shadow path. Explicit
-Mode 2 A2C is camera-stable, preserves opaque depth intersections, and receives
-directional/local shadows, with 8x MSAA giving the preferred visual result.
+Mode 2 A2C is accepted on Linux and Windows, is camera-stable, preserves opaque
+depth intersections, and receives directional/local shadows, with 8x MSAA
+giving the preferred visual result.
 Multiple covered layers still limit emitter fidelity.
 
 Explicit Mode 3 reached an accepted diagnostic hybrid prototype: native-pivot
@@ -109,9 +132,10 @@ implementation checkpoints.
    priority sort is disabled.
 5. The result is an experimental diagnostic/composite system, not a complete
    replacement for NWN's lighting, stencil, or material shadow semantics.
-6. The A2C foliage branch is experimental. Multiple layers can consume all
-   covered MSAA samples and hide later emitters; an explicit transmittance path
-   is planned rather than making emitters unconditionally depthless.
+6. The accepted Mode 2 A2C foliage path still has a known compromise: multiple
+   layers can consume all covered MSAA samples and hide later emitters. Any
+   future repair must use explicit transmittance rather than making emitters
+   unconditionally depthless.
 
 ## Development controls
 
@@ -141,7 +165,8 @@ cd win && make
 python3 check_shaders.py
 ```
 
-Use `./run-dev.sh` for the development path and
+Use `./run-shadowmaps-clean.sh` for the full-effects visual/performance
+baseline. Use `./run-dev.sh` for diagnostics-heavy development and
 `./run-shadowmap-trace.sh` for a non-rendering trace. Set
 `NWN_SHADOWMAP_GAME_DIR` if automatic game-directory discovery is insufficient.
 The deploy path uses `nwn-shadows.sh` beside `nwmain-linux`.
@@ -153,6 +178,8 @@ The root flow is in `nwn_shadowmap.cpp`. The main implementation modules are:
 - `shadow_trace_cascade.inc` — scene and bucket hooks;
 - `shadow_replay.inc` — cascade, world-map, and local bucket replay;
 - `shadow_local_lights.inc` — local source preparation and capture state;
+- `weather_runtime.inc` — shared rain/snow rendering, platform weather
+  authority, precipitation occlusion, and snow deformation;
 - `shadow_shader_interposition.inc` — shader/draw interception;
 - `shadow_overlay_runtime.inc` and `shadow_fullscreen_receiver.inc` — receiver,
   overlay, and frame ordering;

@@ -27,9 +27,10 @@ As of 2026-09-03:
   Local-light shadows remain independent of the area's sun/moon policy.
 - The Dear ImGui settings panel is live. Development builds expose diagnostics;
   shipping builds keep only user-facing controls.
-- Linux automatically observes NWN clear/rain/snow area weather through one
-  weather-effects module. Rain applies gradual wetness, compact fog-aware
-  reflective/refractive puddles, and normal-based impacts. Snow precipitation
+- Linux and Windows automatically observe NWN clear/rain/snow area weather
+  through one shared weather-effects renderer. Rain applies gradual wetness,
+  compact fog-aware reflective/refractive puddles, and normal-based impacts.
+  Snow precipitation
   is mutually exclusive with rain, while their accumulated surface layers
   crossfade with matching rain/snow fade-out timing. Snow uses slope-aware
   high-frequency coverage, raised parallax depth, and persistent refilling
@@ -53,7 +54,11 @@ As of 2026-09-03:
   edge filter avoids hard cuts, visible bands, and camera shimmer. It reuses the
   static-world extent/resolution and one-shot full-BSP lifecycle; 8192x8192 was
   runtime-tested, while the supported 16K maximum requires about 1 GiB for its
-  depth texture. Windows currently retains no-op weather stubs.
+  depth texture. Linux obtains weather directly from `CNWCArea::SetWeather`.
+  Windows resolves the corresponding private client weather calls and, on
+  every area load, synchronizes from the newly active client area's stored
+  weather. The area-load check closes interior-to-exterior timing gaps and is
+  client-side, so it applies to local games and multiplayer clients alike.
 - The repository has a Windows build. Windows-specific local-light fast paths
   are isolated behind `NWN_WIN_LOCAL_FASTPATH`; shared Linux behaviour must not
   be changed to solve a Windows-only problem.
@@ -101,7 +106,7 @@ ABI:
 | `shadow_targets.inc` | Texture/FBO allocation and validation |
 | `shadow_replay.inc` | Sun, static-world, and local bucket replay |
 | `shadow_local_lights.inc` | Engine-selected local-light state and capture setup |
-| `weather_runtime.inc` | Linux clear/rain/snow authority, surface state, and receiver classification |
+| `weather_runtime.inc` | Shared rain/snow rendering, platform weather authority, precipitation occlusion, and snow trails |
 | `shadow_shader_interposition.inc` | Shader interception and draw wrappers |
 | `shadow_fullscreen_receiver.inc` | Receiver shader construction and scene copies |
 | `shadow_overlay_runtime.inc` | Overlay runtime, input, and frame ordering |
@@ -138,20 +143,21 @@ python3 check_shaders.py
 Run these from the repository directory:
 
 ```bash
-./run-dev.sh                         # rebuild and launch the development path
-./run-shadowmaps-clean.sh            # shadows-only visual/performance baseline
+./run-dev.sh                         # diagnostics-heavy trace/development path
+./run-shadowmaps-clean.sh            # full-effects visual/performance baseline
 ./run-shadowmap-trace.sh             # non-rendering trace path
 ./run-nwn.sh /path/to/nwmain-linux   # generic LD_PRELOAD launcher
 ```
 
-`run-dev.sh` enables the development capture and diagnostics and delegates
+`run-dev.sh` enables the diagnostics-heavy development capture and delegates
 game-directory discovery to `run-shadowmap-trace.sh`. Set
 `NWN_SHADOWMAP_GAME_DIR` when the game is not found by the launcher. Diagnostic
 logs and PGM output go to the repository by default; override the locations
 with `NWN_SHADOWMAP_LOG` and `NWN_SHADOWMAP_OUT_DIR`.
 
-Use `run-shadowmaps-clean.sh` for visual and performance comparisons. It keeps
-the current shipping/deploy library and normal shadow settings but disables all
+Use `run-shadowmaps-clean.sh` for normal visual and performance comparisons,
+including weather, A2C, shadows, and the ImGui panel. It keeps the current
+shipping/deploy library and normal renderer settings but disables all
 census/readback/dump/timing diagnostics. Using the shipping build is important:
 the development library defaults GPU cost reporting and capture dumps on. The
 base scene trace remains enabled
@@ -162,7 +168,7 @@ routing is enabled by default on Linux and Windows; set
 `NWN_ALPHA_MODE_ROUTING=0` only for a native-rendering A/B comparison.
 `NWN_OIT_MODE3` is intentionally unavailable.
 
-For a normal development run, press `Ctrl+Shift+F11` in a loaded area to open
+For a normal full-effects run, press `Ctrl+Shift+F11` in a loaded area to open
 the panel. Settings are saved as `nwn_shadowmap_settings.ini` in
 `NWN_SHADOWMAP_OUT_DIR` when that variable is set; otherwise they use the
 process working directory. The development launcher sets the output directory

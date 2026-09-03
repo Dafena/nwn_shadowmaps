@@ -1,19 +1,22 @@
 // ===========================================================================
-//  Injector-owned weather-effects runtime -- Linux reference implementation
+//  Injector-owned weather-effects runtime -- shared rendering implementation
 //
 //  This module owns clear/rain/snow discovery, conservative receiver
 //  classification, and stock-material weather branches. Effects are injected
 //  into shaders already used by NWN and remain inert unless the draw funnel
 //  marks the current draw as eligible static area scenery.
 //
-//  Windows remains a no-op until its separately requested port. Keep this
-//  interface platform-neutral so that port only supplies bindings proven to
-//  differ from the accepted Linux behaviour.
+//  Linux is the behavioural reference. Platform adapters at the end provide
+//  only weather-state discovery and GL interception mechanics.
 // ===========================================================================
 
-#ifndef _WIN32
-
 namespace weather_runtime {
+
+#ifdef _WIN32
+#define WEATHER_LOG_PREFIX "[weather][win] "
+#else
+#define WEATHER_LOG_PREFIX "[weather][linux] "
+#endif
 
 static constexpr int kWeatherClear = 0;
 static constexpr int kWeatherRain  = 1;
@@ -45,6 +48,8 @@ struct ProgramState {
     GLuint program = 0;
     GLint skinmesh = -1;
     GLint areaFlags = -1;
+    int areaFlagsValue = 0;
+    bool areaFlagsKnown = false;
     GLint waterTime = -1;
     GLint waterWind = -1;
     GLint waterNoise = -1;
@@ -116,6 +121,7 @@ struct RuntimeState {
     unsigned unclassifiedDraws = 0;
     unsigned actorPositions = 0;
     unsigned snowTrackStamps = 0;
+    void* observedScene = nullptr;
     int weatherType = kWeatherClear;
     float weatherDensity = 0.0f;
     float rainAmount = 0.0f;
@@ -181,8 +187,10 @@ static RuntimeState g;
 
 using Uniform1i_t = void (*)(GLint, GLint);
 static Uniform1i_t g_realUniform1i = nullptr;
+#ifndef _WIN32
 static subhook_t g_weatherHook = nullptr;
 static eng::AreaSetWeather_t g_weatherTrampoline = nullptr;
+#endif
 
 static bool area_draw_active() {
     const bool traceArea = g_traceEnabled && g_traceFrameActive &&
@@ -193,10 +201,15 @@ static bool area_draw_active() {
     return traceArea || legacyArea;
 }
 
-static ProgramState* program_state(GLuint program) {
-    if (!program || !gl::GetUniformLocation) return nullptr;
+static ProgramState* find_program_state(GLuint program) {
     for (unsigned i = 0; i < g.programCount; ++i)
         if (g.programs[i].program == program) return &g.programs[i];
+    return nullptr;
+}
+
+static ProgramState* program_state(GLuint program) {
+    if (!program || !gl::GetUniformLocation) return nullptr;
+    if (ProgramState* existing = find_program_state(program)) return existing;
     if (g.programCount >= kProgramCapacity) return nullptr;
 
     ProgramState& state = g.programs[g.programCount++];
@@ -261,7 +274,7 @@ static void probe_framebuffer_reflection_inputs() {
         lastReady = ready;
         lastNoiseReady = noiseReady;
         fprintf(stderr,
-                "[weather][linux] water inputs reflection=%s noise=%s "
+                WEATHER_LOG_PREFIX "water inputs reflection=%s noise=%s "
                 "color=%d depth=%d noise=%d\n",
                 ready ? "ready" : "unavailable",
                 noiseReady ? "ready" : "unavailable",
@@ -293,7 +306,7 @@ static void observe_area_flags(int flags) {
     if (interior && (!g.areaInterior || g.rainAmount > 0.0f ||
                      g.snowAmount > 0.0f)) {
         fprintf(stderr,
-                "[weather][linux] interior area flags=0x%x; clearing rain %.3f "
+                WEATHER_LOG_PREFIX "interior area flags=0x%x; clearing rain %.3f "
                 "snow %.3f immediately\n",
                 flags, g.rainAmount, g.snowAmount);
         g.rainAmount = 0.0f;
@@ -313,7 +326,7 @@ static void observe_area_flags(int flags) {
     g.snowing = !interior && g.weatherType == kWeatherSnow &&
                 g.weatherDensity > 0.001f;
     if (changed)
-        fprintf(stderr, "[weather][linux] area flags=0x%x interior=%d\n",
+        fprintf(stderr, WEATHER_LOG_PREFIX "area flags=0x%x interior=%d\n",
                 flags, interior ? 1 : 0);
 }
 
@@ -551,9 +564,70 @@ static void resolve_ground_contacts() {
     observe_ground_contact(resolved[playerContact].x,
                            resolved[playerContact].y,
                            resolved[playerContact].z, 0);
-    for (unsigned i = 0; i < resolvedCount; ++i) {
-        if ((int)i == playerContact) continue;
-        observe_ground_contact(resolved[i].x, resolved[i].y, resolved[i].z);
+
+    // Assign at most one resolved creature to each NPC slot this frame.
+    // The old nearest-slot loop could feed several shoulder-to-shoulder
+    // creatures into the same slot, then churn every slot when more than 15
+    // contacts were visible. That erased stable multiplayer trails precisely
+    // in crowded areas. Keep the 16-character budget (player + 15), choose the
+    // nearest contacts first, and never replace a slot twice in one frame.
+    unsigned npcContacts[kActorSampleCapacity - 1] = {};
+    unsigned npcCount = 0;
+    bool contactChosen[kContactCandidateCapacity] = {};
+    contactChosen[playerContact] = true;
+    while (npcCount < kActorSampleCapacity - 1) {
+        int nearest = -1;
+        float nearestD2 = 1.0e20f;
+        for (unsigned i = 0; i < resolvedCount; ++i) {
+            if (contactChosen[i]) continue;
+            const float dx = resolved[i].x - resolved[playerContact].x;
+            const float dy = resolved[i].y - resolved[playerContact].y;
+            const float d2 = dx * dx + dy * dy;
+            if (d2 < nearestD2) { nearestD2 = d2; nearest = (int)i; }
+        }
+        if (nearest < 0) break;
+        contactChosen[nearest] = true;
+        npcContacts[npcCount++] = (unsigned)nearest;
+    }
+
+    bool slotClaimed[kActorSampleCapacity] = {};
+    slotClaimed[0] = true;
+    for (unsigned n = 0; n < npcCount; ++n) {
+        const ContactCandidate& contact = resolved[npcContacts[n]];
+        int slot = -1;
+        float slotD2 = 2.25f;
+        for (int i = 1; i < kActorSampleCapacity; ++i) {
+            if (slotClaimed[i] || !g.actorSamples[i].valid ||
+                now - g.actorSamples[i].lastSeen > 1.0) continue;
+            const float dx = contact.x - g.actorSamples[i].x;
+            const float dy = contact.y - g.actorSamples[i].y;
+            const float d2 = dx * dx + dy * dy;
+            if (d2 < slotD2) { slotD2 = d2; slot = i; }
+        }
+        if (slot < 0) {
+            for (int i = 1; i < kActorSampleCapacity; ++i) {
+                if (!slotClaimed[i] && !g.actorSamples[i].valid) {
+                    slot = i;
+                    break;
+                }
+            }
+        }
+        if (slot < 0) {
+            double oldestSeen = 1.0e30;
+            for (int i = 1; i < kActorSampleCapacity; ++i) {
+                if (!slotClaimed[i] && g.actorSamples[i].lastSeen < oldestSeen) {
+                    oldestSeen = g.actorSamples[i].lastSeen;
+                    slot = i;
+                }
+            }
+            if (slot >= 0) {
+                retire_actor_tracks(slot, now);
+                g.actorSamples[slot] = ActorSample{};
+            }
+        }
+        if (slot < 0) break;
+        slotClaimed[slot] = true;
+        observe_ground_contact(contact.x, contact.y, contact.z, slot);
     }
 }
 
@@ -566,7 +640,7 @@ static bool ensure_snow_deformation_texture() {
     gl::GetIntegerv(GL_MAX_TEXTURE_IMAGE_UNITS, &maxUnits);
     if (maxUnits <= kSnowDeformationUnit) {
         fprintf(stderr,
-                "[weather][linux] snow deformation disabled: texture unit %d "
+                WEATHER_LOG_PREFIX "snow deformation disabled: texture unit %d "
                 "requires at least %d units (driver reports %d)\n",
                 kSnowDeformationUnit, kSnowDeformationUnit + 1, maxUnits);
         return false;
@@ -587,7 +661,7 @@ static bool ensure_snow_deformation_texture() {
                    g.snowDeformationPixels.data());
     gl::ActiveTexture((GLenum)oldActive);
     fprintf(stderr,
-            "[weather][linux] snow deformation texture ready %dx%d unit=%d\n",
+            WEATHER_LOG_PREFIX "snow deformation texture ready %dx%d unit=%d\n",
             kSnowDeformationSize, kSnowDeformationSize, kSnowDeformationUnit);
     return g.snowDeformationTexture != 0;
 }
@@ -601,7 +675,7 @@ static bool ensure_snow_light_data_texture() {
     gl::GetIntegerv(GL_MAX_TEXTURE_IMAGE_UNITS, &maxUnits);
     if (maxUnits <= kSnowLightDataUnit) {
         fprintf(stderr,
-                "[weather][linux] full snow lighting disabled: texture unit %d "
+                WEATHER_LOG_PREFIX "full snow lighting disabled: texture unit %d "
                 "requires at least %d units (driver reports %d)\n",
                 kSnowLightDataUnit, kSnowLightDataUnit + 1, maxUnits);
         return false;
@@ -620,7 +694,7 @@ static bool ensure_snow_light_data_texture() {
                    0, GL_RGBA, GL_FLOAT, g.snowLightDataPixels.data());
     gl::ActiveTexture((GLenum)oldActive);
     fprintf(stderr,
-            "[weather][linux] snow light-data texture ready for %d lights on unit=%d\n",
+            WEATHER_LOG_PREFIX "snow light-data texture ready for %d lights on unit=%d\n",
             kSnowLightCapacity, kSnowLightDataUnit);
     return g.snowLightDataTexture != 0;
 }
@@ -674,7 +748,7 @@ static bool ensure_precipitation_occlusion_target() {
     gl::GetIntegerv(GL_MAX_TEXTURE_IMAGE_UNITS, &maxUnits);
     if (maxUnits <= kPrecipitationOcclusionUnit) {
         fprintf(stderr,
-                "[weather][linux] precipitation occlusion disabled: texture unit %d "
+                WEATHER_LOG_PREFIX "precipitation occlusion disabled: texture unit %d "
                 "requires at least %d units (driver reports %d)\n",
                 kPrecipitationOcclusionUnit,
                 kPrecipitationOcclusionUnit + 1, maxUnits);
@@ -728,7 +802,7 @@ static bool ensure_precipitation_occlusion_target() {
     g.precipitationOcclusionExtent = wantedExtent;
     g.precipitationOcclusionDirty = true;
     fprintf(stderr,
-            "[weather][linux] precipitation occlusion target %dx%d extent=%.0f "
+            WEATHER_LOG_PREFIX "precipitation occlusion target %dx%d extent=%.0f "
             "status=%s usable=%s\n",
             wantedSize, wantedSize, wantedExtent, fbo_status_str(status),
             g.precipitationOcclusionUsable ? "yes" : "no");
@@ -775,7 +849,7 @@ static void capture_precipitation_occlusion_bucket(void* scene, int bucket) {
         if (!warned) {
             warned = true;
             fprintf(stderr,
-                    "[weather][linux] precipitation occlusion unavailable: "
+                    WEATHER_LOG_PREFIX "precipitation occlusion unavailable: "
                     "complete static BSP submission is disabled\n");
         }
         return;
@@ -884,7 +958,7 @@ static void capture_precipitation_occlusion_bucket(void* scene, int bucket) {
     g.precipitationOcclusionDirty = false;
     g_fullBspWanted = false;
     fprintf(stderr,
-            "[weather][linux] precipitation occlusion captured from static "
+            WEATHER_LOG_PREFIX "precipitation occlusion captured from static "
             "buckets 0+1 at centre=(%.1f,%.1f) area=%p\n",
             g.precipitationOcclusionCenter[0],
             g.precipitationOcclusionCenter[1],
@@ -1119,7 +1193,7 @@ static void push_draw_state(ProgramState* state, float receiverClass) {
             gl::ActiveTexture(GL_TEXTURE0 + kWeatherCaptureColorUnit);
             gl::GetIntegerv(GL_TEXTURE_BINDING_2D, &colorBound);
             fprintf(stderr,
-                    "[weather][linux] puddle optics upload frame=%u capture=%u "
+                    WEATHER_LOG_PREFIX "puddle optics upload frame=%u capture=%u "
                     "age=%u readyLoc=%d viewLoc=%d projLoc=%d invLoc=%d "
                     "color=%d depth=%d\n",
                     g.frameSerial, g.framebufferCameraFrame,
@@ -1159,7 +1233,7 @@ static void observe_engine_weather(void* area, int weather, float densityPercent
     const bool areaChanged = g.weatherArea && g.weatherArea != area;
     if (areaChanged) {
         fprintf(stderr,
-                "[weather][linux] area changed %p -> %p; resetting rain %.3f snow %.3f\n",
+                WEATHER_LOG_PREFIX "area changed %p -> %p; resetting rain %.3f snow %.3f\n",
                 g.weatherArea, area, g.rainAmount, g.snowAmount);
         g.weatherObserved = false;
         g.weatherType = kWeatherClear;
@@ -1201,7 +1275,7 @@ static void observe_engine_weather(void* area, int weather, float densityPercent
         const char* name = weather == kWeatherRain ? "rain" :
                            weather == kWeatherSnow ? "snow" : "clear";
         fprintf(stderr,
-                "[weather][linux] engine weather=%s type=%d density=%.3f area=%p\n",
+                WEATHER_LOG_PREFIX "engine weather=%s type=%d density=%.3f area=%p\n",
                 name, weather, g.weatherDensity, area);
     }
 }
@@ -1212,11 +1286,22 @@ static void note_program(GLuint program) {
 }
 
 static void observe_uniform1i(GLint location, GLint value) {
-    if (!area_draw_active() || !g_curProgram) return;
-    ProgramState* state = program_state(g_curProgram);
+    if (!g_curProgram) return;
+    // Do not populate the bounded weather registry with unrelated loading/UI
+    // programs. A known world program can still retain an early loading-scene
+    // areaFlags upload; an unknown one is discovered on its first area draw.
+    ProgramState* state = find_program_state(g_curProgram);
+    if (!state && area_draw_active()) state = program_state(g_curProgram);
     if (!state) return;
-    if (state->areaFlags >= 0 && location == state->areaFlags)
-        observe_area_flags(value);
+    // Loading scenes may initialize this uniform before g_areaScene points at
+    // the destination. Cache the program value then, but only apply it to the
+    // weather state while an actual selected-area draw is active.
+    if (state->areaFlags >= 0 && location == state->areaFlags) {
+        state->areaFlagsValue = value;
+        state->areaFlagsKnown = true;
+        if (area_draw_active()) observe_area_flags(value);
+    }
+    if (!area_draw_active()) return;
     if (state->skinmesh >= 0 && location == state->skinmesh) {
         state->skinmeshValue = value;
         state->skinmeshKnown = true;
@@ -1231,6 +1316,18 @@ static void observe_draw(GLuint program, GLsizei count) {
 
     ProgramState* state = program_state(program);
     if (!state) return;
+    // Recover the authoritative destination-area flag once if its upload
+    // happened before interception/scene ownership. This is not a per-draw
+    // query: subsequent draws consume the cached value.
+    if (state->areaFlags >= 0) {
+        if (!state->areaFlagsKnown && gl::GetUniformiv) {
+            gl::GetUniformiv(program, state->areaFlags,
+                             &state->areaFlagsValue);
+            state->areaFlagsKnown = true;
+        }
+        if (state->areaFlagsKnown)
+            observe_area_flags(state->areaFlagsValue);
+    }
     ++g.sceneDraws;
 
     if (state->skinmesh >= 0 && !state->skinmeshKnown) {
@@ -1273,6 +1370,12 @@ static void observe_draw(GLuint program, GLsizei count) {
 
 static void scene_begin(void* scene) {
     if (!scene || scene != g_areaScene) return;
+    if (g.observedScene != scene) {
+        g.observedScene = scene;
+        g.areaFlagsKnown = false;
+        for (unsigned i = 0; i < g.programCount; ++i)
+            g.programs[i].areaFlagsKnown = false;
+    }
     if (!g.areaInterior) ensure_precipitation_occlusion_target();
     g.frameSerial = g_shadowFrameContext.serial;
     g.sceneDraws = g.eligibleDraws = g.skinnedDraws = 0;
@@ -1314,7 +1417,7 @@ static void scene_end(void* scene) {
     if (g.weatherObserved && now >= g.nextStatus) {
         g.nextStatus = now + 30.0;
         fprintf(stderr,
-                "[weather][linux] frame=%u mode=%d rain=%.3f snow=%.3f draws=%u "
+                WEATHER_LOG_PREFIX "frame=%u mode=%d rain=%.3f snow=%.3f draws=%u "
                 "eligible=%u skinned-excluded=%u non-scene=%u water=%u "
                 "unclassified=%u actor-pos=%u track-stamps=%u\n",
                 g.frameSerial, g.weatherType, g.rainAmount, g.snowAmount,
@@ -1345,7 +1448,7 @@ static void publish_framebuffer_capture(void* scene, GLuint colorTexture,
     if (!logged) {
         logged = true;
         fprintf(stderr,
-                "[weather][linux] framebuffer capture published frame=%u "
+                WEATHER_LOG_PREFIX "framebuffer capture published frame=%u "
                 "color=%u depth=%u\n",
                 ctx.serial, colorTexture, depthTexture);
     }
@@ -1666,7 +1769,11 @@ static bool patch_fragment_shader(std::string& source) {
         "    float nwnRainSmoothFlat = smoothstep(0.88, 0.98,\n"
         "                                          abs(nwnRainSmoothWorldN.z));\n"
         "    float nwnRainFlat = nwnRainCliffReject * nwnRainSmoothFlat;\n"
-        "    float nwnRainFacing = mix(0.28, 1.0, smoothstep(0.08, 0.78, nwnRainGeomUp));\n"
+        // Sloped roofs and terrain receive a strong wet film and impact noise,
+        // while near-vertical walls retain only a faint rain sheen. Standing
+        // puddles remain governed by the stricter nwnRainFlat gate above.
+        "    float nwnRainSlopeCoverage = smoothstep(0.06, 0.42, nwnRainGeomUp);\n"
+        "    float nwnRainFacing = mix(0.20, 1.0, nwnRainSlopeCoverage);\n"
         "    float nwnRainMask = nwnRainPuddle(nwnRainWorld.xy, nwnWeatherRainAmount)\n"
         "                      * nwnRainFlat * nwnWeatherRainAmount\n"
         "                      * (1.0 - nwnRainStaticAlpha);\n"
@@ -1694,7 +1801,8 @@ static bool patch_fragment_shader(std::string& source) {
         // specular term is added; there is no painted ring or depth write.
         "    float nwnRainGroundOnly = (1.0 - smoothstep(0.04, 0.32,\n"
         "                                      nwnRainOpticalDepth))\n"
-        "                              * nwnRainSmoothFlat;\n"
+        "                              * max(nwnRainSmoothFlat,\n"
+        "                                    nwnRainSlopeCoverage * 0.92);\n"
         // Alpha/card surfaces may be vertical or sloped. Give them the same
         // film disturbance through a dominant-axis projection, but never the
         // flatness-driven standing-water branch used by opaque terrain.
@@ -1705,7 +1813,7 @@ static bool patch_fragment_shader(std::string& source) {
         "    vec3 nwnRainNoiseBaseN = vec3(0.0, 0.0, 1.0);\n"
         "    vec3 nwnRainNoiseTangentU = vec3(1.0, 0.0, 0.0);\n"
         "    vec3 nwnRainNoiseTangentV = vec3(0.0, 1.0, 0.0);\n"
-        "    if (nwnRainStaticAlpha > 0.5) {\n"
+        "    if (nwnRainStaticAlpha > 0.5 || nwnRainGeomUp < 0.82) {\n"
         "        nwnRainNoiseBaseN = nwnRainSmoothWorldN;\n"
         "        if (nwnRainAbsGeomNormal.x > nwnRainAbsGeomNormal.y &&\n"
         "            nwnRainAbsGeomNormal.x > nwnRainAbsGeomNormal.z) {\n"
@@ -1862,7 +1970,10 @@ static bool patch_fragment_shader(std::string& source) {
         // point their smooth material normal sideways even when the underlying
         // triangle is level; using that as a hard gate made snow disappear on
         // non-snow tilesets. Keep it only as a mild surface-shape modulation.
-        "    float nwnSnowGeomSettle = smoothstep(0.38, 0.74,\n"
+        // Permit substantial accumulation on steep roofs and terrain without
+        // painting genuinely vertical walls. The former threshold rejected
+        // most roof pitches before any snow shading could run.
+        "    float nwnSnowGeomSettle = smoothstep(0.07, 0.42,\n"
         "                                           abs(nwnSnowGeomN.z));\n"
         "    float nwnSnowNormalHint = smoothstep(0.18, 0.78,\n"
         "                                           abs(nwnSnowSmoothN.z));\n"
@@ -1900,8 +2011,9 @@ static bool patch_fragment_shader(std::string& source) {
         "                 nwnWeatherSnowAmount, nwnSnowWorld.z) - nwnSnowH,\n"
         "        nwnSnowSurfaceHeight(nwnSnowCoord + vec2(0.0, nwnSnowE),\n"
         "                 nwnWeatherSnowAmount, nwnSnowWorld.z) - nwnSnowH) / nwnSnowE;\n"
-        "    vec3 nwnSnowWorldN = normalize(vec3(\n"
-        "        -nwnSnowSlope * (0.22 * nwnSnowReliefExposure), 1.0));\n"
+        "    vec3 nwnSnowReliefN = vec3(\n"
+        "        -nwnSnowSlope * (0.22 * nwnSnowReliefExposure), 0.0);\n"
+        "    vec3 nwnSnowWorldN = normalize(nwnSnowSmoothN + nwnSnowReliefN);\n"
         "    vec3 nwnSnowViewN = normalize(mat3(m_view) * nwnSnowWorldN);\n"
         "    float nwnSnowFacing = clamp(dot(nwnSnowViewN,\n"
         "                                      normalize(-vPosView)), 0.0, 1.0);\n"
@@ -1931,6 +2043,8 @@ static bool patch_fragment_shader(std::string& source) {
 }
 
 } // namespace weather_runtime
+
+#ifndef _WIN32
 
 extern "C" int weather_area_set_weather(void* area, uint8_t weather,
                                       float densityPercent) {
@@ -2042,20 +2156,275 @@ static void weather_scene_end(void* scene) { weather_runtime::scene_end(scene); 
 
 #else
 
-// Deliberate Windows hold: the accepted Linux module is ported only after a
-// separate request, with platform-specific changes unless a shared bug is
-// confirmed first.
-static bool weather_needs_shader_sources() { return false; }
-static bool weather_needs_draw_observer() { return false; }
-static bool weather_patch_shader_source(std::string&) { return false; }
-static void weather_observe_draw(GLuint, GLsizei) {}
-static void weather_note_program(GLuint) {}
-static bool weather_tracks_dynamic_creatures() { return false; }
-static void weather_observe_dynamic_position(const float[3]) {}
+// nwmain.exe exports no CNWCArea weather methods. Resolve the private active-
+// area StartWeather/StopWeather calls from the exported network-message decode
+// calls surrounding them. This is Windows-only discovery; the state delivered
+// to the shared runtime remains the same clear/rain/snow authority as Linux.
+namespace weather_win {
+using ClientAreaWeather_t = void (*)(void*, uint8_t);
+using ActiveClientState_t = void* (*)(void*);
+static subhook_t startHook = nullptr;
+static subhook_t stopHook = nullptr;
+static ClientAreaWeather_t start = nullptr;
+static ClientAreaWeather_t stop = nullptr;
+static ClientAreaWeather_t startTrampoline = nullptr;
+static ClientAreaWeather_t stopTrampoline = nullptr;
+static ActiveClientState_t activeClientState = nullptr;
+static void** clientAppHolderSlot = nullptr;
+static size_t activeAreaOffset = 0;
+static size_t currentWeatherOffset = 0;
+
+static uint8_t* relative_call_target(uint8_t* call) {
+    if (!call || call[0] != 0xe8) return nullptr;
+    int32_t displacement = 0;
+    std::memcpy(&displacement, call + 1, sizeof(displacement));
+    return call + 5 + displacement;
+}
+
+static void** relative_pointer_slot(uint8_t* instruction) {
+    if (!instruction || instruction[0] != 0x48 || instruction[1] != 0x8b ||
+        instruction[2] != 0x05) return nullptr;
+    int32_t displacement = 0;
+    std::memcpy(&displacement, instruction + 3, sizeof(displacement));
+    return reinterpret_cast<void**>(instruction + 7 + displacement);
+}
+
+static bool resolve_weather_calls() {
+    auto* base = reinterpret_cast<uint8_t*>(GetModuleHandleW(nullptr));
+    if (!base) return false;
+    auto* dos = reinterpret_cast<IMAGE_DOS_HEADER*>(base);
+    if (dos->e_magic != IMAGE_DOS_SIGNATURE) return false;
+    auto* nt = reinterpret_cast<IMAGE_NT_HEADERS*>(base + dos->e_lfanew);
+    if (nt->Signature != IMAGE_NT_SIGNATURE) return false;
+
+    void* readByte = nwn_win_resolve("?ReadBYTE@CNWMessage@@QEAAEHH@Z");
+    void* readBool = nwn_win_resolve("?ReadBOOL@CNWMessage@@QEAAHXZ");
+    if (!readByte || !readBool) return false;
+
+    auto* section = IMAGE_FIRST_SECTION(nt);
+    for (unsigned i = 0; i < nt->FileHeader.NumberOfSections; ++i, ++section) {
+        if (!(section->Characteristics & IMAGE_SCN_MEM_EXECUTE)) continue;
+        uint8_t* begin = base + section->VirtualAddress;
+        const size_t size = section->Misc.VirtualSize;
+        static const uint8_t signature[] = {
+            0x44, 0x8b, 0xc6, 0xba, 0x08, 0x00,
+            0x00, 0x00, 0x49, 0x8b, 0xce, 0xe8
+        };
+        for (size_t off = 0; off + 0x5d < size; ++off) {
+            uint8_t* p = begin + off;
+            if (std::memcmp(p, signature, sizeof(signature)) != 0) continue;
+            if (relative_call_target(p + 11) != readByte) continue;
+            if (p[19] != 0x49 || p[20] != 0x8b || p[21] != 0xce ||
+                relative_call_target(p + 22) != readBool) continue;
+            uint8_t* startTarget = relative_call_target(p + 0x4e);
+            uint8_t* stopTarget = relative_call_target(p + 0x58);
+            if (!startTarget || !stopTarget || startTarget == stopTarget) continue;
+            // The same decoder obtains the active client state immediately
+            // before dispatching StartWeather/StopWeather. Keep that exact
+            // lookup so scene-start synchronization reads the destination
+            // CNWCArea, whether the game is local or connected to a server.
+            if (p[0x1e] != 0x48 || p[0x1f] != 0x8b || p[0x20] != 0x05 ||
+                p[0x25] != 0x48 || p[0x26] != 0x8b || p[0x27] != 0x08 ||
+                p[0x28] != 0xe8 ||
+                p[0x2d] != 0x48 || p[0x2e] != 0x85 || p[0x2f] != 0xc0 ||
+                p[0x36] != 0x48 || p[0x37] != 0x8b || p[0x38] != 0x88)
+                continue;
+            void** appSlot = relative_pointer_slot(p + 0x1e);
+            uint8_t* clientGetter = relative_call_target(p + 0x28);
+            uint32_t areaOffset = 0;
+            std::memcpy(&areaOffset, p + 0x39, sizeof(areaOffset));
+
+            // StartWeather writes the authoritative current weather byte into
+            // CNWCArea before starting the engine's visual transition. Resolve
+            // that member offset from the routine instead of hard-coding it.
+            if (startTarget[0] != 0x0f || startTarget[1] != 0xb6 ||
+                startTarget[2] != 0xc2 || startTarget[3] != 0x88 ||
+                startTarget[4] != 0x91)
+                continue;
+            uint32_t weatherOffset = 0;
+            std::memcpy(&weatherOffset, startTarget + 5, sizeof(weatherOffset));
+            if (!appSlot || !clientGetter || areaOffset == 0 ||
+                weatherOffset == 0) continue;
+            start = reinterpret_cast<ClientAreaWeather_t>(startTarget);
+            stop = reinterpret_cast<ClientAreaWeather_t>(stopTarget);
+            activeClientState =
+                reinterpret_cast<ActiveClientState_t>(clientGetter);
+            clientAppHolderSlot = appSlot;
+            activeAreaOffset = areaOffset;
+            currentWeatherOffset = weatherOffset;
+            fprintf(stderr, WEATHER_LOG_PREFIX
+                    "active-area weather calls resolved start=%p stop=%p "
+                    "areaOffset=0x%zx weatherOffset=0x%zx\n",
+                    reinterpret_cast<void*>(start),
+                    reinterpret_cast<void*>(stop), activeAreaOffset,
+                    currentWeatherOffset);
+            return true;
+        }
+    }
+    return false;
+}
+
+
+static void* current_area() {
+    if (!activeClientState || !clientAppHolderSlot || !activeAreaOffset)
+        return nullptr;
+    void* holder = *clientAppHolderSlot;
+    if (!holder) return nullptr;
+    void* app = *reinterpret_cast<void**>(holder);
+    if (!app) return nullptr;
+    void* state = activeClientState(app);
+    if (!state) return nullptr;
+    return *reinterpret_cast<void**>(
+        reinterpret_cast<uint8_t*>(state) + activeAreaOffset);
+}
+
+static void sync_loaded_area_weather() {
+    void* area = current_area();
+    if (!area || !currentWeatherOffset) return;
+    const uint8_t weather = *(reinterpret_cast<uint8_t*>(area) +
+                              currentWeatherOffset);
+    if (weather > weather_runtime::kWeatherSnow) return;
+    // This is intentionally idempotent. Polling at scene start closes the
+    // timing hole where weather changes while an interior has no active
+    // weather surface; the first exterior frame then adopts the weather stored
+    // on its client area. It is equally valid for local and multiplayer games.
+    weather_runtime::observe_engine_weather(
+        area, static_cast<int>(weather),
+        weather == weather_runtime::kWeatherClear ? 0.0f : 100.0f);
+}
+} // namespace weather_win
+
+extern "C" void weather_client_area_start(void* area, uint8_t weather) {
+    if (weather_win::startTrampoline)
+        weather_win::startTrampoline(area, weather);
+    else if (weather_win::startHook && weather_win::start) {
+        subhook_remove(weather_win::startHook);
+        weather_win::start(area, weather);
+        subhook_install(weather_win::startHook);
+    }
+    weather_runtime::observe_engine_weather(area, static_cast<int>(weather),
+                                            100.0f);
+}
+
+extern "C" void weather_client_area_stop(void* area, uint8_t weather) {
+    if (weather_win::stopTrampoline)
+        weather_win::stopTrampoline(area, weather);
+    else if (weather_win::stopHook && weather_win::stop) {
+        subhook_remove(weather_win::stopHook);
+        weather_win::stop(area, weather);
+        subhook_install(weather_win::stopHook);
+    }
+    weather_runtime::observe_engine_weather(area, weather_runtime::kWeatherClear,
+                                            0.0f);
+}
+
+static bool weather_needs_shader_sources() { return true; }
+static bool weather_needs_draw_observer() { return true; }
+static bool weather_patch_shader_source(std::string& source) {
+    return weather_runtime::patch_fragment_shader(source);
+}
+static void weather_observe_draw(GLuint program, GLsizei count) {
+    weather_runtime::observe_draw(program, count);
+}
+static void weather_note_program(GLuint program) {
+    weather_runtime::note_program(program);
+}
+static bool weather_tracks_dynamic_creatures() {
+    return weather_runtime::g.snowAmount > 0.015f;
+}
+static void weather_observe_dynamic_position(const float position[3]) {
+    if (position)
+        weather_runtime::collect_contact_candidate(position[0], position[1],
+                                                   position[2]);
+}
+extern "C" void weather_uniform1i(GLint location, GLint value) {
+    weather_runtime::observe_uniform1i(location, value);
+    if (weather_runtime::g_realUniform1i)
+        weather_runtime::g_realUniform1i(location, value);
+}
+static void weather_register_windows_gl_interposition() {
+    nwn_win_register_gl_wrapper("glUniform1i", (void*)weather_uniform1i,
+                                (void**)&weather_runtime::g_realUniform1i);
+}
 static void install_weather_uniform_patch() {}
-static void install_weather_engine_hooks() {}
-static void uninstall_weather_engine_hooks() {}
-static void weather_scene_begin(void*) {}
-static void weather_scene_end(void*) {}
+
+static void install_weather_engine_hooks() {
+    if (weather_win::startHook || weather_win::stopHook) return;
+    if (!weather_win::resolve_weather_calls()) {
+        fprintf(stderr, WEATHER_LOG_PREFIX
+                "warning: active-area weather signature unavailable; "
+                "weather effects fail closed\n");
+        return;
+    }
+    weather_win::startHook = subhook_new(
+        reinterpret_cast<void*>(weather_win::start),
+        reinterpret_cast<void*>(weather_client_area_start), SUBHOOK_64BIT_OFFSET);
+    weather_win::stopHook = subhook_new(
+        reinterpret_cast<void*>(weather_win::stop),
+        reinterpret_cast<void*>(weather_client_area_stop), SUBHOOK_64BIT_OFFSET);
+    const bool startOk = weather_win::startHook &&
+                         subhook_install(weather_win::startHook) == 0;
+    const bool stopOk = weather_win::stopHook &&
+                        subhook_install(weather_win::stopHook) == 0;
+    if (!startOk || !stopOk) {
+        fprintf(stderr, WEATHER_LOG_PREFIX
+                "warning: active-area weather hooks unavailable\n");
+        if (startOk) subhook_remove(weather_win::startHook);
+        if (stopOk) subhook_remove(weather_win::stopHook);
+        if (weather_win::startHook) subhook_free(weather_win::startHook);
+        if (weather_win::stopHook) subhook_free(weather_win::stopHook);
+        weather_win::startHook = nullptr;
+        weather_win::stopHook = nullptr;
+        return;
+    }
+    weather_win::startTrampoline =
+        reinterpret_cast<weather_win::ClientAreaWeather_t>(
+            subhook_get_trampoline(weather_win::startHook));
+    weather_win::stopTrampoline =
+        reinterpret_cast<weather_win::ClientAreaWeather_t>(
+            subhook_get_trampoline(weather_win::stopHook));
+    fprintf(stderr, WEATHER_LOG_PREFIX "active-area weather observer active\n");
+    fprintf(stderr, WEATHER_LOG_PREFIX
+            "scene-start client-area weather synchronization active\n");
+    fprintf(stderr, WEATHER_LOG_PREFIX
+            "injector-owned framebuffer synchronization active\n");
+}
+
+static void uninstall_weather_engine_hooks() {
+    if (weather_runtime::g.snowDeformationTexture && gl::DeleteTextures)
+        gl::DeleteTextures(1, &weather_runtime::g.snowDeformationTexture);
+    if (weather_runtime::g.snowLightDataTexture && gl::DeleteTextures)
+        gl::DeleteTextures(1, &weather_runtime::g.snowLightDataTexture);
+    if (weather_runtime::g.precipitationOcclusionFbo && gl::DeleteFramebuffers)
+        gl::DeleteFramebuffers(1, &weather_runtime::g.precipitationOcclusionFbo);
+    if (weather_runtime::g.precipitationOcclusionTexture && gl::DeleteTextures)
+        gl::DeleteTextures(1,
+            &weather_runtime::g.precipitationOcclusionTexture);
+    if (weather_win::startHook) {
+        subhook_remove(weather_win::startHook);
+        subhook_free(weather_win::startHook);
+    }
+    if (weather_win::stopHook) {
+        subhook_remove(weather_win::stopHook);
+        subhook_free(weather_win::stopHook);
+    }
+    weather_win::startHook = nullptr;
+    weather_win::stopHook = nullptr;
+    weather_win::startTrampoline = nullptr;
+    weather_win::stopTrampoline = nullptr;
+    weather_win::activeClientState = nullptr;
+    weather_win::clientAppHolderSlot = nullptr;
+    weather_win::activeAreaOffset = 0;
+    weather_win::currentWeatherOffset = 0;
+}
+
+static void weather_scene_begin(void* scene) {
+    if (scene && scene == g_areaScene)
+        weather_win::sync_loaded_area_weather();
+    weather_runtime::scene_begin(scene);
+}
+static void weather_scene_end(void* scene) {
+    weather_runtime::scene_end(scene);
+}
 
 #endif

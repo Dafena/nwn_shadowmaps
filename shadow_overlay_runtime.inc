@@ -1447,6 +1447,7 @@ static void install_windows_gl_interposition() {
     if (done) return;
     done = true;
 
+    weather_register_windows_gl_interposition();
     nwn_win_register_gl_wrapper("glUseProgram",        (void*)my_use_program,        (void**)&g_realUseProgram);
     nwn_win_register_gl_wrapper("glUniformMatrix4fv",  (void*)my_uniform_matrix4fv,  (void**)&g_realUniformMatrix4fv);
     nwn_win_register_gl_wrapper("glUniform3f",         (void*)my_uniform3f,          (void**)&g_realUniform3f);

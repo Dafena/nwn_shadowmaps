@@ -22,6 +22,7 @@ docker build lands on GLIBC_2.29 / GLIBCXX_3.4.21.
 
 ```bash
 cd win && make  # win/version.dll -- always a shipping build
+make verify NWN_WIN_EXE="/path/to/Neverwinter Nights/bin/win32/nwmain.exe"
 ```
 
 Cross-compiled with mingw-w64. **The POSIX-thread variant is required** — the
@@ -62,6 +63,9 @@ Logging is off by default in shipping builds. Enable with
 
 The development trace launcher truncates `shadowmap-phase1.log` at every
 startup. Copy or filter evidence into a separate file before the next run.
+For normal Linux visual testing use `run-shadowmaps-clean.sh`; it enables the
+full shipping renderer, weather effects, A2C, and ImGui panel while disabling
+expensive diagnostics. `run-dev.sh` is intentionally diagnostics-heavy.
 
 ### Windows: Smart App Control
 
