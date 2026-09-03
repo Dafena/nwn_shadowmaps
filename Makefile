@@ -62,7 +62,7 @@ $(DEPLOY_DIR)/%.o: %.cpp | $(DEPLOY_DIR)
 # otherwise `make deploy` can silently reuse a stale object after an .inc-only
 # fix (as happened with the startup settings reconciliation).
 $(DEPLOY_DIR)/nwn_shadowmap.o: nwn_shadowmap.cpp \
-	shadow_gl_api.inc shadow_engine_bindings.inc \
+	shadow_gl_api.inc shadow_engine_bindings.inc weather_runtime.inc \
 	shadow_targets.inc shadow_diagnostics_settings.inc shadow_replay.inc \
 	shadow_shader_interposition.inc shadow_fullscreen_receiver.inc \
 	shadow_overlay_runtime.inc shadow_trace_cascade.inc shadow_local_lights.inc \
@@ -100,7 +100,7 @@ $(TARGET): $(OBJS)
 	$(CXX) -shared $^ -o $@ -ldl
 
 nwn_shadowmap.o: nwn_shadowmap.cpp \
-	shadow_gl_api.inc shadow_engine_bindings.inc \
+	shadow_gl_api.inc shadow_engine_bindings.inc weather_runtime.inc \
 	shadow_targets.inc shadow_diagnostics_settings.inc shadow_replay.inc \
 	shadow_shader_interposition.inc shadow_fullscreen_receiver.inc \
 	shadow_overlay_runtime.inc shadow_trace_cascade.inc shadow_local_lights.inc \

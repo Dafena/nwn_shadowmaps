@@ -810,6 +810,9 @@ static void draw_static_receiver(void* scene) {
     // composite has not run yet.
     gl::ActiveTexture(GL_TEXTURE0+kColorUnit);
     const bool colorOk = capture_scene_color(vp);
+    if (depthOk && colorOk && g_sceneColorCapturedNow)
+        weather_runtime::publish_framebuffer_capture(scene, g_sceneColorTex,
+                                                     g_sceneDepthTex);
     // Finish on the reporting frame only, for the same reason recv does: with
     // MSAA on, this "copy" is a multisample RESOLVE of a full-screen depth
     // buffer, and submission time cannot see it. Unfinished, its GPU cost was
@@ -1444,6 +1447,7 @@ static void install_windows_gl_interposition() {
     if (done) return;
     done = true;
 
+    weather_register_windows_gl_interposition();
     nwn_win_register_gl_wrapper("glUseProgram",        (void*)my_use_program,        (void**)&g_realUseProgram);
     nwn_win_register_gl_wrapper("glUniformMatrix4fv",  (void*)my_uniform_matrix4fv,  (void**)&g_realUniformMatrix4fv);
     nwn_win_register_gl_wrapper("glUniform3f",         (void*)my_uniform3f,          (void**)&g_realUniform3f);
@@ -1544,7 +1548,8 @@ static void install_light_vector_trace_patch() {
 // the populated ones and retry on later startup frames until GLEW is ready.
 // Every wrapper forwards the original call verbatim after recording it.
 static void install_geometry_trace_patch() {
-    if (!g_cascadeGeometryTrace && !nwn_oit_needs_draw_observer()) return;
+    if (!g_cascadeGeometryTrace && !nwn_oit_needs_draw_observer() &&
+        !weather_needs_draw_observer()) return;
     static bool rangeDone = false, arraysDone = false, elementsDone = false;
     auto install = [](void** slot, void* replacement, void** real,
                       bool& done, const char* label) {

@@ -102,19 +102,23 @@ static bool ensure_scene_depth_texture(int w, int h) {
 // ours feeding back.
 static GLuint g_sceneColorTex = 0;
 static int    g_sceneColorW = 0, g_sceneColorH = 0;
+static bool   g_sceneColorCapturedNow = false;
+static GLuint g_sceneColorFbo = 0;
+static GLuint g_sceneColorFboTex = 0;
 static GLuint g_sceneDepthFbo = 0;
 static GLuint g_sceneDepthFboTex = 0;
 
 static bool capture_scene_color(const GLint vp[4]) {
+    g_sceneColorCapturedNow = false;
     const int w = vp[2], h = vp[3];
-    if (w <= 0 || h <= 0 || !gl::CopyTexSubImage2D) return false;
+    if (w <= 0 || h <= 0) return false;
     // DRAIN FIRST. glGetError returns the ACCUMULATED flag, so an error raised
     // by the ENGINE (or anything else in the process) is still latched when we
     // check below -- the same trap the receiver's own draw gate documents.
     // Without this the result flips false at random, and because it gates the
     // self-illumination guard, the shadow strength changed frame to frame:
     // visible flicker on Linux, reported 2026-08-15.
-    while (gl::GetError() != GL_NO_ERROR) {}
+    for (unsigned drain = 0; drain < 32 && gl::GetError() != GL_NO_ERROR; ++drain) {}
     if (!g_sceneColorTex) gl::GenTextures(1, &g_sceneColorTex);
     if (!g_sceneColorTex) return false;
     gl::BindTexture(GL_TEXTURE_2D, g_sceneColorTex);
@@ -127,10 +131,69 @@ static bool capture_scene_color(const GLint vp[4]) {
     gl::TexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
     gl::TexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
     gl::TexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-    // Colour, unlike depth, is valid through glCopyTexSubImage2D from the
-    // read buffer -- that is what this call is for.
-    gl::CopyTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, vp[0], vp[1], w, h);
-    const bool ok = (gl::GetError() == GL_NO_ERROR);
+    // The engine's READ framebuffer is the correct completed-scene source,
+    // just as it is for capture_scene_depth().  It can, however, be
+    // multisampled. glCopyTexSubImage2D is invalid for that source (observed
+    // as GL_INVALID_OPERATION with readFbo=4), which left weather without
+    // either scene colour or the depth-coherent optics gate. Resolve it into
+    // our single-sample texture with a colour blit instead.
+    bool ok = false;
+    GLenum captureError = GL_NO_ERROR;
+    GLenum status = 0;
+    if (gl::BlitFramebuffer && gl::GenFramebuffers && gl::BindFramebuffer &&
+        gl::FramebufferTexture2D && gl::CheckFramebufferStatus && gl::DrawBuffer) {
+        if (!g_sceneColorFbo) gl::GenFramebuffers(1, &g_sceneColorFbo);
+        if (g_sceneColorFbo) {
+            GLint prevRead = 0, prevDraw = 0;
+            gl::GetIntegerv(GL_READ_FRAMEBUFFER_BINDING, &prevRead);
+            gl::GetIntegerv(GL_DRAW_FRAMEBUFFER_BINDING, &prevDraw);
+            gl::BindFramebuffer(GL_DRAW_FRAMEBUFFER, g_sceneColorFbo);
+            if (g_sceneColorFboTex != g_sceneColorTex) {
+                gl::FramebufferTexture2D(GL_DRAW_FRAMEBUFFER,
+                                         GL_COLOR_ATTACHMENT0,
+                                         GL_TEXTURE_2D, g_sceneColorTex, 0);
+                gl::DrawBuffer(GL_COLOR_ATTACHMENT0);
+                g_sceneColorFboTex = g_sceneColorTex;
+            }
+            status = gl::CheckFramebufferStatus(GL_DRAW_FRAMEBUFFER);
+            ok = (status == GL_FRAMEBUFFER_COMPLETE);
+            if (ok) {
+                for (unsigned drain = 0;
+                     drain < 32 && gl::GetError() != GL_NO_ERROR; ++drain) {}
+                gl::BlitFramebuffer(vp[0], vp[1], vp[0] + w, vp[1] + h,
+                                    0, 0, w, h,
+                                    GL_COLOR_BUFFER_BIT, GL_NEAREST);
+                captureError = gl::GetError();
+                ok = (captureError == GL_NO_ERROR);
+            }
+            gl::BindFramebuffer(GL_DRAW_FRAMEBUFFER, (GLuint)prevDraw);
+            gl::BindFramebuffer(GL_READ_FRAMEBUFFER, (GLuint)prevRead);
+        }
+    } else if (gl::CopyTexSubImage2D) {
+        // Compatibility fallback for a context without framebuffer blits.
+        gl::CopyTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0,
+                              vp[0], vp[1], w, h);
+        captureError = gl::GetError();
+        ok = (captureError == GL_NO_ERROR);
+    }
+    g_sceneColorCapturedNow = ok;
+    if (!ok) {
+        static bool loggedFailure = false;
+        if (!loggedFailure) {
+            loggedFailure = true;
+            GLint readFbo = 0, drawFbo = 0, readBuffer = 0, samples = 0;
+            gl::GetIntegerv(GL_READ_FRAMEBUFFER_BINDING, &readFbo);
+            gl::GetIntegerv(GL_DRAW_FRAMEBUFFER_BINDING, &drawFbo);
+            gl::GetIntegerv(0x0C02 /* GL_READ_BUFFER */, &readBuffer);
+            gl::GetIntegerv(GL_SAMPLES, &samples);
+            fprintf(stderr,
+                    "[weather][linux] framebuffer color capture failed "
+                    "error=0x%x status=0x%x readFbo=%d drawFbo=%d "
+                    "readBuffer=0x%x samples=%d viewport=%d,%d %dx%d\n",
+                    captureError, status, readFbo, drawFbo, readBuffer, samples,
+                    vp[0], vp[1], w, h);
+        }
+    }
     // LATCH. Even with the drain, one bad frame must not toggle the guard off
     // and back on -- that is a visible change in shadow darkness, and a
     // capture that worked once will hold usable colour. Once true, stay true.
@@ -765,4 +828,3 @@ static void build_static_receiver_program() {
     g_staticReceiverProgram=p;
     fprintf(stderr,"[shadowmap][static] fullscreen static receiver compiled (program=%u)\n",p);
 }
-
