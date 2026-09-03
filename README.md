@@ -12,7 +12,7 @@ Both targets are built from the same renderer source.
 
 ## Current state
 
-As of 2026-08-29:
+As of 2026-09-03:
 
 - Directional sun shadows use cascaded, injector-owned depth arrays and a
   fullscreen composite. Static world geometry can use a world-anchored map;
@@ -27,12 +27,33 @@ As of 2026-08-29:
   Local-light shadows remain independent of the area's sun/moon policy.
 - The Dear ImGui settings panel is live. Development builds expose diagnostics;
   shipping builds keep only user-facing controls.
-- Linux automatically observes NWN area rain and applies gradual wetness to
-  static scene geometry. Flat opaque surfaces can form compact procedural
-  puddles with fog-aware reflection, refraction, and normal-based impacts;
-  non-puddle and static-alpha surfaces receive animated wet noise. Dynamic
-  characters and native water are excluded. Top-down rain occlusion is future
-  work, and Windows currently retains no-op rain stubs.
+- Linux automatically observes NWN clear/rain/snow area weather through one
+  weather-effects module. Rain applies gradual wetness, compact fog-aware
+  reflective/refractive puddles, and normal-based impacts. Snow precipitation
+  is mutually exclusive with rain, while their accumulated surface layers
+  crossfade with matching rain/snow fade-out timing. Snow uses slope-aware
+  high-frequency coverage, raised parallax depth, and persistent refilling
+  trail segments carved by player/creature
+  movement. A 512x512 RGBA32F world-space deformation texture combines up to
+  16 nearby characters with independent 64-segment CPU histories; each history
+  recycles its own oldest segment through a short retirement fade while the GPU
+  cost stays texture-based. The camera-target player owns a reserved history
+  and retirement pool that NPC churn cannot evict. Deformation stores contact
+  height as well as depth, so movement below a roof cannot alter snow above it.
+  Added snow is a neutral material relit by NWN's area lighting and complete
+  enabled local-light census, allowing torches and other colored lights to tint
+  it without copying the covered tile's albedo. Coverage uses the real triangle
+  plane rather than rough material normals, and a snow illumination floor keeps
+  it visible over dark, non-snow terrain textures.
+  Near full accumulation, a continuous minimum blanket prevents bright lamps
+  from exposing procedural albedo gaps and making the layer appear lifted.
+  Native water is excluded. A separate cached top-down depth map blocks every
+  rain and snow surface contribution beneath opaque and static-transparent
+  scenery while preserving alpha-discard holes. Its 16-sample world-anchored
+  edge filter avoids hard cuts, visible bands, and camera shimmer. It reuses the
+  static-world extent/resolution and one-shot full-BSP lifecycle; 8192x8192 was
+  runtime-tested, while the supported 16K maximum requires about 1 GiB for its
+  depth texture. Windows currently retains no-op weather stubs.
 - The repository has a Windows build. Windows-specific local-light fast paths
   are isolated behind `NWN_WIN_LOCAL_FASTPATH`; shared Linux behaviour must not
   be changed to solve a Windows-only problem.
@@ -80,7 +101,7 @@ ABI:
 | `shadow_targets.inc` | Texture/FBO allocation and validation |
 | `shadow_replay.inc` | Sun, static-world, and local bucket replay |
 | `shadow_local_lights.inc` | Engine-selected local-light state and capture setup |
-| `rain_runtime.inc` | Linux rain authority, wetness state, and receiver classification |
+| `weather_runtime.inc` | Linux clear/rain/snow authority, surface state, and receiver classification |
 | `shadow_shader_interposition.inc` | Shader interception and draw wrappers |
 | `shadow_fullscreen_receiver.inc` | Receiver shader construction and scene copies |
 | `shadow_overlay_runtime.inc` | Overlay runtime, input, and frame ordering |

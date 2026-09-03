@@ -26,6 +26,8 @@ The accepted implementation currently includes:
   bucket draw and under a re-entry guard;
 - area sun/moon/opacity policy observation;
 - persisted ImGui settings and development diagnostics;
+- an accepted automatic Linux clear/rain/snow surface-weather system with
+  cached top-down precipitation occlusion and height-aware snow trails;
 - Linux `LD_PRELOAD` and Windows `version.dll` platform paths.
 
 The code is experimental. Do not describe it as a complete replacement for
@@ -120,6 +122,15 @@ Do not confuse a source build with a copied game-directory artifact.
 
 ## Current open work
 
+The Linux weather-effects baseline is accepted as of 2026-09-03. It is
+automatic and module-agnostic: `CNWCArea::SetWeather` drives mutually exclusive
+rain/snow precipitation and gradual surface-state crossfades; interiors reset
+immediately. Its separate world-anchored top-down map accumulates static opaque
+and alpha/card buckets, and its snow deformation texture stores contact height
+so trails cannot project onto another floor. Windows weather remains a no-op
+until the maintainer explicitly requests that port. Do not reintroduce the old
+`rain_runtime.inc` name or describe precipitation occlusion as deferred.
+
 The accepted Linux transparency path is explicit material Mode 2 A2C. It is
 stable under camera motion, receives directional/local shadows, and preserves
 opaque intersections. Multiple overlapping coverage layers can still hide
@@ -189,6 +200,7 @@ Other known limitations:
 | `shadow_targets.inc` | FBO/texture lifecycle and target state |
 | `shadow_replay.inc` | Sun/static-world/local replay implementation |
 | `shadow_local_lights.inc` | Local selection, matrices, preparation, capture |
+| `weather_runtime.inc` | Linux weather authority, precipitation occlusion, rain/snow surfaces, and snow trails |
 | `shadow_shader_interposition.inc` | Shader and draw interception |
 | `shadow_fullscreen_receiver.inc` | Receiver programs and scene copies |
 | `shadow_overlay_runtime.inc` | Overlay lifecycle and frame ordering |

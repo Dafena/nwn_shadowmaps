@@ -1,8 +1,9 @@
 # Current task
 
-Updated 2026-08-29. Linux remains the behavioural reference. The
-injector-owned automatic rain/puddle system is accepted on Linux. A Windows
-port remains a separate, explicitly requested task.
+Updated 2026-09-03. Linux remains the behavioural reference. The automatic
+clear/rain/snow weather-effects system, including precipitation occlusion and
+height-aware snow deformation, is accepted on Linux. A Windows weather port
+remains a separate, explicitly requested task.
 
 ## Accepted Linux baseline
 
@@ -43,9 +44,9 @@ Linux and Proton share the same development resources. The `users/fede` and
 `users/steamuser` development paths resolve to the same inode. Do not deploy
 duplicate overrides into the unaliased home `development` directory.
 
-## Accepted Linux rain/puddle baseline
+## Accepted Linux weather-effects baseline
 
-The automatic Linux implementation lives in `rain_runtime.inc`:
+The automatic Linux implementation lives in `weather_runtime.inc`:
 
 - `CNWCArea::SetWeather(unsigned char, float)` is the authoritative automatic
   weather source. Linux disassembly confirms weather values 0 clear, 1 rain,
@@ -53,7 +54,10 @@ The automatic Linux implementation lives in `rain_runtime.inc`:
   maintains gradual wetness accumulation/drying without module configuration.
   Wetness is scoped to the current `CNWCArea`: area and save-load transitions
   reset inherited wetness immediately, while weather changes within one area
-  retain the accepted fade.
+  retain the accepted fade. The stock `areaFlags` uniform is the authoritative
+  interior test (`NWAREA_FLAG_INTERIOR`): interior draws suppress weather on
+  their first frame and clear both surface reservoirs immediately, including
+  when NWN reuses the same `CNWCArea` allocation across a load screen.
 - The selected `g_areaScene` gate is mandatory. Draw classification tracks
   NWN's `skinmesh` uniform from its own `glUniform1i` uploads, avoiding a
   synchronous driver query per draw. Static opaque bucket 0 receives the full
@@ -72,14 +76,61 @@ The automatic Linux implementation lives in `rain_runtime.inc`:
   micro-normal noise and smaller normal-only rain impacts.
 - Rain contributions fade through NWN fog. Mode 2 A2C remains enabled by
   default and was kept outside the rain shader's RGB-only static-alpha work.
-- Top-down rain occlusion is deliberately deferred. Covered outdoor geometry
-  may therefore become wet until a future occlusion feature is implemented.
-- Windows currently compiles no-op rain stubs only. Do not add Windows rain
+- Rain and snow share a separate world-anchored top-down precipitation depth
+  map. It follows the configured static-world extent and resolution (including
+  the 16K maximum), requests NWN's complete static BSP only when stale, and is
+  reused until the area changes or the camera crosses 60% of its extent. The
+  stable `CNWCArea::SetWeather` pointer keys the cache; transient torch/shadow
+  objects cannot trigger repeated captures. Static opaque bucket 0 and static
+  alpha/card bucket 1 accumulate into one capture. Stock alpha-discard holes
+  remain open, while solid transparent-mesh fragments block precipitation;
+  characters never enter the blocker map. Receiver-height depth comparison
+  leaves rooftops exposed while sheltering geometry below them. A stationary
+  16-sample world-space disk with geometry-anchored dithering softens blocker
+  borders without camera shimmer, discrete bands, or displaced roof edges.
+  Every rain contribution and snow coverage is multiplied by this exposure.
+- Clear, rain, and snow are one authoritative state machine. Falling
+  precipitation remains mutually exclusive, while accumulated rain and snow
+  are independent surface reservoirs: the old layer fades as the new layer
+  builds, matching clear-weather drying/melting instead of popping off. Rain
+  and snow use the same switch-away/clear fade rate.
+- The snow receiver adds world-anchored high-frequency accumulation on upward
+  static opaque geometry, NWN fog fading, normal variation, and a bounded
+  view-dependent raised parallax height walk. Bucket-2 creature transforms
+  feed 16 bounded world-space character histories: resolved ground-contact
+  movement carves up to 64 continuous rounded trail segments per character
+  into a 512x512 RGBA32F deformation texture. Its first two channels store
+  deformation depth and contacted world height, preventing a creature below a
+  roof or bridge from deforming snow above it. Each character's
+  oldest segment enters a two-second retirement fade at capacity; the texture
+  is refreshed at 10 Hz with gradual refill and reset on area transitions.
+  Slot 0 and a separate retirement pool are reserved for the camera-target
+  player, so NPC pressure cannot evict that trail. Snow shaders sample this
+  texture instead of evaluating segment uniform arrays per fragment. The
+  occlusion fringe suppresses parallax and relief normals until the surface is
+  nearly fully exposed, so a soft shelter transition cannot become a raised
+  snow bank. Snow is a neutral material relit from NWN's decoded area light
+  and complete enabled local-light census (up to the engine's 128-light
+  setting), rather than inheriting the covered tile's albedo. Snow
+  settlement trusts geometric slope and only mildly modulates with the
+  material normal, while an albedo-independent illumination floor keeps the
+  layer visible on dark tilesets that do not already use snow textures. Near
+  full accumulation a continuous minimum blanket and 97% snow composite stop
+  bright local lights from revealing the base texture as a lifted-snow halo.
+- Windows currently compiles no-op weather stubs only. Do not add Windows weather
   bindings without an explicit port request. If the future Windows port fails
   while Linux works, ask the maintainer before changing shared behaviour.
 
 The feature requires no environment variable, module edit, hak, shader
 override, or user-authored material marker.
+
+The maintainer confirmed the final Linux regression set on 2026-09-03:
+clear/rain/snow transitions, save and area changes, immediate interior reset,
+fog, opaque and static-transparent shelter, torch lighting, shadows, A2C,
+native-water exclusion, crowded creature trails, player-trail priority, and
+the 8192x8192 occlusion target all behaved correctly with no noticed
+performance regression. A 16K depth target is supported by the configured
+path but consumes about 1 GiB of VRAM and was not part of that runtime pass.
 
 ## Next work
 

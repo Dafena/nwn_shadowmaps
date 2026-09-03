@@ -722,10 +722,10 @@ extern "C" void my_shader_source(GLuint shader, GLsizei count,
     const bool staticAlphaProbe = g_cascadeStaticAlphaCapture ||
                                   g_cascadeStaticAlphaReceiver;
     const bool oitFoliageProbe = nwn_oit_needs_shader_sources();
-    const bool rainShaderProbe = rain_needs_shader_sources();
+    const bool weatherShaderProbe = weather_needs_shader_sources();
     if (!g_realShaderSource || (!g_injectTest && !dumpVertex && !dumpFragment &&
                                 !staticAlphaProbe && !oitFoliageProbe &&
-                                !rainShaderProbe) ||
+                                !weatherShaderProbe) ||
         count <= 0 || !string) {
         if (g_realShaderSource) g_realShaderSource(shader, count, string, length);
         return;
@@ -749,8 +749,8 @@ extern "C" void my_shader_source(GLuint shader, GLsizei count,
     bool oitFoliageInjected = false;
     bool materialModeInjected = false;
     bool a2cEmitterInjected = false;
-    const bool rainInjected = rainShaderProbe &&
-                              rain_patch_shader_source(combined);
+    const bool weatherInjected = weatherShaderProbe &&
+                              weather_patch_shader_source(combined);
     if (stockAlphaVariant || customContinuousAlphaVariant) {
         if (staticAlphaProbe) {
             bool seen = false;
@@ -828,7 +828,7 @@ extern "C" void my_shader_source(GLuint shader, GLsizei count,
         }
     }
     const bool markerInjected = inject_marker(combined);
-    if (!rainInjected && !materialModeInjected && !oitFoliageInjected &&
+    if (!weatherInjected && !materialModeInjected && !oitFoliageInjected &&
         !a2cEmitterInjected && !markerInjected) {
         g_realShaderSource(shader, count, string, length);
         return;
@@ -1320,7 +1320,10 @@ static inline GLint local_current_program() {
 static void capture_native_transform(GLint location, GLsizei count,
                                      GLboolean transpose, const GLfloat* value) {
     const bool cascadeActive = g_cascadeLightCapture && g_cascadeLightCaptureActive;
-    if ((!cascadeActive && !g_localVisibleDynamicCaptureActive) ||
+    const bool weatherDynamic = weather_tracks_dynamic_creatures() &&
+                                nwn_core::g_currentBucket == 2;
+    if ((!cascadeActive && !g_localVisibleDynamicCaptureActive &&
+         !weatherDynamic) ||
         !g_traceFrameActive || g_traceCurrentScene != g_areaScene ||
         count != 1 || transpose != GL_FALSE || !value || !gl::GetIntegerv)
         return;
@@ -1785,7 +1788,7 @@ extern "C" void my_use_program(GLuint prog) {
     // succeed (no GL context at DLL attach), so every gl:: pointer below is
     // still null. Forward and return until the render path binds them.
     if (!g_glBound) return;
-    rain_note_program(prog);
+    weather_note_program(prog);
     static bool said = false;
     if (!said) { said = true;
         fprintf(stderr, "[shadowmap] program binds arriving via GLEW pointer\n"); }
@@ -1935,7 +1938,13 @@ static void dump_quad_program_source(unsigned prog, int bucket) {
 // NWN exactly once and with its unmodified state.
 static void trace_normal_geometry_draw(GLsizei count, bool indexed) {
     if (g_overlayPassActive) return;   // UI draws are not scene geometry
-    rain_observe_draw(g_curProgram, count);
+    weather_observe_draw(g_curProgram, count);
+    if (!g_inOurPass && !g_cascadeReplayActive &&
+        nwn_core::g_currentBucket == 2 && weather_tracks_dynamic_creatures()) {
+        float weatherActorPosition[3] = {};
+        if (local_visible_draw_world_pos(weatherActorPosition))
+            weather_observe_dynamic_position(weatherActorPosition);
+    }
     // The engine's own shadow pass, counted HERE and not in shadow_before_draw().
     // That function is reached from only 2 of the 10 draw wrappers -- this engine
     // draws mostly through glDrawRangeElements and glMultiDraw* -- so a counter

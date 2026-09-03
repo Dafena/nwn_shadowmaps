@@ -88,6 +88,7 @@ typedef void          GLvoid;
 #define GL_COLOR_ATTACHMENT0            0x8CE0
 #define GL_RGBA                         0x1908
 #define GL_RGBA8                        0x8058
+#define GL_RGBA32F                      0x8814
 #define GL_R8                           0x8229
 #define GL_R32F                         0x822E
 #define GL_RED                          0x1903
@@ -212,4 +213,3 @@ static bool bind_gl() {
     return ok;
 }
 #undef GLBIND
-

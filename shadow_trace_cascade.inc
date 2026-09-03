@@ -373,14 +373,14 @@ static void trace_scene_enter(void* scene) {
     // The shipping Linux trace/CSM path historically did not need the generic
     // program interposer. Rain classification does: it tracks program identity
     // and skinmesh uploads without a driver query on every draw.
-    if (rain_needs_draw_observer()) install_useprogram_patch();
+    if (weather_needs_draw_observer()) install_useprogram_patch();
 #endif
-    install_rain_uniform_patch();
+    install_weather_uniform_patch();
     install_light_vector_trace_patch();
     install_geometry_trace_patch();
     if (shadow_getenv("NWN_SHADOWMAP_DUMP_VERTEX") || shadow_getenv("NWN_SHADOWMAP_DUMP_FRAGMENT") ||
         g_cascadeStaticAlphaCapture || g_cascadeStaticAlphaReceiver ||
-        nwn_oit_needs_shader_sources() || rain_needs_shader_sources())
+        nwn_oit_needs_shader_sources() || weather_needs_shader_sources())
         install_shadersource_patch();
     if (g_cascadeMatrixTrace || g_cascadeLightCapture) install_uniform_matrix_patch();
 
@@ -408,7 +408,7 @@ static void trace_scene_enter(void* scene) {
         }
     }
     if (scene != g_areaScene) return;
-    rain_scene_begin(scene);
+    weather_scene_begin(scene);
     // The normal trace remains bounded.  The visible static receiver is
     // different: its frame context and private depth must advance forever or
     // it would compare a new screen depth against an old camera/light frame.
@@ -446,7 +446,7 @@ static void trace_scene_enter(void* scene) {
 }
 
 static void trace_scene_exit(void* scene) {
-    rain_scene_end(scene);
+    weather_scene_end(scene);
     // The area-light vector is discovered while the original normal pass is
     // running.  Allocate only after that pass, once the real direction and a
     // frozen cascade fit both exist.  This touches private GL objects only;
@@ -768,6 +768,13 @@ extern "C" void SceneRenderDrawBucket_trace_detour(void* self, int bucket) {
         const bool staticTarget = staticBucketCapture || staticAlphaBucketCapture;
         replay_bucket_into_cascade_layers(self, bucket, staticTarget);
     }
+#ifndef _WIN32
+    // Weather owns a separate straight-down static depth target. Its replay is
+    // requested here, adjacent to the proven cascade bucket replay, and is a
+    // Linux-only module until the weather system receives an explicit port.
+    if (self == g_areaScene)
+        weather_runtime::capture_precipitation_occlusion_bucket(self, bucket);
+#endif
     // SUN-PATH local lights fill from here for the same reason the cascades do:
     // the engine has just rendered this bucket for the CAMERA, so replaying it
     // now captures exactly the visible casters. Area scene only, and never from
@@ -867,7 +874,8 @@ extern "C" void SetLightGL_detour(const void* light, int index, float f) {
                         light, eng::GetLightFadeSpeed ? eng::GetLightFadeSpeed(light) : -1.0f,
                         radius, isEmitter ? "EMITTER (no shadow)" : "static (casts)");
             }
-            lamp_list_add(light, info.pos.x, info.pos.y, info.pos.z, radius, isEmitter);
+            lamp_list_add(light, info.pos.x, info.pos.y, info.pos.z, radius,
+                          isEmitter, info.color);
         }
     }
     if (g_hookSetLightGL) subhook_remove(g_hookSetLightGL);
@@ -936,7 +944,7 @@ extern "C" void* LightGetShadowLights_trace_detour(void* self, int mode) {
                 if (decoded && !info.ambientOnly) {
 #ifndef _WIN32
                     lamp_list_add(candidate, info.pos.x, info.pos.y, info.pos.z,
-                                  info.radius, false, (int)i);
+                                  info.radius, false, info.color, (int)i);
 #endif
                 }
             }
