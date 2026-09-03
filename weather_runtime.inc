@@ -38,6 +38,8 @@ static constexpr int kPrecipitationOcclusionUnit = 27;
 static constexpr int kFramebufferColorUnit = 11;
 static constexpr int kFramebufferDepthUnit = 12;
 static constexpr int kWaterNoiseUnit = 15;
+static constexpr int kWeatherCaptureColorUnit = 23;
+static constexpr int kWeatherCaptureDepthUnit = 24;
 
 struct ProgramState {
     GLuint program = 0;
@@ -53,6 +55,9 @@ struct ProgramState {
     GLint weatherFbColor = -1;
     GLint weatherFbDepth = -1;
     GLint weatherReflectionReady = -1;
+    GLint weatherFbView = -1;
+    GLint weatherFbProj = -1;
+    GLint weatherFbProjInv = -1;
     GLint weatherNoiseTex = -1;
     GLint weatherNoiseReady = -1;
     GLint snowDeformationTex = -1;
@@ -125,6 +130,14 @@ struct RuntimeState {
     bool reflectionReady = false;
     bool noiseReady = false;
     unsigned reflectionProbeFrame = ~0u;
+    bool framebufferCameraValid = false;
+    unsigned framebufferCameraFrame = 0;
+    void* framebufferCameraScene = nullptr;
+    float framebufferView[16] = {};
+    float framebufferProjection[16] = {};
+    float framebufferProjectionInverse[16] = {};
+    GLuint framebufferColorTexture = 0;
+    GLuint framebufferDepthTexture = 0;
     SnowTrack snowTracks[kTrackedActorCapacity][kSnowTracksPerActor] = {};
     SnowTrack retiringSnowTracks[kRetiringSnowTrackCapacity] = {};
     SnowTrack retiringPlayerTracks[kRetiringPlayerTrackCapacity] = {};
@@ -203,6 +216,10 @@ static ProgramState* program_state(GLuint program) {
     state.weatherFbDepth = gl::GetUniformLocation(program, "nwnWeatherFbDepth");
     state.weatherReflectionReady =
         gl::GetUniformLocation(program, "nwnWeatherReflectionReady");
+    state.weatherFbView = gl::GetUniformLocation(program, "nwnWeatherFbView");
+    state.weatherFbProj = gl::GetUniformLocation(program, "nwnWeatherFbProj");
+    state.weatherFbProjInv =
+        gl::GetUniformLocation(program, "nwnWeatherFbProjInv");
     state.weatherNoiseTex = gl::GetUniformLocation(program, "nwnWeatherNoiseTex");
     state.weatherNoiseReady = gl::GetUniformLocation(program, "nwnWeatherNoiseReady");
     state.snowDeformationTex =
@@ -227,16 +244,14 @@ static void probe_framebuffer_reflection_inputs() {
     if (g.reflectionProbeFrame == g.frameSerial || !gl::ActiveTexture ||
         !gl::GetIntegerv) return;
     g.reflectionProbeFrame = g.frameSerial;
-    GLint oldActive = GL_TEXTURE0, color = 0, depth = 0, noise = 0;
+    GLint oldActive = GL_TEXTURE0, noise = 0;
     gl::GetIntegerv(GL_ACTIVE_TEXTURE, &oldActive);
-    gl::ActiveTexture(GL_TEXTURE0 + kFramebufferColorUnit);
-    gl::GetIntegerv(GL_TEXTURE_BINDING_2D, &color);
-    gl::ActiveTexture(GL_TEXTURE0 + kFramebufferDepthUnit);
-    gl::GetIntegerv(GL_TEXTURE_BINDING_2D, &depth);
     gl::ActiveTexture(GL_TEXTURE0 + kWaterNoiseUnit);
     gl::GetIntegerv(GL_TEXTURE_BINDING_2D, &noise);
     gl::ActiveTexture((GLenum)oldActive);
-    const bool ready = color != 0 && depth != 0;
+    const bool ready = g.framebufferCameraValid &&
+                       g.framebufferColorTexture != 0 &&
+                       g.framebufferDepthTexture != 0;
     const bool noiseReady = noise != 0;
     static bool reported = false;
     static bool lastReady = false;
@@ -249,7 +264,9 @@ static void probe_framebuffer_reflection_inputs() {
                 "[weather][linux] water inputs reflection=%s noise=%s "
                 "color=%d depth=%d noise=%d\n",
                 ready ? "ready" : "unavailable",
-                noiseReady ? "ready" : "unavailable", color, depth, noise);
+                noiseReady ? "ready" : "unavailable",
+                (int)g.framebufferColorTexture,
+                (int)g.framebufferDepthTexture, noise);
     }
     g.reflectionReady = ready;
     g.noiseReady = noiseReady;
@@ -1009,15 +1026,29 @@ static void push_draw_state(ProgramState* state, float receiverClass) {
     if (receiverClass > 0.5f) probe_framebuffer_reflection_inputs();
     if (state->weatherReflectionReady >= 0)
         gl::Uniform1f(state->weatherReflectionReady,
-                      receiverClass > 0.5f && g.reflectionReady ? 1.0f : 0.0f);
+                      receiverClass > 0.5f && g.reflectionReady &&
+                      g.framebufferCameraValid &&
+                      g.framebufferCameraScene == g_areaScene ? 1.0f : 0.0f);
+    if (receiverClass > 0.5f && g.framebufferCameraValid &&
+        g.framebufferCameraScene == g_areaScene && gl::UniformMatrix4fv) {
+        if (state->weatherFbView >= 0)
+            gl::UniformMatrix4fv(state->weatherFbView, 1, GL_FALSE,
+                                 g.framebufferView);
+        if (state->weatherFbProj >= 0)
+            gl::UniformMatrix4fv(state->weatherFbProj, 1, GL_FALSE,
+                                 g.framebufferProjection);
+        if (state->weatherFbProjInv >= 0)
+            gl::UniformMatrix4fv(state->weatherFbProjInv, 1, GL_FALSE,
+                                 g.framebufferProjectionInverse);
+    }
     if (state->weatherNoiseReady >= 0)
         gl::Uniform1f(state->weatherNoiseReady,
                       receiverClass > 0.5f && g.noiseReady ? 1.0f : 0.0f);
     if (gl::Uniform1i) {
         if (state->weatherFbColor >= 0)
-            gl::Uniform1i(state->weatherFbColor, kFramebufferColorUnit);
+            gl::Uniform1i(state->weatherFbColor, kWeatherCaptureColorUnit);
         if (state->weatherFbDepth >= 0)
-            gl::Uniform1i(state->weatherFbDepth, kFramebufferDepthUnit);
+            gl::Uniform1i(state->weatherFbDepth, kWeatherCaptureDepthUnit);
         if (state->weatherNoiseTex >= 0)
             gl::Uniform1i(state->weatherNoiseTex, kWaterNoiseUnit);
         if (state->snowDeformationTex >= 0)
@@ -1072,6 +1103,34 @@ static void push_draw_state(ProgramState* state, float receiverClass) {
         gl::BindTexture(GL_TEXTURE_2D, g.snowDeformationTexture);
         gl::ActiveTexture((GLenum)oldActive);
     }
+    if (receiverClass > 0.5f && g.framebufferColorTexture &&
+        g.framebufferDepthTexture && gl::ActiveTexture && gl::BindTexture &&
+        gl::GetIntegerv) {
+        GLint oldActive = GL_TEXTURE0;
+        gl::GetIntegerv(GL_ACTIVE_TEXTURE, &oldActive);
+        gl::ActiveTexture(GL_TEXTURE0 + kWeatherCaptureColorUnit);
+        gl::BindTexture(GL_TEXTURE_2D, g.framebufferColorTexture);
+        gl::ActiveTexture(GL_TEXTURE0 + kWeatherCaptureDepthUnit);
+        gl::BindTexture(GL_TEXTURE_2D, g.framebufferDepthTexture);
+        static bool logged = false;
+        if (!logged && g.rainAmount > 0.01f) {
+            GLint colorBound = 0, depthBound = 0;
+            gl::GetIntegerv(GL_TEXTURE_BINDING_2D, &depthBound);
+            gl::ActiveTexture(GL_TEXTURE0 + kWeatherCaptureColorUnit);
+            gl::GetIntegerv(GL_TEXTURE_BINDING_2D, &colorBound);
+            fprintf(stderr,
+                    "[weather][linux] puddle optics upload frame=%u capture=%u "
+                    "age=%u readyLoc=%d viewLoc=%d projLoc=%d invLoc=%d "
+                    "color=%d depth=%d\n",
+                    g.frameSerial, g.framebufferCameraFrame,
+                    g.frameSerial - g.framebufferCameraFrame,
+                    state->weatherReflectionReady, state->weatherFbView,
+                    state->weatherFbProj, state->weatherFbProjInv,
+                    colorBound, depthBound);
+            logged = true;
+        }
+        gl::ActiveTexture((GLenum)oldActive);
+    }
     if (receiverClass > 0.5f && g.snowLightDataTexture &&
         gl::ActiveTexture && gl::BindTexture && gl::GetIntegerv) {
         GLint oldActive = GL_TEXTURE0;
@@ -1117,6 +1176,8 @@ static void observe_engine_weather(void* area, int weather, float densityPercent
         g.rainAmount = 0.0f;
         g.snowAmount = 0.0f;
         clear_snow_tracks();
+        g.framebufferCameraValid = false;
+        g.framebufferCameraScene = nullptr;
         g.lastTick = now_seconds();
         g.nextStatus = 0.0;
     }
@@ -1263,6 +1324,33 @@ static void scene_end(void* scene) {
     }
 }
 
+static void publish_framebuffer_capture(void* scene, GLuint colorTexture,
+                                        GLuint depthTexture) {
+    const ShadowFrameContext& ctx = g_shadowFrameContext;
+    if (!scene || scene != g_areaScene || !ctx.valid || ctx.scene != scene ||
+        !colorTexture || !depthTexture) return;
+    float projectionInverse[16];
+    if (!mat4_inverse(ctx.projection, projectionInverse)) return;
+    std::memcpy(g.framebufferView, ctx.view, sizeof(ctx.view));
+    std::memcpy(g.framebufferProjection, ctx.projection,
+                sizeof(ctx.projection));
+    std::memcpy(g.framebufferProjectionInverse, projectionInverse,
+                sizeof(projectionInverse));
+    g.framebufferColorTexture = colorTexture;
+    g.framebufferDepthTexture = depthTexture;
+    g.framebufferCameraFrame = ctx.serial;
+    g.framebufferCameraScene = ctx.scene;
+    g.framebufferCameraValid = true;
+    static bool logged = false;
+    if (!logged) {
+        logged = true;
+        fprintf(stderr,
+                "[weather][linux] framebuffer capture published frame=%u "
+                "color=%u depth=%u\n",
+                ctx.serial, colorTexture, depthTexture);
+    }
+}
+
 static bool patch_fragment_shader(std::string& source) {
     // Stock world materials share this final output shape. Requiring all
     // inputs makes post-processing, UI, particles and unusual custom shaders
@@ -1287,6 +1375,9 @@ static bool patch_fragment_shader(std::string& source) {
         "uniform sampler2D nwnWeatherFbColor;\n"
         "uniform sampler2D nwnWeatherFbDepth;\n"
         "uniform float nwnWeatherReflectionReady;\n"
+        "uniform mat4 nwnWeatherFbView;\n"
+        "uniform mat4 nwnWeatherFbProj;\n"
+        "uniform mat4 nwnWeatherFbProjInv;\n"
         "uniform sampler2D nwnWeatherNoiseTex;\n"
         "uniform float nwnWeatherNoiseReady;\n"
         "uniform sampler2D nwnWeatherSnowDeformationTex;\n"
@@ -1388,14 +1479,14 @@ static bool patch_fragment_shader(std::string& source) {
         "    float threshold = mix(0.16, 0.33, wetness);\n"
         "    return 1.0 - smoothstep(threshold - 0.04, threshold + 0.04, field);\n"
         "}\n"
-        "float nwnRainDepth(vec2 uv) {\n"
-        "    float d = texture2D(nwnWeatherFbDepth, uv).x;\n"
-        "    return nearClip / max(0.00001, 1.0 - d * fDepthToLinearModifier);\n"
-        "}\n"
         "vec3 nwnRainViewPosition(vec2 uv) {\n"
         "    float d = texture2D(nwnWeatherFbDepth, uv).x;\n"
-        "    vec4 p = m_proj_inv * vec4(uv * 2.0 - 1.0, d * 2.0 - 1.0, 1.0);\n"
+        "    vec4 p = nwnWeatherFbProjInv\n"
+        "        * vec4(uv * 2.0 - 1.0, d * 2.0 - 1.0, 1.0);\n"
         "    return p.xyz / max(0.00001, p.w);\n"
+        "}\n"
+        "float nwnRainDepth(vec2 uv) {\n"
+        "    return -nwnRainViewPosition(uv).z;\n"
         "}\n"
         "vec3 nwnRainDepthNormal(vec2 uv) {\n"
         "    vec3 p = nwnRainViewPosition(uv);\n"
@@ -1417,9 +1508,10 @@ static bool patch_fragment_shader(std::string& source) {
         "    float minRelativeError = 4096.0;\n"
         "    float hitDepth = maxDistance + origin.z;\n"
         "    vec2 hitUv = vec2(-1.0);\n"
-        "    vec3 rayEndProj = mat3(m_proj) * (origin + maxDistance * ray);\n"
+        "    vec3 rayEndProj = mat3(nwnWeatherFbProj)\n"
+        "                    * (origin + maxDistance * ray);\n"
         "    vec2 rayEndUv = 0.5 * (rayEndProj.xy / rayEndProj.z) + 0.5;\n"
-        "    vec3 originProj = mat3(m_proj) * origin;\n"
+        "    vec3 originProj = mat3(nwnWeatherFbProj) * origin;\n"
         "    vec2 originUv = 0.5 * (originProj.xy / originProj.z) + 0.5;\n"
         "    float denomInv = 1.0 / (1.0 / (origin.z + ray.z * maxDistance)\n"
         "                              - 1.0 / origin.z);\n"
@@ -1694,10 +1786,22 @@ static bool patch_fragment_shader(std::string& source) {
         "        vec3 nwnRainWaterWorldN = normalize(vec3(nwnRainSurface, 1.0));\n"
         "        vec3 nwnRainWaterViewN = normalize(mat3(m_view) * nwnRainWaterWorldN);\n"
         "        vec3 nwnRainIncident = normalize(vPosView);\n"
+        // The sampled color/depth pair belongs to the camera active when NWN
+        // copied it. Reproject the current world-space puddle and reflection
+        // ray into that exact camera instead of mixing frame generations.
+        "        vec3 nwnRainFbOrigin = (nwnWeatherFbView\n"
+        "            * vec4(nwnRainWorld, 1.0)).xyz;\n"
+        "        vec3 nwnRainRayWorld = mat3(m_view_inv)\n"
+        "            * reflect(nwnRainIncident, nwnRainWaterViewN);\n"
+        "        vec3 nwnRainFbRay = normalize(mat3(nwnWeatherFbView)\n"
+        "            * nwnRainRayWorld);\n"
+        "        vec4 nwnRainFbClip = nwnWeatherFbProj\n"
+        "            * vec4(nwnRainFbOrigin, 1.0);\n"
+        "        vec2 nwnRainScreenUv = nwnRainFbClip.xy\n"
+        "            / max(0.00001, nwnRainFbClip.w) * 0.5 + 0.5;\n"
         // Refraction dominates from above, as it does in fswater.shd. Reject
         // offsets that cross onto a different depth layer so a nearby creature
         // cannot smear into the puddle through the previous framebuffer.
-        "        vec2 nwnRainScreenUv = gl_FragCoord.xy * pixelParams.xy;\n"
         "        float nwnRainRefractionScale = mix(0.0035, 0.0115,\n"
         "                                               nwnRainOpticalDepth);\n"
         "        vec2 nwnRainRefractUv = clamp(nwnRainScreenUv +\n"
@@ -1707,16 +1811,16 @@ static bool patch_fragment_shader(std::string& source) {
         "            vec2(0.002), vec2(0.998));\n"
         "        vec3 nwnRainRefractPos = nwnRainViewPosition(nwnRainRefractUv);\n"
         "        float nwnRainRefractGate = 1.0 - smoothstep(0.12, 1.25,\n"
-        "            abs(nwnRainRefractPos.z - vPosView.z));\n"
+        "            abs(nwnRainRefractPos.z - nwnRainFbOrigin.z));\n"
         "        vec3 nwnRainRefracted = texture2D(nwnWeatherFbColor,\n"
         "                                           nwnRainRefractUv).rgb;\n"
         "        float nwnRainRefractionMix = nwnRainRefractGate\n"
         "            * mix(0.20, 0.62, nwnRainOpticalDepth);\n"
         "        nwnRainWetColor = mix(nwnRainWetColor, nwnRainRefracted,\n"
         "                              nwnRainRefractionMix);\n"
-        "        vec3 nwnRainRay = reflect(nwnRainIncident, nwnRainWaterViewN);\n"
-        "        vec4 nwnRainHit = nwnRainTraceReflection(vPosView +\n"
-        "                              nwnRainWaterViewN * 0.035, nwnRainRay);\n"
+        "        vec4 nwnRainHit = nwnRainTraceReflection(nwnRainFbOrigin +\n"
+        "            normalize(mat3(nwnWeatherFbView) * nwnRainWaterWorldN)\n"
+        "            * 0.035, nwnRainFbRay);\n"
         "        vec3 nwnRainReflected = texture2D(nwnWeatherFbColor,\n"
         "                                      clamp(nwnRainHit.xy, 0.002, 0.998)).rgb;\n"
         "        float nwnRainNdotV = clamp(dot(nwnRainWaterViewN,\n"
@@ -1728,7 +1832,7 @@ static bool patch_fragment_shader(std::string& source) {
         "        vec3 nwnRainHitNormal = nwnRainDepthNormal(\n"
         "                                      clamp(nwnRainHit.xy, 0.002, 0.998));\n"
         "        float nwnRainNormalGate = clamp(0.1 - 4.0 *\n"
-        "                                      dot(nwnRainHitNormal, nwnRainRay),\n"
+        "                                      dot(nwnRainHitNormal, nwnRainFbRay),\n"
         "                                      0.0, 1.0);\n"
         "        float nwnRainEdge = min(min(nwnRainHit.x, nwnRainHit.y),\n"
         "            min(1.0 - nwnRainHit.x, 1.0 - nwnRainHit.y));\n"
@@ -1848,26 +1952,28 @@ extern "C" int weather_area_set_weather(void* area, uint8_t weather,
 }
 
 static void install_weather_engine_hooks() {
-    if (weather_runtime::g_weatherHook || !eng::AreaSetWeather) return;
-    weather_runtime::g_weatherHook =
-        subhook_new((void*)eng::AreaSetWeather, (void*)weather_area_set_weather,
-                    SUBHOOK_64BIT_OFFSET);
-    if (!weather_runtime::g_weatherHook ||
+    if (!weather_runtime::g_weatherHook && eng::AreaSetWeather)
+        weather_runtime::g_weatherHook = subhook_new(
+            (void*)eng::AreaSetWeather, (void*)weather_area_set_weather,
+            SUBHOOK_64BIT_OFFSET);
+    if (weather_runtime::g_weatherHook &&
         subhook_install(weather_runtime::g_weatherHook) != 0) {
         fprintf(stderr,
                 "[weather][linux] warning: CNWCArea::SetWeather hook unavailable; "
                 "weather effects will fail closed\n");
-        if (weather_runtime::g_weatherHook) {
-            subhook_free(weather_runtime::g_weatherHook);
-            weather_runtime::g_weatherHook = nullptr;
-        }
-        return;
+        subhook_free(weather_runtime::g_weatherHook);
+        weather_runtime::g_weatherHook = nullptr;
     }
-    weather_runtime::g_weatherTrampoline = (eng::AreaSetWeather_t)
-        subhook_get_trampoline(weather_runtime::g_weatherHook);
-    fprintf(stderr, "[weather][linux] engine weather observer active%s\n",
-            weather_runtime::g_weatherTrampoline ? "" :
-            " (remove/call/reinstall fallback)");
+    if (weather_runtime::g_weatherHook) {
+        weather_runtime::g_weatherTrampoline = (eng::AreaSetWeather_t)
+            subhook_get_trampoline(weather_runtime::g_weatherHook);
+        fprintf(stderr, "[weather][linux] engine weather observer active%s\n",
+                weather_runtime::g_weatherTrampoline ? "" :
+                " (remove/call/reinstall fallback)");
+    }
+
+    fprintf(stderr,
+            "[weather][linux] injector-owned framebuffer synchronization active\n");
 }
 
 static void uninstall_weather_engine_hooks() {

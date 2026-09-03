@@ -810,6 +810,9 @@ static void draw_static_receiver(void* scene) {
     // composite has not run yet.
     gl::ActiveTexture(GL_TEXTURE0+kColorUnit);
     const bool colorOk = capture_scene_color(vp);
+    if (depthOk && colorOk && g_sceneColorCapturedNow)
+        weather_runtime::publish_framebuffer_capture(scene, g_sceneColorTex,
+                                                     g_sceneDepthTex);
     // Finish on the reporting frame only, for the same reason recv does: with
     // MSAA on, this "copy" is a multisample RESOLVE of a full-screen depth
     // buffer, and submission time cannot see it. Unfinished, its GPU cost was
