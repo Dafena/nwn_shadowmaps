@@ -1,8 +1,10 @@
 # Current task
 
-Updated 2026-08-26. Linux remains the behavioural reference, and the
-maintainer has now explicitly requested planning and implementation work for
-Windows.
+Updated 2026-09-03. Linux remains the behavioural reference. The automatic
+clear/rain/snow weather-effects system, including precipitation occlusion and
+height-aware snow deformation, is accepted on Linux and ported to native
+Windows. The shared renderer is intentionally identical; only engine discovery
+and OpenGL interception differ by platform.
 
 ## Accepted Linux baseline
 
@@ -43,6 +45,101 @@ Linux and Proton share the same development resources. The `users/fede` and
 `users/steamuser` development paths resolve to the same inode. Do not deploy
 duplicate overrides into the unaliased home `development` directory.
 
+## Accepted cross-platform weather-effects baseline
+
+The automatic implementation lives in `weather_runtime.inc`:
+
+- `CNWCArea::SetWeather(unsigned char, float)` is the authoritative automatic
+  weather source. Linux disassembly confirms weather values 0 clear, 1 rain,
+  2 snow and density in the 0..100 range. The injector normalizes density and
+  maintains gradual wetness accumulation/drying without module configuration.
+  Wetness is scoped to the current `CNWCArea`: area and save-load transitions
+  reset inherited wetness immediately, while weather changes within one area
+  retain the accepted fade. The stock `areaFlags` uniform is the authoritative
+  interior test (`NWAREA_FLAG_INTERIOR`): interior draws suppress weather on
+  their first frame and clear both surface reservoirs immediately, including
+  when NWN reuses the same `CNWCArea` allocation across a load screen.
+- The selected `g_areaScene` gate is mandatory. Draw classification tracks
+  NWN's `skinmesh` uniform from its own `glUniform1i` uploads, avoiding a
+  synchronous driver query per draw. Static opaque bucket 0 receives the full
+  effect. Static alpha/card bucket 1 receives orientation-aware wet noise and
+  normal impacts without puddles. Dynamic body/hair buckets, skinned
+  characters, native water, and unknown/out-of-bucket draws are excluded.
+- The Linux weather hook uses the established remove/call/reinstall fallback
+  because this executable's function prologue does not yield a Subhook
+  trampoline. Native Linux runtime testing confirmed clear, snow, and rain
+  transitions, area changes, and save loading.
+- Windows resolves private active-area `StartWeather`/`StopWeather` calls from
+  the validated client network-decoder path around exported
+  `CNWMessage::ReadBYTE`/`ReadBOOL`. At scene start it reads the newly active
+  client area's stored weather byte and reapplies that state. This area-load
+  synchronization handles weather changed while an interior had no weather
+  surface and is client-side, so it works for local and multiplayer clients.
+- Eligible opaque surfaces gain gradual wet film and compact world-anchored
+  procedural puddles. Standing water is limited by geometric and smoothed
+  surface flatness; steep geometry only becomes wet. Puddles reuse NWN's
+  framebuffer and water-noise inputs for bounded screen-space reflection,
+  refraction, and animated normal ripples. Non-puddle wet surfaces use moving
+  micro-normal noise and smaller normal-only rain impacts.
+- Rain contributions fade through NWN fog. Mode 2 A2C remains enabled by
+  default and was kept outside the rain shader's RGB-only static-alpha work.
+- Rain and snow share a separate world-anchored top-down precipitation depth
+  map. It follows the configured static-world extent and resolution (including
+  the 16K maximum), requests NWN's complete static BSP only when stale, and is
+  reused until the area changes or the camera crosses 60% of its extent. The
+  stable `CNWCArea::SetWeather` pointer keys the cache; transient torch/shadow
+  objects cannot trigger repeated captures. Static opaque bucket 0 and static
+  alpha/card bucket 1 accumulate into one capture. Stock alpha-discard holes
+  remain open, while solid transparent-mesh fragments block precipitation;
+  characters never enter the blocker map. Receiver-height depth comparison
+  leaves rooftops exposed while sheltering geometry below them. A stationary
+  16-sample world-space disk with geometry-anchored dithering softens blocker
+  borders without camera shimmer, discrete bands, or displaced roof edges.
+  Every rain contribution and snow coverage is multiplied by this exposure.
+- Clear, rain, and snow are one authoritative state machine. Falling
+  precipitation remains mutually exclusive, while accumulated rain and snow
+  are independent surface reservoirs: the old layer fades as the new layer
+  builds, matching clear-weather drying/melting instead of popping off. Rain
+  and snow use the same switch-away/clear fade rate.
+- The snow receiver adds world-anchored high-frequency accumulation on upward
+  static opaque geometry, NWN fog fading, normal variation, and a bounded
+  view-dependent raised parallax height walk. Bucket-2 creature transforms
+  feed 16 bounded world-space character histories: resolved ground-contact
+  movement carves up to 64 continuous rounded trail segments per character
+  into a 512x512 RGBA32F deformation texture. Its first two channels store
+  deformation depth and contacted world height, preventing a creature below a
+  roof or bridge from deforming snow above it. Each character's
+  oldest segment enters a two-second retirement fade at capacity; the texture
+  is refreshed at 10 Hz with gradual refill and reset on area transitions.
+  Slot 0 and a separate retirement pool are reserved for the camera-target
+  player, so NPC pressure cannot evict that trail. Snow shaders sample this
+  texture instead of evaluating segment uniform arrays per fragment. The
+  occlusion fringe suppresses parallax and relief normals until the surface is
+  nearly fully exposed, so a soft shelter transition cannot become a raised
+  snow bank. Snow is a neutral material relit from NWN's decoded area light
+  and complete enabled local-light census (up to the engine's 128-light
+  setting), rather than inheriting the covered tile's albedo. Snow
+  settlement trusts geometric slope and only mildly modulates with the
+  material normal, while an albedo-independent illumination floor keeps the
+  layer visible on dark tilesets that do not already use snow textures. Near
+  full accumulation a continuous minimum blanket and 97% snow composite stop
+  bright local lights from revealing the base texture as a lifted-snow halo.
+The feature requires no environment variable, module edit, hak, shader
+override, or user-authored material marker.
+
+The maintainer confirmed the final Linux regression set on 2026-09-03:
+clear/rain/snow transitions, save and area changes, immediate interior reset,
+fog, opaque and static-transparent shelter, torch lighting, shadows, A2C,
+native-water exclusion, crowded creature trails, player-trail priority, and
+the 8192x8192 occlusion target all behaved correctly with no noticed
+performance regression. A 16K depth target is supported by the configured
+path but consumes about 1 GiB of VRAM and was not part of that runtime pass.
+Native Windows confirmation covers rain optics without flicker, snow
+accumulation and trails, lighting, precipitation occlusion (including static
+transparent blockers), interior reset, and weather changed indoors being
+adopted on the next exterior load. Linux separately reconfirmed the same
+interior-to-exterior transition using the clean full-effects launcher.
+
 ## Next work
 
 The Windows proxy/artifact, directional-shadow, and local-light parity
@@ -64,8 +161,10 @@ Mode 0, authored Mode 2, and parked Mode 3 materials. Visible Windows Mode 2
 A2C is also confirmed: Mode 2 alone selected A2C with live MSAA, while Mode 0
 and parked Mode 3 remained native. Directional/local A2C reception, stable
 camera motion, engine-budget sun lifting across camera zoom, and selectable
-local-shadow refresh are confirmed. Checkpoint 7 is complete; checkpoint 8
-regression/performance is next. Keep Windows-only mechanics behind Windows
+local-shadow refresh are confirmed. The weather port is complete and uses the
+accepted Linux shader/runtime behavior with Windows-only bindings. Final
+cross-platform regression/performance and a crowded Windows multiplayer trail
+recheck remain. Keep Windows-only mechanics behind Windows
 paths and do not alter working Linux behaviour to solve a Windows symptom.
 Mode 3 OIT is explicitly outside the Windows scope. The staged plan and exit
 criteria are in

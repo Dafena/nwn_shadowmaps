@@ -16,6 +16,10 @@ A/B test. Mode 3 OIT is parked globally and is not a Windows target. See
 `../TRANSPARENCY_MODES.md` for the evidence and
 `../WINDOWS_IMPLEMENTATION_PLAN.md` for the completed Windows checkpoints.
 
+The automatic clear/rain/snow weather system is also enabled by default on
+Windows. Its rendering implementation is shared with Linux; Windows-specific
+code only discovers client weather state and interposes OpenGL calls.
+
 If a behaviour works on Linux and fails on Windows, repair it in a Windows-only
 path. Do not change shared C++ or GLSL to solve a Windows-only symptom. The
 platform mechanics live in `nwn_platform.h` and the Windows local-light
@@ -88,6 +92,16 @@ build; their compiled defaults define shipping behaviour.
 
 ## Known Windows-specific status
 
+- Private client `StartWeather`/`StopWeather` calls and the active client-area
+  lookup are resolved from the v89.8193.37-17 network decoder. At scene start,
+  the injector reads the loaded client area's stored weather so a weather
+  change made while indoors is applied immediately upon entering an exterior.
+  This is a client-side path and works for local and multiplayer games; the
+  injector does not depend on local server memory.
+- Rain optics, snow accumulation/deformation, precipitation occlusion,
+  static-transparent blockers, lighting, fog, interior reset, and area weather
+  transitions have been confirmed in native Windows. The exact crowded
+  multiplayer case for all 15 NPC trail slots remains a final regression item.
 - Area sun/moon shadow policy is recovered by observing the exported `Aur*`
   decision path. `ShadowOpacity` is not available through that Windows path, so
   Windows applies the policy without that opacity field.

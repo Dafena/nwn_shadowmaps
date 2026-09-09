@@ -393,7 +393,7 @@ static constexpr unsigned kLampPool      = 128;   // collected per frame
 static bool g_lampLiftEnabled = true;
 static int g_lampUploadMax = 0;   // 0 = follow the engine
 struct LampEntry { const void* key = nullptr; float pos[3] = {}; float radius = 0.0f;
-                   bool emitter = false; int shadowRank = -1; };
+                   float color[3] = {}; bool emitter = false; int shadowRank = -1; };
 // DOUBLE-BUFFERED. The list is refilled by SetLightGL as the engine draws, so
 // anything reading it mid-frame sees however much has arrived so far -- the
 // shadow-light picker read it early and got 0 while the lift, which reads late,
@@ -454,7 +454,7 @@ static void lamp_list_begin() {
 }
 
 static void lamp_list_add(const void* key, float px, float py, float pz, float radius,
-                          bool emitter, int shadowRank = -1) {
+                          bool emitter, const float color[3], int shadowRank = -1) {
     if (radius <= 0.0f) return;
     // Peak-hold against this light's own previous radius, matched by pointer so
     // the hold follows the LIGHT and not a list position that can reorder.
@@ -469,6 +469,9 @@ static void lamp_list_add(const void* key, float px, float py, float pz, float r
     for (unsigned i = 0; i < g_lampBuildCount; ++i)
         if (g_lampBuild[i].key == key) {           // already have it this frame
             g_lampBuild[i].radius = slot->radius;
+            g_lampBuild[i].color[0] = color[0];
+            g_lampBuild[i].color[1] = color[1];
+            g_lampBuild[i].color[2] = color[2];
 #ifdef _WIN32
             // SetLightGL can observe the same moving light before the
             // authoritative GetShadowLights list does. The old duplicate path
@@ -493,6 +496,7 @@ static void lamp_list_add(const void* key, float px, float py, float pz, float r
     e.emitter = emitter;
     e.pos[0] = px; e.pos[1] = py; e.pos[2] = pz;
     e.radius = slot->radius;
+    e.color[0] = color[0]; e.color[1] = color[1]; e.color[2] = color[2];
     e.shadowRank = shadowRank;
 }// NWN_SHADOWMAP_LOCAL_LIGHT_BIAS
 static int      g_receiverDebug          = 0;      // NWN_SHADOWMAP_RECEIVER_DEBUG (see shader)
@@ -2125,6 +2129,7 @@ static bool set_light_view_direct(const Vec3f& eye, const float dir[3]) {
     return true;
 }
 
+#include "weather_runtime.inc"
 #include "shadow_shader_interposition.inc"
 #include "shadow_fullscreen_receiver.inc"
 #include "shadow_overlay_runtime.inc"
@@ -2745,6 +2750,7 @@ extern "C" void SceneRender_detour(void* self) {
         }
     }
     install_useprogram_patch();
+    install_weather_uniform_patch();
     install_uniform_matrix_patch();
     install_shadersource_patch();
     install_geometry_trace_patch();
@@ -2781,8 +2787,10 @@ extern "C" void SceneRender_detour(void* self) {
     void* tramp = subhook_get_trampoline(g_hook);
     g_renderingScene = self;
     g_inSceneRender = true;
+    weather_scene_begin(self);
     if (tramp) reinterpret_cast<eng::SceneRender_t>(tramp)(self);
     else       CALL_ORIGINAL(g_hook, eng::SceneRender, self);
+    weather_scene_end(self);
     g_inSceneRender = false;
     g_renderingScene = nullptr;
 
@@ -3627,6 +3635,7 @@ static void shadowmap_init() {
         fprintf(stderr, "[shadowmap] symbol resolution failed; hook NOT installed.\n");
         return;
     }
+    install_weather_engine_hooks();
 
     g_hook = subhook_new(reinterpret_cast<void*>(eng::SceneRender),
                          reinterpret_cast<void*>(SceneRender_detour),
@@ -4019,6 +4028,7 @@ static void shadowmap_fini() {
         *g_sdlPollEventSlot = (void*)g_realSdlPollEvent;
         g_sdlPollEventSlot = nullptr;
     }
+    uninstall_weather_engine_hooks();
 #ifdef _WIN32
     if (g_hookSharedMaterialInit) {
         subhook_remove(g_hookSharedMaterialInit);

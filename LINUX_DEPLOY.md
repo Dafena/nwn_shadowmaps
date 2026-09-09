@@ -73,12 +73,12 @@ The shipping defaults are compiled into the library. Environment variables can
 still override them for a controlled A/B test. The most useful first checks are
 `NWN_SHADOWMAP_LOG=1` and `NWN_SHADOWMAP_OFF=1`.
 
-The material-selectable A2C/OIT work described in
-[TRANSPARENCY_MODES.md](TRANSPARENCY_MODES.md) is experimental development
-work, not a supported shipping feature. Do not enable its diagnostic
-environment switches in tester packages unless the test explicitly targets
-that work. Mode 3 OIT activation is currently hard-disabled; authored Mode 3
-materials render through NWN's native path.
+Material-selectable Mode 2 A2C is an accepted default on Linux and Windows when
+MSAA is available. `NWN_ALPHA_MODE_ROUTING=0` is only a troubleshooting A/B
+override. Do not enable transparency census/diagnostic switches in tester
+packages unless a test explicitly targets them. Mode 3 OIT remains parked and
+hard-disabled; authored Mode 3 materials render through NWN's native path. See
+[TRANSPARENCY_MODES.md](TRANSPARENCY_MODES.md) for the exact contract.
 
 ## Requirements
 

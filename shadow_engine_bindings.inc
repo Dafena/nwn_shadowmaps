@@ -41,6 +41,11 @@ namespace eng {
     using MtxPerspective_t       = void (*)(void* self, float fov, float aspect,
                                             float zn, float zf);
     using AreaUpdateShadowingLights_t = void (*)(void* self);
+    // Linux weather authority. Disassembly of v89.8193.37-17 confirms the
+    // arguments are weather kind (0 clear, 1 rain, 2 snow) and density 0..100.
+    // The function returns success in EAX even though its public use is
+    // effectively setter-like, so preserve that return through the detour.
+    using AreaSetWeather_t = int (*)(void* self, uint8_t weather, float density);
     // The THREE calls CNWCArea::UpdateShadowingLights() ends in. Hooking these
     // observes the engine's own decision instead of re-deriving it from the
     // area's flag fields, which is what makes area shadow policy work on
@@ -105,6 +110,7 @@ namespace eng {
     SetOrtho_t              SetOrtho              = nullptr;   // called, not hooked
     MtxPerspective_t        MtxPerspective        = nullptr;   // hooked
     AreaUpdateShadowingLights_t AreaUpdateShadowingLights = nullptr;
+    AreaSetWeather_t       AreaSetWeather        = nullptr;
     AurShadowToggle_t       AurEnableShadowing    = nullptr;
     AurTextureBindInUnit_t  AurTextureBindInUnit  = nullptr;
     AurTextureGetName_t     AurTextureGetName     = nullptr;
@@ -142,6 +148,7 @@ namespace eng {
     // variable, not the function). Patching it is the cleanest hook in this
     // binary: no trampoline, no prologue relocation -- just assign.
     void**                  GlewUseProgram        = nullptr;
+    void**                  GlewUniform1i         = nullptr;
     // Matrix uniforms go through the same GLEW indirection.  During the
     // bucket replay the engine can retain camera-space m_mvp/m_mv values even
     // though we replaced its matrix stack.  Intercepting this single upload
@@ -222,6 +229,7 @@ static const struct { const char* mangled; void** slot; bool required; } kBindin
     {"_ZN5Scene13RenderShadowsEib",    (void**)&eng::SceneRenderShadows,    false},
     {"_ZN5Scene16RenderSinglePassEv",  (void**)&eng::SceneRenderSinglePass, false},
     {"_ZN5Scene21RenderDynamicGeometryEv", (void**)&eng::SceneRenderDynamicGeometry, false},
+    {"_ZN8CNWCArea10SetWeatherEhf",  (void**)&eng::AreaSetWeather,        false},
     {"_ZN6Camera6RenderEb",             (void**)&eng::CameraRender,          false},
     {"_ZN6Camera11RenderSceneEv",       (void**)&eng::CameraRenderScene,     false},
     {"_ZN12LightManager16PrioritizeShadowEv", (void**)&eng::LightPrioritizeShadow, false},
@@ -296,6 +304,7 @@ static const struct { const char* mangled; void** slot; bool required; } kBindin
     {"_ZN8GLRender18m_lightAreaAmbientE",
                                        (void**)&eng::SunAmbient,            false},
     {"__glewUseProgram",               (void**)&eng::GlewUseProgram,        false},
+    {"__glewUniform1i",                (void**)&eng::GlewUniform1i,         false},
     {"__glewUniformMatrix4fv",          (void**)&eng::GlewUniformMatrix4fv, false},
     {"__glewUniform3f",                  (void**)&eng::GlewUniform3f,       false},
     {"__glewUniform3fv",                 (void**)&eng::GlewUniform3fv,      false},

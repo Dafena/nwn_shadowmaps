@@ -1,6 +1,6 @@
 # Windows implementation plan
 
-Updated 2026-08-26. The maintainer explicitly authorized Windows work after
+Updated 2026-09-03. The maintainer explicitly authorized Windows work after
 the accepted Linux baseline. Linux remains the behavioural reference, while a
 native Windows run is the final authority for Windows correctness. Proton is a
 useful installation and smoke test, not a substitute for native-driver proof.
@@ -163,10 +163,37 @@ or Ultra (every rendered frame) option; Ultra was accepted in game.
 Exit criterion: Windows matches the accepted Linux Mode 2 compromise without
 regressing native materials, shadows, fog, water, or UI.
 
-### 8. Regression, performance, and release gate
+### 8. Port the accepted weather-effects system
+
+Status: **complete; confirmed in game on 2026-09-03.** Windows uses the same
+rain/snow shaders, surface state, precipitation occlusion, lighting, and snow
+deformation implementation as Linux. Platform-specific code is limited to
+client weather discovery and OpenGL interception.
+
+- Resolve private client-area `StartWeather`/`StopWeather` calls from the
+  validated network decode sequence around exported
+  `CNWMessage::ReadBYTE`/`ReadBOOL`; fail closed if the signature differs.
+- Resolve the active client-area lookup and stored weather member from that
+  same sequence. At scene start, synchronize the shared state machine from the
+  newly loaded area's weather. Do not depend on the local server process:
+  multiplayer clients must take the same path.
+- Keep Linux's coherent framebuffer color/depth capture and bounded puddle SSR
+  behavior unchanged. Use Windows GL wrappers only where the API dispatch
+  mechanics differ.
+- Validate rain reflection/refraction/ripples without camera flicker, lit snow
+  accumulation, trails, steep upward surfaces, fog, native water exclusion,
+  opaque and static-transparent precipitation blockers, area/save transitions,
+  immediate interior clearing, and clear/rain/snow changes made indoors before
+  entering an exterior.
+
+Exit criterion: Windows matches the accepted Linux weather behavior without
+module configuration, and local and multiplayer clients derive state from the
+loaded client area rather than an in-process server hook.
+
+### 9. Regression, performance, and release gate
 
 Status: **next.** Begin from the confirmed Windows DLL savepoint produced after
-checkpoint 7; do not reopen Mode 3 OIT during this gate.
+checkpoint 8; do not reopen Mode 3 OIT during this gate.
 
 - Run the same native, shadow-heavy, local-light, foliage, custom-hair,
   framebuffer, volumetric, water/fog, UI, and area-transition scenes on Linux
@@ -174,6 +201,9 @@ checkpoint 7; do not reopen Mode 3 OIT during this gate.
 - Compare shadows-only, routing-only, and Mode 2 costs separately.
 - Test long sessions and repeated area transitions to exercise registry
   recycling and resource reuse.
+- Recheck snow deformation in a crowded native-Windows multiplayer area; the
+  shared allocator protects the player and selects at most 15 nearby NPCs, but
+  that exact crowded Windows case remains the final runtime check.
 - Rebuild from clean sources, verify the DLL hash/exports, and retest the exact
   copied artifact.
 

@@ -26,6 +26,8 @@ The accepted implementation currently includes:
   bucket draw and under a re-entry guard;
 - area sun/moon/opacity policy observation;
 - persisted ImGui settings and development diagnostics;
+- an accepted automatic cross-platform clear/rain/snow surface-weather system
+  with cached top-down precipitation occlusion and height-aware snow trails;
 - Linux `LD_PRELOAD` and Windows `version.dll` platform paths.
 
 The code is experimental. Do not describe it as a complete replacement for
@@ -120,6 +122,18 @@ Do not confuse a source build with a copied game-directory artifact.
 
 ## Current open work
 
+The weather-effects baseline is accepted on Linux and ported to Windows as of
+2026-09-03. It is automatic and module-agnostic: Linux observes
+`CNWCArea::SetWeather`; Windows resolves private client weather calls and
+resynchronizes from the active client area's stored weather at scene start.
+The shared state machine drives mutually exclusive rain/snow precipitation and
+gradual surface-state crossfades; interiors reset immediately. Its separate
+world-anchored top-down map accumulates static opaque and alpha/card buckets,
+and its snow deformation texture stores contact height so trails cannot project
+onto another floor. The Windows area-load read is deliberately client-side so
+it remains valid in multiplayer. Do not reintroduce the old `rain_runtime.inc`
+name or describe precipitation occlusion as deferred.
+
 The accepted Linux transparency path is explicit material Mode 2 A2C. It is
 stable under camera motion, receives directional/local shadows, and preserves
 opaque intersections. Multiple overlapping coverage layers can still hide
@@ -131,9 +145,10 @@ authored Mode 3 materials fail closed to native rendering, and it is outside
 the Windows scope. Keep the dormant implementation and evidence intact until
 the maintainer explicitly resumes OIT work.
 
-The next active task is a Windows implementation plan followed by staged
-Windows parity work for the accepted shadow-map baseline and Mode 2 A2C. Keep
-Windows mechanics in Windows paths and validate against matched Linux scenes.
+Windows shadow, Mode 2 A2C, and weather parity are implemented. Remaining work
+is final cross-platform regression/performance testing, including a crowded
+Windows multiplayer snow-trail recheck. Keep Windows mechanics in Windows
+paths and validate against matched Linux scenes.
 
 Native MTR evidence is now binding:
 
@@ -189,6 +204,7 @@ Other known limitations:
 | `shadow_targets.inc` | FBO/texture lifecycle and target state |
 | `shadow_replay.inc` | Sun/static-world/local replay implementation |
 | `shadow_local_lights.inc` | Local selection, matrices, preparation, capture |
+| `weather_runtime.inc` | Shared weather rendering plus Linux/Windows authority adapters, precipitation occlusion, and snow trails |
 | `shadow_shader_interposition.inc` | Shader and draw interception |
 | `shadow_fullscreen_receiver.inc` | Receiver programs and scene copies |
 | `shadow_overlay_runtime.inc` | Overlay lifecycle and frame ordering |
@@ -218,8 +234,12 @@ rg -n "draw_static_receiver|capture_scene_depth|local" \
 python3 check_shaders.py
 make
 make deploy
-cd win && make
+cd win && make verify NWN_WIN_EXE="/path/to/bin/win32/nwmain.exe"
 ```
+
+Use `run-shadowmaps-clean.sh` for the full-effects Linux visual baseline.
+`run-dev.sh` is diagnostics-heavy and must not be mistaken for the clean
+shipping-behavior comparison.
 
 Runtime verification is required for renderer changes. Record the exact
 launcher, platform, game build, GPU/driver, video settings, and relevant
