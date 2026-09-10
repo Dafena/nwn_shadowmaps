@@ -3,17 +3,6 @@
 // world depth buffer, rather than from an NWN material varying.  It is opt-in
 // because it deliberately paints a red/green diagnostic over the entire world.
 // ---------------------------------------------------------------------------
-// Resolve a GL entry point that the Linux build reaches through a GLEW
-// pointer. nwmain.exe exports NO __glew* symbols, so on Windows every one of
-// these slots is null and any function guarding on them silently does nothing
-// -- which is exactly why the receiver shader was never built there while
-// ImGui (which uses its own loader) rendered fine. Falling back to dlsym gets
-// the driver pointer via wglGetProcAddress once a context is current.
-static void* glew_or_dlsym(void** slot, const char* name) {
-    if (slot && *slot) return *slot;
-    return dlsym(RTLD_DEFAULT, name);
-}
-
 static GLuint g_fullscreenReceiverProgram = 0;
 
 static void build_fullscreen_receiver_program() {
@@ -30,20 +19,21 @@ static void build_fullscreen_receiver_program() {
     if (!create || !compile || !getShader || !createProg || !attach || !link ||
         !getProg || !source) return;
     static const char* vs =
-        "#version 330 compatibility\n"
+        "#version 330 core\n"
         "void main(){ vec2 p=vec2((gl_VertexID<<1)&2,gl_VertexID&2);"
         "gl_Position=vec4(p*2.0-1.0,0.0,1.0); }\n";
     static const char* fs =
-        "#version 330 compatibility\n"
+        "#version 330 core\n"
+        "out vec4 nwnFragColor;\n"
         "uniform sampler2D nwnSceneDepth; uniform sampler2D nwnShadowDepth;\n"
         "uniform mat4 nwnSceneVPInv; uniform mat4 nwnLightVP;\n"
         "void main(){ vec2 sz=vec2(textureSize(nwnSceneDepth,0));"
-        "vec2 uv=gl_FragCoord.xy/sz; float d=texture2D(nwnSceneDepth,uv).r;"
+        "vec2 uv=gl_FragCoord.xy/sz; float d=texture(nwnSceneDepth,uv).r;"
         "if(d>=0.999999) discard; vec4 w=nwnSceneVPInv*vec4(uv*2.0-1.0,d*2.0-1.0,1.0);"
         "w/=w.w; vec4 l=nwnLightVP*w; vec3 s=l.xyz/l.w*0.5+0.5;"
         "vec3 c=vec3(0.0,0.0,1.0); if(l.w>0.0 && s.x>=0.0 && s.x<=1.0 &&"
-        "s.y>=0.0 && s.y<=1.0 && s.z>=0.0 && s.z<=1.0){ float z=texture2D(nwnShadowDepth,s.xy).r;"
-        "c=(s.z-0.0025>z)?vec3(1,0,0):vec3(0,1,0); } gl_FragColor=vec4(c,1); }\n";
+        "s.y>=0.0 && s.y<=1.0 && s.z>=0.0 && s.z<=1.0){ float z=texture(nwnShadowDepth,s.xy).r;"
+        "c=(s.z-0.0025>z)?vec3(1,0,0):vec3(0,1,0); } nwnFragColor=vec4(c,1); }\n";
     GLuint v=create(GL_VERTEX_SHADER), f=create(GL_FRAGMENT_SHADER);
     const GLint vl=(GLint)strlen(vs), fl=(GLint)strlen(fs);
     source(v,1,&vs,&vl); source(f,1,&fs,&fl); compile(v); compile(f);
@@ -118,7 +108,7 @@ static bool capture_scene_color(const GLint vp[4]) {
     // Without this the result flips false at random, and because it gates the
     // self-illumination guard, the shadow strength changed frame to frame:
     // visible flicker on Linux, reported 2026-08-15.
-    for (unsigned drain = 0; drain < 32 && gl::GetError() != GL_NO_ERROR; ++drain) {}
+    drain_gl_errors_bounded();
     if (!g_sceneColorTex) gl::GenTextures(1, &g_sceneColorTex);
     if (!g_sceneColorTex) return false;
     gl::BindTexture(GL_TEXTURE_2D, g_sceneColorTex);
@@ -294,7 +284,7 @@ static bool capture_scene_depth(const GLint vp[4]) {
                 // decides which of those two jobs it is.
                 GLint objType = 0, objName = 0;
                 if (gl::GetFramebufferAttachmentParameteriv) {
-                    while (gl::GetError() != GL_NO_ERROR) {}
+                    drain_gl_errors_bounded();
                     gl::GetFramebufferAttachmentParameteriv(
                         GL_READ_FRAMEBUFFER, GL_DEPTH_ATTACHMENT,
                         GL_FRAMEBUFFER_ATTACHMENT_OBJECT_TYPE, &objType);
@@ -384,7 +374,8 @@ static void draw_fullscreen_depth_receiver(void* scene) {
 // on later UI, portrait, zoom or material uniform traffic.
 // ---------------------------------------------------------------------------
 static void build_static_receiver_program() {
-    if (g_staticReceiverProgram) return;
+    static bool attempted = false;
+    if (g_staticReceiverProgram || attempted) return;
     auto create     = (CreateShader_t) glew_or_dlsym(eng::GlewCreateShader,  "glCreateShader");
     auto compile    = (CompileShader_t)glew_or_dlsym(eng::GlewCompileShader, "glCompileShader");
     auto getShader  = (GetShaderiv_t)  glew_or_dlsym(eng::GlewGetShaderiv,   "glGetShaderiv");
@@ -407,14 +398,16 @@ static void build_static_receiver_program() {
         }
         return;
     }
+    attempted = true;
     if (!create || !compile || !getShader || !createProg || !attach || !link ||
         !getProg || !source) return;
     static const char* vs =
-        "#version 330 compatibility\n"
+        "#version 330 core\n"
         "void main(){ vec2 p=vec2((gl_VertexID<<1)&2,gl_VertexID&2);"
         "gl_Position=vec4(p*2.0-1.0,0.0,1.0); }\n";
     static const char* fs =
-        "#version 330 compatibility\n"
+        "#version 330 core\n"
+        "out vec4 nwnFragColor;\n"
         "uniform sampler2D nwnStaticSceneDepth;\n"
         // SELF-ILLUMINATION GUARD. The engine's finished colour for this pixel.
         // A self-illuminated surface is bright no matter how it is lit, so a
@@ -638,11 +631,11 @@ static void build_static_receiver_program() {
         // framebuffer" from "it reaches it but the background test discards
         // everything because the copied scene depth is all-far". Debug 1/2 sit
         // after that discard and therefore cannot tell those two apart.
-        "void main(){ if(nwnReceiverDebug==3){gl_FragColor=vec4(1.0,0.0,1.0,1.0);return;}"
+        "void main(){ if(nwnReceiverDebug==3){nwnFragColor=vec4(1.0,0.0,1.0,1.0);return;}"
         "vec2 sz=vec2(textureSize(nwnStaticSceneDepth,0));"
         "vec2 uv=(gl_FragCoord.xy-nwnStaticViewportOrigin.xy)/sz;"
-        "float d=texture2D(nwnStaticSceneDepth,uv).r; if(d>=0.999999) discard;"
-        "if(nwnReceiverDebug==1){gl_FragColor=vec4(0.0,1.0,0.0,1.0);return;}"
+        "float d=texture(nwnStaticSceneDepth,uv).r; if(d>=0.999999) discard;"
+        "if(nwnReceiverDebug==1){nwnFragColor=vec4(0.0,1.0,0.0,1.0);return;}"
         "vec4 w=nwnStaticCameraVPInv*vec4(uv*2.0-1.0,d*2.0-1.0,1.0); w/=w.w;"
         "float z=0.0;int layer=nwnStaticLayer; if(nwnStaticCSMEnabled!=0){"
         "z=-((nwnStaticCameraView*w).z); if(z<=0.0||z>nwnStaticClipFar3) discard;"
@@ -748,7 +741,7 @@ static void build_static_receiver_program() {
         // casting. A light dimming its own shadow is not the problem this
         // solves -- self-illuminated surfaces being darkened by the SUN is.
         "if(nwnSelfIllumGuard<1.0){"
-        "vec3 sc=texture2D(nwnStaticSceneColor,uv).rgb;"
+        "vec3 sc=texture(nwnStaticSceneColor,uv).rgb;"
         "float lum=max(sc.r,max(sc.g,sc.b));"
         "float keep=1.0-smoothstep(nwnSelfIllumGuard,1.0,lum);"
         "sunShade*=keep;}"
@@ -769,7 +762,7 @@ static void build_static_receiver_program() {
         // light's frustum at all. Blue with no green means the cone reaches
         // there but nothing is shadowed; no blue means the cone does not
         // reach, i.e. an aiming/FOV problem rather than a shadow problem.
-        "if(nwnReceiverDebug==2){gl_FragColor=vec4(sunShade,localShade,localTerm.y*0.6,1.0);return;}"
+        "if(nwnReceiverDebug==2){nwnFragColor=vec4(sunShade,localShade,localTerm.y*0.6,1.0);return;}"
         // Debug 4 shows the COMPARISON OPERANDS, which is the one thing no
         // previous mode could: with a sampler2DShadow the compare happened
         // inside the hardware and only its verdict was visible. Both operands
@@ -782,13 +775,13 @@ static void build_static_receiver_program() {
         // green/blue identical means the map holds only the receiving surface.
         "if(nwnReceiverDebug==4){"
         "vec2 pr=nwnLocalProbe(w);"
-        "if(pr.x<0.0){gl_FragColor=vec4(0.0,0.0,0.35,1.0);return;}"   // outside slot 0
+        "if(pr.x<0.0){nwnFragColor=vec4(0.0,0.0,0.35,1.0);return;}"   // outside slot 0
         "float st4=pr.x,rf4=pr.y;"
-        "gl_FragColor=vec4(clamp((rf4-nwnLocalLightBias-st4)*200.0,0.0,1.0),"
+        "nwnFragColor=vec4(clamp((rf4-nwnLocalLightBias-st4)*200.0,0.0,1.0),"
         "clamp((st4-0.8)*5.0,0.0,1.0),clamp((rf4-0.8)*5.0,0.0,1.0),1.0);return;}"
         "if(shade<=0.001||alpha<=0.001)discard;"
-        "if(nwnStaticComposite!=0) gl_FragColor=vec4(0.0,0.0,0.0,alpha);"
-        "else gl_FragColor=vec4(0.70*shade,0.0,0.0,1.0); }\n";
+        "if(nwnStaticComposite!=0) nwnFragColor=vec4(0.0,0.0,0.0,alpha);"
+        "else nwnFragColor=vec4(0.70*shade,0.0,0.0,1.0); }\n";
     GLuint v=create(GL_VERTEX_SHADER), f=create(GL_FRAGMENT_SHADER);
     const GLint vl=(GLint)strlen(vs), fl=(GLint)strlen(fs);
     source(v,1,&vs,&vl); source(f,1,&fs,&fl); compile(v); compile(f);

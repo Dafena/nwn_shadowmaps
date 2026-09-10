@@ -53,7 +53,7 @@ static void ensure_shadow_overlay_font() {
     // The game can leave an unrelated GL error pending.  Do not mistake that
     // for a failure to create our atlas (the old code could silently prevent
     // the entire overlay from drawing in that case).
-    while (gl::GetError() != GL_NO_ERROR) {}
+    drain_gl_errors_bounded();
     gl::GenTextures(1, &g_shadowOverlayFontTex);
     if (!g_shadowOverlayFontTex) {
         fprintf(stderr, "[shadowmap][overlay] font atlas allocation failed\n");
@@ -92,7 +92,7 @@ static void build_shadow_overlay_program() {
     if (!create || !compile || !getShader || !createProg || !attach || !link ||
         !getProg || !source) return;
     static const char* vs =
-        "#version 330 compatibility\n"
+        "#version 330 core\n"
         "uniform vec2 nwnOverlayScreen; uniform vec4 nwnOverlayRect,nwnOverlayGlyph;\n"
         "out vec2 nwnOverlayUV;\n"
         "void main(){ vec2 q; int i=gl_VertexID%6;"
@@ -102,11 +102,12 @@ static void build_shadow_overlay_program() {
         "gl_Position=vec4(p.x/nwnOverlayScreen.x*2.0-1.0,1.0-p.y/nwnOverlayScreen.y*2.0,0,1);"
         "nwnOverlayUV=mix(nwnOverlayGlyph.xy,nwnOverlayGlyph.zw,q); }\n";
     static const char* fs =
-        "#version 330 compatibility\n"
+        "#version 330 core\n"
+        "out vec4 nwnFragColor;\n"
         "uniform sampler2D nwnOverlayFont; uniform vec4 nwnOverlayColor; uniform int nwnOverlayText;\n"
         "in vec2 nwnOverlayUV; void main(){ vec4 c=nwnOverlayColor;"
-        "if(nwnOverlayText!=0){ c.a*=texture2D(nwnOverlayFont,nwnOverlayUV).r; if(c.a<0.01)discard;}"
-        "gl_FragColor=c; }\n";
+        "if(nwnOverlayText!=0){ c.a*=texture(nwnOverlayFont,nwnOverlayUV).r; if(c.a<0.01)discard;}"
+        "nwnFragColor=c; }\n";
     GLuint v=create(GL_VERTEX_SHADER), f=create(GL_FRAGMENT_SHADER);
     const GLint vl=(GLint)strlen(vs), fl=(GLint)strlen(fs);
     source(v,1,&vs,&vl); source(f,1,&fs,&fl); compile(v); compile(f);
@@ -1453,6 +1454,9 @@ static void install_windows_gl_interposition() {
     nwn_win_register_gl_wrapper("glUniform3f",         (void*)my_uniform3f,          (void**)&g_realUniform3f);
     nwn_win_register_gl_wrapper("glUniform3fv",        (void*)my_uniform3fv,         (void**)&g_realUniform3fv);
     nwn_win_register_gl_wrapper("glShaderSource",      (void*)my_shader_source,      (void**)&g_realShaderSource);
+    nwn_win_register_gl_wrapper("glCompileShader",     (void*)my_compile_shader,     (void**)&g_realCompileShader);
+    nwn_win_register_gl_wrapper("glAttachShader",      (void*)my_attach_shader,      (void**)&g_realAttachShader);
+    nwn_win_register_gl_wrapper("glLinkProgram",       (void*)my_link_program,       (void**)&g_realLinkProgram);
     nwn_win_register_gl_wrapper("glDrawRangeElements", (void*)my_draw_range_elements,(void**)&g_realDrawRangeElements);
     nwn_win_register_gl_wrapper("glMultiDrawArrays",   (void*)my_multi_draw_arrays,  (void**)&g_realMultiDrawArrays);
     nwn_win_register_gl_wrapper("glMultiDrawElements", (void*)my_multi_draw_elements,(void**)&g_realMultiDrawElements);
@@ -1570,15 +1574,33 @@ static void install_geometry_trace_patch() {
 }
 
 static void install_shadersource_patch() {
-    static bool tried = false;
-    if (tried || !eng::GlewShaderSource) return;
-    tried = true;
-    void* cur = *eng::GlewShaderSource;
-    if (!cur) { tried = false; return; }
-    g_realShaderSource = (ShaderSource_t)cur;
-    *eng::GlewShaderSource = (void*)my_shader_source;
-    fprintf(stderr, "[shadowmap] glShaderSource patched for runtime injection%s\n",
-            g_injectTest ? " (marker test enabled)" : "");
+    static bool sourceDone = false, compileDone = false;
+    static bool attachDone = false, linkDone = false;
+    auto install = [](void** slot, void* replacement, void** real,
+                      bool& done, const char* label) {
+        if (done || !slot || !*slot) return;
+        *real = *slot;
+        *slot = replacement;
+        done = true;
+        fprintf(stderr, "[shadowmap] %s patched for runtime shader diagnostics\n",
+                label);
+    };
+    install(eng::GlewShaderSource, (void*)my_shader_source,
+            (void**)&g_realShaderSource, sourceDone, "glShaderSource");
+    install(eng::GlewCompileShader, (void*)my_compile_shader,
+            (void**)&g_realCompileShader, compileDone, "glCompileShader");
+    install(eng::GlewAttachShader, (void*)my_attach_shader,
+            (void**)&g_realAttachShader, attachDone, "glAttachShader");
+    install(eng::GlewLinkProgram, (void*)my_link_program,
+            (void**)&g_realLinkProgram, linkDone, "glLinkProgram");
+    if (sourceDone) {
+        static bool reported = false;
+        if (!reported) {
+            reported = true;
+            fprintf(stderr, "[shadowmap] runtime shader injection active%s\n",
+                    g_injectTest ? " (marker test enabled)" : "");
+        }
+    }
 }
 
 // Bind the depth texture where every shader can reach it, restoring the

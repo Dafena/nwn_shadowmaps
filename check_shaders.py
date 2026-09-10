@@ -23,7 +23,12 @@ import shutil
 
 # Files to scan. Every `static const char* <name> = "#version ...` in them is
 # found and compiled, so adding a shader needs no edit here.
-SOURCES = ["shadow_fullscreen_receiver.inc"]
+SOURCES = [
+    "shadow_fullscreen_receiver.inc",
+    "shadow_overlay_runtime.inc",
+    "shadow_shader_interposition.inc",
+    "nwn_oit.cpp",
+]
 
 
 def find_shaders(path):
@@ -42,7 +47,7 @@ def find_shaders(path):
     return
 
 
-def grab(lines, idx):
+def grab(lines, idx, allow_prefixed_first=False):
     """Concatenate the string literals of one C++ initialiser, skipping the
     comments interleaved between them. Stops at the first line that is neither a
     comment, blank, nor a string literal -- which is where the statement ends."""
@@ -53,6 +58,8 @@ def grab(lines, idx):
         if stripped.startswith("//") or stripped == "":
             i += 1
             continue
+        if not stripped.startswith('"') and not (allow_prefixed_first and i == idx):
+            break
         lits = re.findall(r'"((?:[^"\\]|\\.)*)"', lines[i])
         if not lits:
             break
@@ -73,7 +80,7 @@ def named_string(path, name):
         j = i
         while j < len(lines) and '"' not in lines[j]:
             j += 1
-        return grab(lines, j)
+        return grab(lines, j, allow_prefixed_first=True)
     raise RuntimeError(f"missing C++ string initializer {name} in {path}")
 
 
@@ -84,6 +91,18 @@ def injected_foliage_shader():
     body = named_string(path, "kBody")
     return ("#version 330 compatibility\n"
             "#define gl_FragColor compat_glFragColor\n" + outputs + "\n" +
+            helpers + "\nvoid main(){\n"
+            "  gl_FragColor=vec4(0.6,0.7,0.8,0.5);\n" + body + "\n}\n")
+
+
+def injected_compact_a2c_shader():
+    path = "shadow_shader_interposition.inc"
+    declarations = named_string(path, "kA2cDeclarations")
+    helpers = named_string(path, "kA2cShadowHelpers")
+    body = named_string(path, "kA2cBody")
+    return ("#version 330 compatibility\n"
+            "#define gl_FragColor compat_glFragColor\n"
+            "out vec4 compat_glFragColor;\n" + declarations + "\n" +
             helpers + "\nvoid main(){\n"
             "  gl_FragColor=vec4(0.6,0.7,0.8,0.5);\n" + body + "\n}\n")
 
@@ -147,6 +166,21 @@ def main():
             failures += 1
     except Exception as exc:
         print(f"FAIL  a2c foliage injection extraction: {exc}")
+        failures += 1
+    try:
+        src = injected_compact_a2c_shader()
+        tmp = "/tmp/nwn_shadow_check_compact_a2c.frag"
+        open(tmp, "w").write(src)
+        res = subprocess.run(["glslangValidator", tmp],
+                             capture_output=True, text=True)
+        if res.returncode == 0:
+            print(f"ok    {'compact Mode 2 A2C':22s} {len(src):6d} bytes")
+        else:
+            print("FAIL  compact Mode 2 A2C injection")
+            print(res.stdout.strip() or res.stderr.strip())
+            failures += 1
+    except Exception as exc:
+        print(f"FAIL  compact Mode 2 A2C assembly: {exc}")
         failures += 1
     try:
         src = injected_emitter_shader()

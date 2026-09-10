@@ -330,6 +330,12 @@ bool  g_foliageReplayNoDepth = false; // diagnostic: isolate copied-depth reject
 bool  g_foliageDepthless = false; // original bucket-1 colour, no alpha-card depth write
 bool  g_foliageVisible = false; // depth-writing core plus raw-alpha OIT fringe
 bool  g_foliageA2c = false;     // native single-pass alpha-to-coverage foliage
+static bool g_driverIdentityKnown = false;
+static bool g_driverAmd = false;
+static bool g_materialModeRoutingRequested = false;
+static bool g_foliageShaderRequested = false;
+static bool g_driverPolicyLogged = false;
+static bool g_amdCompactA2cLogged = false;
 bool  g_visibleBucketFinalize = false;
 bool  g_visibleResolveStage = false;
 bool  g_visibleAccumReady = false;
@@ -571,6 +577,8 @@ void read_settings() {
     if (g_materialModeRouting) g_foliageShader = true;
     if (mode3_requested()) g_foliageShader = true;
     if (g_foliageReplay) g_foliageShader = true;
+    g_materialModeRoutingRequested = g_materialModeRouting;
+    g_foliageShaderRequested = g_foliageShader;
     if (g_census)
         fprintf(stderr, "[oit] Phase 2a census enabled: reports blend/depth/cull "
                         "state once per (bucket, program) pair. Read-only -- no "
@@ -679,6 +687,28 @@ void read_settings() {
                     "%.2f; that is the single-layer identity with plain alpha "
                     "blending.\n",
             g_testColor[0], g_testColor[1], g_testColor[2], g_testAlpha);
+}
+
+static void apply_driver_policy() {
+    const bool safeNative = !g_driverIdentityKnown;
+    if (safeNative) {
+        g_materialModeRouting = false;
+        g_foliageShader = false;
+        if (!g_driverIdentityKnown && !g_driverPolicyLogged) {
+            g_driverPolicyLogged = true;
+            fprintf(stderr,
+                    "[oit] driver identity unavailable; native shader/material path enforced\n");
+        }
+    } else {
+        g_materialModeRouting = g_materialModeRoutingRequested;
+        g_foliageShader = g_foliageShaderRequested;
+        g_driverPolicyLogged = false;
+        if (g_driverAmd && g_materialModeRouting && !g_amdCompactA2cLogged) {
+            g_amdCompactA2cLogged = true;
+            fprintf(stderr,
+                    "[a2c] AMD compact Mode 2 shader path active; dormant OIT payload omitted\n");
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -966,7 +996,7 @@ bool build_program() {
     // shadow module's receiver uses, and it is what makes this pass safe to run
     // inside the engine's vertex-array state without touching it.
     static const char* vs =
-        "#version 330 compatibility\n"
+        "#version 330 core\n"
         "void main(){ vec2 p=vec2((gl_VertexID<<1)&2, gl_VertexID&2);"
         " gl_Position=vec4(p*2.0-1.0, 0.0, 1.0); }\n";
     // fTotal>0 gates the whole thing exactly as the console shader does. With no
@@ -974,7 +1004,8 @@ bool build_program() {
     //   out.rgb = 0 + scene.rgb * 1
     // Alpha zero is not the identity for this blend mode; it erases the scene.
     static const char* fs =
-        "#version 330 compatibility\n"
+        "#version 330 core\n"
+        "out vec4 nwnFragColor;\n"
         "uniform sampler2D oitCombined;\n"
         "uniform sampler2D oitSum;\n"
         "uniform sampler2D oitTranslucence;\n"
@@ -989,7 +1020,7 @@ bool build_program() {
         "    float fIntensity = (1.0 - Color.a) / fTotal;\n"
         "    Color.rgb *= fIntensity;\n"
         "  }\n"
-        "  gl_FragColor = Color;\n"
+        "  nwnFragColor = Color;\n"
         "}\n";
 
     GLuint v = compile(GL_VERTEX_SHADER, vs, "resolve vertex");
@@ -1019,11 +1050,12 @@ bool build_program() {
 bool build_a2c_emitter_composite_program() {
     if (g_a2cEmitterCompositeProgram) return true;
     static const char* vs =
-        "#version 330 compatibility\n"
+        "#version 330 core\n"
         "void main(){ vec2 p=vec2((gl_VertexID<<1)&2, gl_VertexID&2);"
         " gl_Position=vec4(p*2.0-1.0, 0.0, 1.0); }\n";
     static const char* fs =
-        "#version 330 compatibility\n"
+        "#version 330 core\n"
+        "out vec4 nwnFragColor;\n"
         "uniform sampler2D emitterColor;\n"
         "uniform sampler2D foliageTransmittance;\n"
         "uniform vec4 targetViewport;\n"
@@ -1031,7 +1063,7 @@ bool build_a2c_emitter_composite_program() {
         "  vec2 uv=(gl_FragCoord.xy-targetViewport.xy)/targetViewport.zw;\n"
         "  vec4 e=texture(emitterColor,uv);\n"
         "  float t=clamp(texture(foliageTransmittance,uv).r,0.0,1.0);\n"
-        "  gl_FragColor=vec4(e.rgb*t,clamp(e.a*t,0.0,1.0));\n"
+        "  nwnFragColor=vec4(e.rgb*t,clamp(e.a*t,0.0,1.0));\n"
         "}\n";
 
     GLuint v = compile(GL_VERTEX_SHADER, vs, "emitter composite vertex");
@@ -2691,6 +2723,11 @@ bool nwn_oit_wants_foliage_shader_branch(void) {
     return g_foliageShader;
 }
 
+bool nwn_oit_wants_compact_mode2_shader_branch(void) {
+    read_settings();
+    return production_material_routing_only();
+}
+
 bool nwn_oit_wants_a2c_emitter_shader_branch(void) {
     read_settings();
     return g_foliageA2c || g_a2cEmitterCensus;
@@ -3015,6 +3052,7 @@ void nwn_oit_shutdown(void) {
 
 void nwn_oit_prepare(void) {
     read_settings();
+    apply_driver_policy();
     if ((!g_enabled && !g_census && !g_foliageCensus && !g_materialModeCensus &&
          !g_materialIdentityCensus && !g_materialModeRouting &&
          !g_a2cTransmittanceCensus && !g_a2cEmitterCensus &&
@@ -3070,6 +3108,13 @@ void nwn_oit_prepare(void) {
             }
         }
     }
+}
+
+void nwn_oit_set_driver_identity(bool known, bool amd) {
+    read_settings();
+    g_driverIdentityKnown = known;
+    g_driverAmd = amd;
+    apply_driver_policy();
 }
 
 void nwn_oit_bucket_begin(void* scene, int bucket) {

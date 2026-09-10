@@ -112,6 +112,11 @@ bool nwn_oit_suppress_current_draw(void);
 // are allocated and no GL state is changed when only a census is enabled.
 void nwn_oit_prepare(void);
 
+// Keep authored alpha routing fail-closed until a real GL vendor/renderer
+// identity is available. Known drivers use the compact production Mode 2 path;
+// parked OIT diagnostics remain separate from that shipping shader payload.
+void nwn_oit_set_driver_identity(bool known, bool amd);
+
 // Release GL objects. Safe to call when never initialised.
 void nwn_oit_shutdown(void);
 
@@ -132,6 +137,7 @@ bool nwn_oit_needs_texture_tracking(void);
 bool nwn_oit_needs_material_identity_tracking(void);
 bool nwn_oit_wants_material_mode_census(void);
 bool nwn_oit_wants_foliage_shader_branch(void);
+bool nwn_oit_wants_compact_mode2_shader_branch(void);
 bool nwn_oit_wants_a2c_emitter_shader_branch(void);
 bool nwn_oit_observes_owned_draws(void);
 

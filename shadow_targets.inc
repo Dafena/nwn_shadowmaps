@@ -342,7 +342,7 @@ static void overlay_driver_vram(bool& known, int& totalMiB, int& availableMiB) {
     const unsigned char* vendor = gl::GetString(GL_VENDOR);
     if (!vendor || !std::strstr((const char*)vendor, "NVIDIA")) return;
     GLint totalKiB = 0, availableKiB = 0;
-    while (gl::GetError && gl::GetError() != GL_NO_ERROR) {}
+    drain_gl_errors_bounded();
     gl::GetIntegerv(GL_GPU_MEMORY_INFO_DEDICATED_VIDMEM_NVX, &totalKiB);
     gl::GetIntegerv(GL_GPU_MEMORY_INFO_CURRENT_AVAILABLE_VIDMEM_NVX, &availableKiB);
     if (gl::GetError && gl::GetError() != GL_NO_ERROR) return;
@@ -513,7 +513,7 @@ static void create_target() {
     gl::GetIntegerv(GL_TEXTURE_BINDING_2D,  &prevTex);
     gl::GetIntegerv(GL_TEXTURE_BINDING_2D_ARRAY, &prevTexArray);
 
-    while (gl::GetError() != GL_NO_ERROR) {}   // drain pre-existing errors
+    drain_gl_errors_bounded();                 // drain pre-existing errors
 
     gl::GenTextures(1, &g_depthTex);
     gl::BindTexture(GL_TEXTURE_2D, g_depthTex);

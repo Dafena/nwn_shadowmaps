@@ -435,7 +435,7 @@ static void create_static_world_target() {
     GLint prevFbo = 0, prevTex = 0;
     gl::GetIntegerv(GL_FRAMEBUFFER_BINDING, &prevFbo);
     gl::GetIntegerv(GL_TEXTURE_BINDING_2D, &prevTex);
-    while (gl::GetError() != GL_NO_ERROR) {}
+    drain_gl_errors_bounded();
 
     gl::GenTextures(1, &g_staticWorldTex);
     gl::BindTexture(GL_TEXTURE_2D, g_staticWorldTex);

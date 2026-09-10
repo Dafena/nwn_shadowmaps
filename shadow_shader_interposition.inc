@@ -179,6 +179,14 @@ using ShaderSource_t = void (*)(GLuint shader, GLsizei count,
 static ShaderSource_t g_realShaderSource = nullptr;
 static bool g_injectTest = false;
 
+// Linux reaches these through exported GLEW pointer slots.  The Windows proxy
+// has no such exports, so its dlsym shim resolves the current-context driver
+// entry point instead.
+static void* glew_or_dlsym(void** slot, const char* name) {
+    if (slot && *slot) return *slot;
+    return dlsym(RTLD_DEFAULT, name);
+}
+
 using CreateShader_t = GLuint (*)(GLenum);
 using CompileShader_t = void (*)(GLuint);
 using GetShaderiv_t = void (*)(GLuint, GLenum, GLint*);
@@ -189,6 +197,118 @@ using LinkProgram_t = void (*)(GLuint);
 using GetProgramiv_t = void (*)(GLuint, GLenum, GLint*);
 using GetProgramInfoLog_t = void (*)(GLuint, GLsizei, GLsizei*, char*);
 using DeleteShader_t = void (*)(GLuint);
+
+// Record only shader objects whose source we actually changed.  Compile/link
+// status for these objects is the useful vendor comparison: logging every
+// stock NWN shader would obscure the first modified program that fails.
+static CompileShader_t g_realCompileShader = nullptr;
+static AttachShader_t g_realAttachShader = nullptr;
+static LinkProgram_t g_realLinkProgram = nullptr;
+static std::unordered_set<GLuint> g_patchedRuntimeShaders;
+static std::unordered_set<GLuint> g_programsWithPatchedRuntimeShaders;
+static int g_shaderCheckLogs = 0;
+
+static void shader_check_log(GLuint object, bool program, const char* status) {
+    if (g_shaderCheckLogs++ >= 96) return;
+    fprintf(stderr, "[shadowmap][shader-check] patched %s=%u %s\n",
+            program ? "program" : "shader", object, status);
+}
+
+static void shader_check_info_log(GLuint object, bool program) {
+    char log[8192] = {};
+    GLsizei used = 0;
+    if (program) {
+        auto getLog = (GetProgramInfoLog_t)glew_or_dlsym(
+            eng::GlewGetProgramInfoLog, "glGetProgramInfoLog");
+        if (getLog) getLog(object, (GLsizei)sizeof(log) - 1, &used, log);
+    } else {
+        auto getLog = (GetShaderInfoLog_t)glew_or_dlsym(
+            eng::GlewGetShaderInfoLog, "glGetShaderInfoLog");
+        if (getLog) getLog(object, (GLsizei)sizeof(log) - 1, &used, log);
+    }
+    if (used > 0) {
+        log[std::min<GLsizei>(used, (GLsizei)sizeof(log) - 1)] = '\0';
+        fprintf(stderr, "[shadowmap][shader-check] %s\n", log);
+    }
+}
+
+// Active sampler uniforms start at zero after a successful link.  The Mode 2
+// shader contains shadow-array, ordinary-array, and (in diagnostic builds)
+// multisample samplers; leaving those different sampler types aliased to unit
+// zero makes a draw invalid even while nwnA2cPass is zero.  NVIDIA accepts the
+// startup path, while Mesa enforces the sampler-type conflict and the native
+// menu becomes black before the first authored Mode 2 material is seen.
+static void initialize_patched_sampler_units(GLuint program) {
+    UseProgram_t useProgram = g_realUseProgram ? g_realUseProgram :
+        (UseProgram_t)glew_or_dlsym(eng::GlewUseProgram, "glUseProgram");
+    if (!program || !useProgram || !gl::GetIntegerv ||
+        !gl::GetUniformLocation || !gl::Uniform1i) return;
+    GLint oldProgram = 0;
+    gl::GetIntegerv(GL_CURRENT_PROGRAM, &oldProgram);
+    useProgram(program);
+    struct SamplerDefault { const char* name; GLint unit; };
+    static const SamplerDefault defaults[] = {
+        {"nwnA2cStaticDepth", 30},
+        {"nwnA2cDynamicDepth", 29},
+        {"nwnA2cLocalDepth", 28},
+        {"nwnA2cEmitterOpaqueDepth", 15},
+    };
+    unsigned assigned = 0;
+    for (const SamplerDefault& d : defaults) {
+        const GLint loc = gl::GetUniformLocation(program, d.name);
+        if (loc < 0) continue;
+        gl::Uniform1i(loc, d.unit);
+        ++assigned;
+    }
+    useProgram((GLuint)oldProgram);
+    static int logged = 0;
+    if (assigned && logged++ < 8)
+        fprintf(stderr,
+                "[shadowmap][shader-check] patched program=%u sampler defaults initialized (%u)\n",
+                program, assigned);
+}
+
+extern "C" void my_compile_shader(GLuint shader) {
+    if (!g_realCompileShader) return;
+    g_realCompileShader(shader);
+    if (g_patchedRuntimeShaders.find(shader) == g_patchedRuntimeShaders.end())
+        return;
+    auto getShader = (GetShaderiv_t)glew_or_dlsym(
+        eng::GlewGetShaderiv, "glGetShaderiv");
+    GLint ok = GL_FALSE;
+    if (!getShader) {
+        shader_check_log(shader, false, "compile=UNKNOWN (no status entry point)");
+        return;
+    }
+    getShader(shader, GL_COMPILE_STATUS, &ok);
+    shader_check_log(shader, false, ok ? "compile=OK" : "compile=FAILED");
+    if (!ok) shader_check_info_log(shader, false);
+}
+
+extern "C" void my_attach_shader(GLuint program, GLuint shader) {
+    if (!g_realAttachShader) return;
+    g_realAttachShader(program, shader);
+    if (g_patchedRuntimeShaders.find(shader) != g_patchedRuntimeShaders.end())
+        g_programsWithPatchedRuntimeShaders.insert(program);
+}
+
+extern "C" void my_link_program(GLuint program) {
+    if (!g_realLinkProgram) return;
+    g_realLinkProgram(program);
+    if (g_programsWithPatchedRuntimeShaders.find(program) ==
+        g_programsWithPatchedRuntimeShaders.end()) return;
+    auto getProgram = (GetProgramiv_t)glew_or_dlsym(
+        eng::GlewGetProgramiv, "glGetProgramiv");
+    GLint ok = GL_FALSE;
+    if (!getProgram) {
+        shader_check_log(program, true, "link=UNKNOWN (no status entry point)");
+        return;
+    }
+    getProgram(program, GL_LINK_STATUS, &ok);
+    shader_check_log(program, true, ok ? "link=OK" : "link=FAILED");
+    if (!ok) shader_check_info_log(program, true);
+    else initialize_patched_sampler_units(program);
+}
 
 static GLuint g_gpuDecodeProgram = 0;
 extern "C" void NWN_GL_INTERPOSE(glDrawArrays)(GLenum mode, GLint first, GLsizei count);
@@ -256,16 +376,17 @@ static void build_gpu_decode_program() {
     auto link = (LinkProgram_t)lk;
     auto getProg = (GetProgramiv_t)gp;
     static const char* vs =
-        "#version 330 compatibility\n"
+        "#version 330 core\n"
         "void main(){ vec2 p=vec2((gl_VertexID<<1)&2,gl_VertexID&2);"
         "gl_Position=vec4(p*2.0-1.0,0.0,1.0); }\n";
     static const char* fs =
-        "#version 330 compatibility\n"
+        "#version 330 core\n"
+        "out vec4 nwnFragColor;\n"
         "uniform sampler2DShadow nwnDepth;\n"
         "void main(){ vec2 uv=gl_FragCoord.xy/2048.0; float lo=0.0,hi=1.0;"
         "for(int i=0;i<8;++i){float m=(lo+hi)*0.5;"
         "if(texture(nwnDepth,vec3(uv,m))>0.5)lo=m;else hi=m;}"
-        "gl_FragColor=vec4(lo,lo,lo,1.0); }\n";
+        "nwnFragColor=vec4(lo,lo,lo,1.0); }\n";
     GLuint v = create(GL_VERTEX_SHADER), f = create(GL_FRAGMENT_SHADER);
     const GLint vl=(GLint)strlen(vs), fl=(GLint)strlen(fs);
     source(v,1,&vs,&vl); source(f,1,&fs,&fl); compile(v); compile(f);
@@ -398,6 +519,7 @@ static bool inject_marker(std::string& source) {
 // explicitly sets the uniform.
 static bool inject_oit_foliage_branch(std::string& source) {
     if (!nwn_oit_wants_foliage_shader_branch()) return false;
+    const bool compactMode2 = nwn_oit_wants_compact_mode2_shader_branch();
     std::string patched = source;
     const bool explicitContinuousAlpha =
         patched.find("#define NWN_CONTINUOUS_ALPHA_SHADER 1") !=
@@ -455,9 +577,50 @@ static bool inject_oit_foliage_branch(std::string& source) {
         "uniform float nwnA2cLocalLift;\n"
         "uniform float nwnA2cLocalFalloff;\n"
         "uniform vec2 nwnA2cLampFalloff;";
+    static const char* kA2cDeclarations =
+        "uniform int nwnA2cPass;\n"
+        "uniform sampler2DArrayShadow nwnA2cStaticDepth;\n"
+        "uniform sampler2DArrayShadow nwnA2cDynamicDepth;\n"
+        "uniform mat4 nwnA2cCameraVPInv;\n"
+        "uniform mat4 nwnA2cCameraView;\n"
+        "uniform mat4 nwnA2cLightVP[4];\n"
+        "uniform vec4 nwnA2cClipFar;\n"
+        "uniform vec4 nwnA2cViewport;\n"
+        "uniform int nwnA2cDynamicLayers;\n"
+        "uniform float nwnA2cShadowStrength;\n"
+        "uniform float nwnA2cShadowBias;\n"
+        "uniform float nwnA2cShadowBlend;\n"
+        "uniform float nwnA2cShadowPcf;\n"
+        "uniform float nwnA2cSelfIllumGuard;\n"
+        "uniform vec4 nwnA2cLamps[128];\n"
+        "uniform int nwnA2cLampCount;\n"
+        "uniform float nwnA2cLampLift;\n"
+        "uniform sampler2DArray nwnA2cLocalDepth;\n"
+        "uniform mat4 nwnA2cLocalVP[32];\n"
+        "uniform vec4 nwnA2cLocalPos[32];\n"
+        "uniform float nwnA2cLocalRadius[32];\n"
+        "uniform float nwnA2cLocalFade[32];\n"
+        "uniform int nwnA2cLocalSlots;\n"
+        "uniform float nwnA2cLocalStrength;\n"
+        "uniform float nwnA2cLocalBias;\n"
+        "uniform float nwnA2cLocalEdgeFade;\n"
+        "uniform float nwnA2cLocalSoft;\n"
+        "uniform float nwnA2cLocalNormalBias;\n"
+        "uniform float nwnA2cLocalMinSep;\n"
+        "uniform float nwnA2cLocalTanHalfFov;\n"
+        "uniform float nwnA2cLocalLift;\n"
+        "uniform float nwnA2cLocalFalloff;\n"
+        "uniform vec2 nwnA2cLampFalloff;\n";
     const size_t outputAt = patched.find(kOutput);
     if (outputAt == std::string::npos) return false;
-    patched.replace(outputAt, std::strlen(kOutput), kOutputs);
+    if (compactMode2) {
+        std::string compactOutput = kOutput;
+        compactOutput += '\n';
+        compactOutput += kA2cDeclarations;
+        patched.replace(outputAt, std::strlen(kOutput), compactOutput);
+    } else {
+        patched.replace(outputAt, std::strlen(kOutput), kOutputs);
+    }
 
     // The template is concatenated from guarded includes and can contain the
     // same inactive definition more than once. Replace every exact definition;
@@ -468,11 +631,14 @@ static bool inject_oit_foliage_branch(std::string& source) {
         "#define ALPHA_DISCARD_VALUE (((nwnOitPass != 0) || (nwnA2cPass != 0)) ? 0.01 : "
         "((nwnOitDepthPass != 0) ? 0.25 : "
         "((nwnOitOpaqueCore != 0) ? nwnOitCutoff : fAlphaDiscardValue)))";
+    static const char* kA2cDiscard =
+        "#define ALPHA_DISCARD_VALUE ((nwnA2cPass != 0) ? 0.01 : fAlphaDiscardValue)";
+    const char* replacementDiscard = compactMode2 ? kA2cDiscard : kOitDiscard;
     size_t searchAt = 0;
     unsigned discardDefinitions = 0;
     while ((searchAt = patched.find(kDiscard, searchAt)) != std::string::npos) {
-        patched.replace(searchAt, std::strlen(kDiscard), kOitDiscard);
-        searchAt += std::strlen(kOitDiscard);
+        patched.replace(searchAt, std::strlen(kDiscard), replacementDiscard);
+        searchAt += std::strlen(replacementDiscard);
         ++discardDefinitions;
     }
     // Explicit custom shaders can compute coverage independently of
@@ -533,7 +699,18 @@ static bool inject_oit_foliage_branch(std::string& source) {
         "        if (clamp(gl_FragColor.a, 0.0, 1.0) < nwnOitCutoff) discard;\n"
         "        gl_FragColor.a = 1.0;\n"
         "    }\n";
-    patched.insert(close, kBody);
+    static const char* kA2cBody =
+        "\n    // compact Mode 2 A2C branch injected by libnwn_shadowmap.so\n"
+        "    if (nwnA2cPass != 0) {\n"
+        "        float nwnDirLit = nwnA2cDirectionalShadow();\n"
+        "        if (nwnA2cSelfIllumGuard < 1.0) {\n"
+        "            float nwnLum = max(gl_FragColor.r, max(gl_FragColor.g, gl_FragColor.b));\n"
+        "            float nwnKeepShadow = 1.0-smoothstep(nwnA2cSelfIllumGuard,1.0,nwnLum);\n"
+        "            nwnDirLit = 1.0-(1.0-nwnDirLit)*nwnKeepShadow;\n"
+        "        }\n"
+        "        gl_FragColor.rgb *= min(nwnDirLit, nwnA2cLocalShadow());\n"
+        "    }\n";
+    patched.insert(close, compactMode2 ? kA2cBody : kBody);
 
     static const char* kA2cShadowHelpers =
         "float nwnA2cLayerLit(int layer, vec4 worldPos) {\n"
@@ -631,7 +808,9 @@ static bool inject_oit_foliage_branch(std::string& source) {
         "    }\n"
         "    return 1.0-nwnA2cLocalStrength*best;\n"
         "}\n";
-    patched.insert(mainAt, kA2cShadowHelpers);
+    std::string a2cPrefix;
+    a2cPrefix += kA2cShadowHelpers;
+    patched.insert(mainAt, a2cPrefix);
     source.swap(patched);
     return true;
 }
@@ -723,10 +902,12 @@ extern "C" void my_shader_source(GLuint shader, GLsizei count,
                                   g_cascadeStaticAlphaReceiver;
     const bool oitFoliageProbe = nwn_oit_needs_shader_sources();
     const bool weatherShaderProbe = weather_needs_shader_sources();
-    if (!g_realShaderSource || (!g_injectTest && !dumpVertex && !dumpFragment &&
+    if (!g_realShaderSource || !runtime_shader_sources_allowed() ||
+        (!g_injectTest && !dumpVertex && !dumpFragment &&
                                 !staticAlphaProbe && !oitFoliageProbe &&
                                 !weatherShaderProbe) ||
         count <= 0 || !string) {
+        g_patchedRuntimeShaders.erase(shader);
         if (g_realShaderSource) g_realShaderSource(shader, count, string, length);
         return;
     }
@@ -775,9 +956,14 @@ extern "C" void my_shader_source(GLuint shader, GLsizei count,
                 fprintf(stderr, "[oit][material-mode] injected dormant "
                                 "NWN_ALPHA_MODE census into fragment=%u\n", shader);
             oitFoliageInjected = inject_oit_foliage_branch(combined);
-            if (oitFoliageInjected)
-                fprintf(stderr, "[oit][foliage] injected inert MRT branch into "
-                                "fragment=%u\n", shader);
+            if (oitFoliageInjected) {
+                if (nwn_oit_wants_compact_mode2_shader_branch())
+                    fprintf(stderr, "[a2c] injected compact Mode 2 branch into "
+                                    "fragment=%u\n", shader);
+                else
+                    fprintf(stderr, "[oit][foliage] injected inert MRT branch into "
+                                    "fragment=%u\n", shader);
+            }
         }
     }
     if (oitFoliageProbe && !oitFoliageInjected &&
@@ -830,12 +1016,14 @@ extern "C" void my_shader_source(GLuint shader, GLsizei count,
     const bool markerInjected = inject_marker(combined);
     if (!weatherInjected && !materialModeInjected && !oitFoliageInjected &&
         !a2cEmitterInjected && !markerInjected) {
+        g_patchedRuntimeShaders.erase(shader);
         g_realShaderSource(shader, count, string, length);
         return;
     }
     const char* patched = combined.c_str();
     const GLint patchedLen = (GLint)combined.size();
     g_realShaderSource(shader, 1, &patched, &patchedLen);
+    g_patchedRuntimeShaders.insert(shader);
     static int logged = 0;
     if (logged++ < 4)
         fprintf(stderr, "[shadowmap] submitted patched runtime shader %u\n", shader);

@@ -85,6 +85,14 @@ typedef void          GLvoid;
 #define GL_VERSION                     0x1F02
 #define GL_RENDERER                    0x1F01
 #define GL_VENDOR                      0x1F00
+#define GL_SHADING_LANGUAGE_VERSION    0x8B8C
+#define GL_MAX_DRAW_BUFFERS            0x8824
+#define GL_MAX_COLOR_ATTACHMENTS       0x8CDF
+#define GL_MAX_FRAGMENT_UNIFORM_COMPONENTS 0x8B49
+#define GL_CONTEXT_FLAGS               0x821E
+#define GL_CONTEXT_PROFILE_MASK        0x9126
+#define GL_CONTEXT_CORE_PROFILE_BIT    0x00000001
+#define GL_CONTEXT_COMPATIBILITY_PROFILE_BIT 0x00000002
 #define GL_COLOR_ATTACHMENT0            0x8CE0
 #define GL_RGBA                         0x1908
 #define GL_RGBA8                        0x8058
@@ -176,6 +184,64 @@ namespace gl {
     do { *(void**)(&gl::name) = dlsym(RTLD_DEFAULT, "gl" #name); \
          if (!gl::name) { fprintf(stderr, "[shadowmap] missing GL entry: gl%s\n", #name); ok = false; } } while (0)
 
+static bool g_glIdentityKnown = false;
+static bool g_glIdentityAmd = false;
+static bool g_glIdentityLogged = false;
+
+static bool gl_identity_mentions_amd(const char* text) {
+    if (!text) return false;
+    return std::strstr(text, "AMD") != nullptr ||
+           std::strstr(text, "Advanced Micro Devices") != nullptr ||
+           std::strstr(text, "ATI Technologies") != nullptr ||
+           std::strncmp(text, "ATI ", 4) == 0 ||
+           std::strstr(text, "Radeon") != nullptr ||
+           std::strstr(text, "RADEON") != nullptr;
+}
+
+static bool runtime_shader_sources_allowed() {
+    return g_glIdentityKnown;
+}
+
+static void refresh_gl_identity() {
+    if (!gl::GetString) return;
+    const char* vendor = (const char*)gl::GetString(GL_VENDOR);
+    const char* renderer = (const char*)gl::GetString(GL_RENDERER);
+    const char* version = (const char*)gl::GetString(GL_VERSION);
+    const char* shading = (const char*)gl::GetString(GL_SHADING_LANGUAGE_VERSION);
+    if (!vendor && !renderer) return;
+
+    const bool amd = gl_identity_mentions_amd(vendor) ||
+                     gl_identity_mentions_amd(renderer);
+    const bool changed = !g_glIdentityKnown || amd != g_glIdentityAmd;
+    g_glIdentityKnown = true;
+    g_glIdentityAmd = amd;
+    if (!g_glIdentityLogged || changed) {
+        g_glIdentityLogged = true;
+        fprintf(stderr, "[shadowmap][gpu] vendor=%s | renderer=%s | version=%s%s\n",
+                vendor ? vendor : "?", renderer ? renderer : "?",
+                version ? version : "?", amd ? " | AMD core-profile mode" : "");
+        if (gl::GetIntegerv) {
+            GLint profile = 0, flags = 0, drawBuffers = 0;
+            GLint colorAttachments = 0, fragmentUniforms = 0;
+            gl::GetIntegerv(GL_CONTEXT_PROFILE_MASK, &profile);
+            gl::GetIntegerv(GL_CONTEXT_FLAGS, &flags);
+            gl::GetIntegerv(GL_MAX_DRAW_BUFFERS, &drawBuffers);
+            gl::GetIntegerv(GL_MAX_COLOR_ATTACHMENTS, &colorAttachments);
+            gl::GetIntegerv(GL_MAX_FRAGMENT_UNIFORM_COMPONENTS, &fragmentUniforms);
+            const char* profileName =
+                (profile & GL_CONTEXT_CORE_PROFILE_BIT) ? "core" :
+                (profile & GL_CONTEXT_COMPATIBILITY_PROFILE_BIT) ? "compatibility" :
+                "unspecified";
+            fprintf(stderr,
+                    "[shadowmap][gpu] context-profile=%s mask=0x%x flags=0x%x "
+                    "GLSL=%s draw-buffers=%d color-attachments=%d fragment-uniform-components=%d\n",
+                    profileName, profile, flags, shading ? shading : "?",
+                    drawBuffers, colorAttachments, fragmentUniforms);
+        }
+    }
+    nwn_oit_set_driver_identity(g_glIdentityKnown, g_glIdentityAmd);
+}
+
 static bool bind_gl() {
     bool ok = true;
     GLBIND(GetIntegerv);  GLBIND(GetBooleanv);   GLBIND(IsEnabled);  GLBIND(GetFloatv);
@@ -196,20 +262,19 @@ static bool bind_gl() {
     GLBIND(ActiveTexture);GLBIND(GetUniformLocation);
     GLBIND(Uniform1i);    GLBIND(Uniform1f); GLBIND(Uniform2f); GLBIND(Uniform4f); GLBIND(Uniform4fv); GLBIND(Uniform1fv); GLBIND(UniformMatrix4fv); GLBIND(GetUniformiv); GLBIND(GetUniformfv);
     GLBIND(GetTexParameteriv); GLBIND(GetTexLevelParameteriv);
-    // WHICH GPU IS ACTUALLY RENDERING. The only other place this was printed is
-    // create_shadow_target(), which the accepted CSM path never calls -- so
-    // neither platform's log contained it, and a Windows-vs-Linux comparison
-    // where every timing differs by a uniform 3.4-4.8x cannot be interpreted
-    // without it. Hybrid-graphics machines routinely hand an OpenGL app the
-    // integrated GPU on one OS and the discrete one on the other.
-    if (ok && gl::GetString) {
-        const unsigned char* ven = gl::GetString(GL_VENDOR);
-        const unsigned char* ren = gl::GetString(GL_RENDERER);
-        const unsigned char* ver = gl::GetString(GL_VERSION);
-        fprintf(stderr, "[shadowmap][gpu] vendor=%s | renderer=%s | version=%s\n",
-                ven ? (const char*)ven : "?", ren ? (const char*)ren : "?",
-                ver ? (const char*)ver : "?");
-    }
+    // This may run before the engine has made a context current. Refresh again
+    // after the native scene draw, when the context is guaranteed.
+    if (ok) refresh_gl_identity();
     return ok;
 }
 #undef GLBIND
+// Some drivers can keep returning a context error after a failed allocation or
+// resolve. Never spin forever while trying to clear an error left by NWN or by
+// an injector pass: a render-thread hang presents as a black window with audio
+// still running. The caller can inspect the post-operation error separately.
+static unsigned drain_gl_errors_bounded(unsigned limit = 32) {
+    if (!gl::GetError || limit == 0) return 0;
+    unsigned drained = 0;
+    for (; drained < limit && gl::GetError() != GL_NO_ERROR; ++drained) {}
+    return drained;
+}

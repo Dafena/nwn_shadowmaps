@@ -16,7 +16,7 @@ static void create_local_light_target() {
     GLint prevFBO = 0, prevTex = 0;
     gl::GetIntegerv(GL_FRAMEBUFFER_BINDING, &prevFBO);
     gl::GetIntegerv(GL_TEXTURE_BINDING_2D_ARRAY, &prevTex);
-    while (gl::GetError() != GL_NO_ERROR) {}   // drain pre-existing errors
+    drain_gl_errors_bounded();                 // drain pre-existing errors
 
     // SIX FACES, as a depth 2D ARRAY. A point light needs the whole sphere:
     // one cone can hold the light or the things around it, never both, which

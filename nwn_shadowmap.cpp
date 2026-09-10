@@ -2519,6 +2519,7 @@ extern "C" void SceneRender_detour(void* self) {
         void* tramp = subhook_get_trampoline(g_hook);
         if (tramp) reinterpret_cast<eng::SceneRender_t>(tramp)(self);
         else       CALL_ORIGINAL(g_hook, eng::SceneRender, self);
+        refresh_gl_identity();
         // This is intentionally after NWN's complete selected-area draw and
         // before trace_scene_exit clears the active-frame marker.  The private
         // static depth layer and the camera inverse must share this serial.
@@ -2791,6 +2792,7 @@ extern "C" void SceneRender_detour(void* self) {
     if (tramp) reinterpret_cast<eng::SceneRender_t>(tramp)(self);
     else       CALL_ORIGINAL(g_hook, eng::SceneRender, self);
     weather_scene_end(self);
+    refresh_gl_identity();
     g_inSceneRender = false;
     g_renderingScene = nullptr;
 
