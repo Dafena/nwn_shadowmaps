@@ -202,6 +202,59 @@ void nwn_overlay_render(int viewportW, int viewportH, const NwnOverlayState& st)
         }
 
 #endif   // !NWN_SHIP -- Sun shadows
+        if (st.godraysAvailable && ImGui::CollapsingHeader("Volumetric fog")) {
+            if (st.godraysEnabled) {
+                bool enabled = *st.godraysEnabled;
+                if (ImGui::Checkbox("Fog lighting and sun shafts", &enabled))
+                    *st.godraysEnabled = enabled;
+            }
+            if (st.godraysResolution) {
+                const char* resolutions[] = {
+                    "Quarter (fast)", "Half", "Full (expensive)"
+                };
+                int resolution = *st.godraysResolution;
+                if (resolution < 0) resolution = 0;
+                if (resolution > 2) resolution = 2;
+                if (ImGui::Combo("Volume resolution", &resolution,
+                                 resolutions, 3))
+                    *st.godraysResolution = resolution;
+            }
+            if (st.godraysStrength)
+                ImGui::SliderFloat("Sun scattering", st.godraysStrength, 0.0f, 2.0f, "%.2f");
+            if (st.atmosphereDensity)
+                ImGui::SliderFloat("Atmospheric density", st.atmosphereDensity,
+                                   0.0f, 1.0f, "%.2f");
+            if (st.godraysSamples)
+                ImGui::SliderInt("Volume samples", st.godraysSamples, 8, 64);
+            if (st.fogFromEngine)
+                ImGui::Text("Area fog: %.1f - %.1f units", st.fogStartLive,
+                            st.fogEndLive);
+            else
+                ImGui::TextUnformatted("Area fog: none (atmosphere still active)");
+#if !NWN_SHIP
+            if (st.godraysDebug) {
+                const char* modes[] = {
+                    "0 - rendered volume",
+                    "1 - solid magenta (pass/composite)",
+                    "2 - sky / occluder mask",
+                    "3 - volume: occlusion / phase / light",
+                    "4 - projected sun position (edge = offscreen)",
+                };
+                int debug = *st.godraysDebug;
+                if (debug < 0) debug = 0;
+                if (debug > 4) debug = 4;
+                if (ImGui::Combo("Volume debug", &debug, modes, 5))
+                    *st.godraysDebug = debug;
+            }
+#endif
+            help("Adds a shadowed atmospheric medium in every area and combines it with "
+                 "NWN's authored fog when present. Atmospheric density controls shafts "
+                 "near the camera even when an area's fog starts far away. "
+                 "Quarter is fastest; Half and Full reduce visible stepping "
+                 "but increase fill-rate and filtering cost substantially. "
+                 "They use the completed scene-depth mask, so visible foliage and geometry block them. "
+                 "More samples make smoother shafts but cost more GPU time.");
+        }
 #if !NWN_SHIP
         if (ImGui::CollapsingHeader("Local light")) {
             if (st.localEnabled) {
@@ -240,8 +293,51 @@ void nwn_overlay_render(int viewportW, int viewportH, const NwnOverlayState& st)
                      "Requiring a real gap removes self-shadowing outright and "
                      "leaves genuine shadows untouched -- and unlike a depth "
                      "bias it means the same thing at every distance.\n\n"
-                     "A character is roughly 0.3 units thick, so 0.30 stops one "
-                     "shadowing itself. 0 restores self-shadowing.");
+                     "The tuned value is 1.27 with Back-face character capture "
+                     "enabled. 0 restores unrestricted self-shadowing.");
+            }
+            if (st.localContactSep) {
+                ImGui::SliderFloat("Contact separation", st.localContactSep, 0.0f, 0.25f, "%.3f units");
+                help("Separate threshold for upward-facing receivers such as floors.\n\n"
+                     "Keep this at 0 for joined foot contact. Even a small positive "
+                     "value can visibly trim where the shadow begins. No self-shadow "
+                     "continues to clean character surfaces independently.");
+            }
+            if (st.localGroundOnly) {
+                bool groundOnly = *st.localGroundOnly;
+                if (ImGui::Checkbox("Contact-safe local shadows", &groundOnly))
+                    *st.localGroundOnly = groundOnly;
+                help("Uses two receiver stages: floors and scenery receive before "
+                     "characters are drawn, then only character pixels receive after "
+                     "the dynamic pass. This keeps shadows attached at the feet while "
+                     "avoiding a second application on the ground. PS4-style "
+                     "receiver suppression is applied consistently in both stages.\n\n"
+                     "Turn this off to restore the completed-scene receiver for comparison.");
+            }
+            if (st.localCharacterShadows) {
+                bool characterShadows = *st.localCharacterShadows;
+                if (ImGui::Checkbox("Characters shadow other characters", &characterShadows))
+                    *st.localCharacterShadows = characterShadows;
+                help("When off, engine-classified creatures are omitted only from the "
+                     "local map sampled by other creatures. Part-based creatures are "
+                     "included. They still cast normally onto floors and scenery. "
+                     "Placeables, doors, and other non-creature objects remain casters, "
+                     "so a non-static tree can still shadow a creature.\n\n"
+                     "This selective behavior uses Contact-safe local shadows. When "
+                     "that option is off, the completed-scene receiver cannot identify "
+                     "creature pixels separately.");
+            }
+            if (st.localBackfaceCast) {
+                bool backfaceCast = *st.localBackfaceCast;
+                if (ImGui::Checkbox("Back-face character capture", &backfaceCast))
+                    *st.localBackfaceCast = backfaceCast;
+                help("Stores the far side of closed character meshes in the local "
+                     "shadow map. This reduces a character's shadow on its own arms "
+                     "and body and allows a stronger No self-shadow threshold while "
+                     "retaining useful character-to-character shadows. Floors and "
+                     "scenery are not changed. It is only needed when Characters "
+                     "shadow other characters is enabled.\n\n"
+                     "Turn this off to compare against NWN's normal character culling.");
             }
             if (st.localNormalBias) {
                 ImGui::SliderFloat("Local normal bias", st.localNormalBias, 0.0f, 8.0f, "%.1f");

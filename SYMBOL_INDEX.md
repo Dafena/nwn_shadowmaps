@@ -40,6 +40,8 @@ modules. Use `rg -n` to locate the current definition.
 | `g_localLightPassActive` | `nwn_shadowmap.cpp` | Prevents local replay recursion |
 | `local_layer_accepts_caster` | `shadow_shader_interposition.inc` | Windows-only optional local caster cull |
 | `local_visible_begin_draw` | `shadow_shader_interposition.inc` | Visible local draw admission and transform setup |
+| `classify_current_draw_item` | `shadow_trace_cascade.inc` | Uses NWN's object type and shared external-data owner pointer for exact local self rejection |
+| `DrawBucketGetFirstItem_detour` / `DrawBucketGetNextItem_detour` | `shadow_trace_cascade.inc` | Tracks each draw owner; Windows observes both independent iterator paths |
 
 The source-selection rule is simple: `GetShadowLights()` decides which lights
 are eligible and in what order. The `SetLightGL` census is for ordinary lighting

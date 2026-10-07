@@ -74,7 +74,6 @@ STENCIL_TRACE="${NWN_SHADOWMAP_STENCIL_TRACE:-1}"   # the engine's own shadow pa
 LOCAL_LIGHT_DUMP="${NWN_SHADOWMAP_LOCAL_LIGHT_DUMP:-1}"
 TRACE_FRAMES="${NWN_SHADOWMAP_TRACE_FRAMES:-90}" # text trace stops after N area frames
 TRACE_EVENTS="${NWN_SHADOWMAP_TRACE_EVENTS:-4096}"
-
 # DELIBERATELY NOT SET, and none of these are oversights:
 #
 #   UNIFORM_TRACE        sits on the per-glUniformMatrix4fv path and does a
@@ -92,7 +91,7 @@ TRACE_EVENTS="${NWN_SHADOWMAP_TRACE_EVENTS:-4096}"
 
 echo "[run-dev] cascades=$CASCADES (+$DYN_CASCADES moving)  cascade=${CASCADE_SIZE}^2" \
      " world=$STATIC_WORLD:${WORLD_SIZE}^2/${WORLD_EXTENT}u  alpha=$STATIC_ALPHA_RECEIVER" \
-     " local-lights=$LOCAL_RECEIVER@${LOCAL_SIZE}^2  diagnostics=ALL"
+     " local-lights=$LOCAL_RECEIVER@${LOCAL_SIZE}^2  godrays=parked/off diagnostics=ALL"
 
 exec env NWN_SHADOWMAP_CASCADE_MATH=1 \
     NWN_SHADOWMAP_LIGHT_VECTOR_TRACE=1 \

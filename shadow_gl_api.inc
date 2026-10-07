@@ -29,6 +29,10 @@ typedef void          GLvoid;
 #define GL_LEQUAL                      0x0203
 #define GL_VIEWPORT                    0x0BA2
 #define GL_DEPTH_TEST                  0x0B71
+#define GL_CULL_FACE                   0x0B44
+#define GL_CULL_FACE_MODE              0x0B45
+#define GL_FRONT                       0x0404
+#define GL_BACK                        0x0405
 #define GL_BLEND                       0x0BE2
 #define GL_BLEND_SRC_RGB                0x80C9
 #define GL_BLEND_DST_RGB                0x80C8
@@ -41,6 +45,7 @@ typedef void          GLvoid;
 #define GL_ONE                          1
 #define GL_ONE_MINUS_SRC_ALPHA          0x0303
 #define GL_DEPTH_WRITEMASK             0x0B72
+#define GL_DEPTH_FUNC                  0x0B74
 #define GL_COLOR_WRITEMASK             0x0C23
 #define GL_SCISSOR_TEST                0x0C11
 #define GL_NEAREST                     0x2600
@@ -74,6 +79,7 @@ typedef void          GLvoid;
 #define GL_READ_FRAMEBUFFER_BINDING    0x8CAA
 #define GL_DRAW_FRAMEBUFFER_BINDING    0x8CA6
 #define GL_SAMPLES                     0x80A9
+#define GL_SAMPLE_ALPHA_TO_COVERAGE    0x809E
 #define GL_POLYGON_OFFSET_FILL         0x8037
 #define GL_POLYGON_OFFSET_FACTOR       0x8038
 #define GL_POLYGON_OFFSET_UNITS        0x2A00
@@ -96,6 +102,7 @@ typedef void          GLvoid;
 #define GL_COLOR_ATTACHMENT0            0x8CE0
 #define GL_RGBA                         0x1908
 #define GL_RGBA8                        0x8058
+#define GL_RGBA16F                       0x881A
 #define GL_RGBA32F                      0x8814
 #define GL_R8                           0x8229
 #define GL_R32F                         0x822E
@@ -130,6 +137,7 @@ namespace gl {
     void     (*ClearDepth)(GLclampd)                                       = nullptr;
     void     (*ColorMask)(GLboolean, GLboolean, GLboolean, GLboolean)      = nullptr;
     void     (*DepthMask)(GLboolean)                                       = nullptr;
+    void     (*DepthFunc)(GLenum)                                          = nullptr;
     void     (*Finish)()                                                   = nullptr;
     void     (*GenTextures)(GLsizei, GLuint*)                              = nullptr;
     void     (*DeleteTextures)(GLsizei, const GLuint*)                     = nullptr;
@@ -248,7 +256,7 @@ static bool bind_gl() {
     GLBIND(IsProgram); GLBIND(BlitFramebuffer);
     GLBIND(GetError);     GLBIND(GetString);
     GLBIND(Enable);       GLBIND(Disable);       GLBIND(PolygonOffset); GLBIND(CullFace);       GLBIND(BlendFuncSeparate); GLBIND(BlendEquationSeparate); GLBIND(Viewport);
-    GLBIND(Clear);        GLBIND(ClearColor);    GLBIND(ClearDepth); GLBIND(ColorMask); GLBIND(DepthMask);
+    GLBIND(Clear);        GLBIND(ClearColor);    GLBIND(ClearDepth); GLBIND(ColorMask); GLBIND(DepthMask); GLBIND(DepthFunc);
     GLBIND(Finish);
     GLBIND(GenTextures);  GLBIND(DeleteTextures);GLBIND(BindTexture);
     GLBIND(TexImage2D);   GLBIND(TexImage3D);    GLBIND(TexSubImage2D); GLBIND(CopyTexSubImage2D); GLBIND(CopyTexSubImage3D); GLBIND(TexParameteri); GLBIND(TexParameterfv);

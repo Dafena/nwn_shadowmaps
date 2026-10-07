@@ -1,6 +1,6 @@
 # Current task
 
-Updated 2026-09-03. Linux remains the behavioural reference. The automatic
+Updated 2026-10-07. Linux remains the behavioural reference. The automatic
 clear/rain/snow weather-effects system, including precipitation occlusion and
 height-aware snow deformation, is accepted on Linux and ported to native
 Windows. The shared renderer is intentionally identical; only engine discovery
@@ -59,12 +59,15 @@ The automatic implementation lives in `weather_runtime.inc`:
   interior test (`NWAREA_FLAG_INTERIOR`): interior draws suppress weather on
   their first frame and clear both surface reservoirs immediately, including
   when NWN reuses the same `CNWCArea` allocation across a load screen.
-- The selected `g_areaScene` gate is mandatory. Draw classification tracks
-  NWN's `skinmesh` uniform from its own `glUniform1i` uploads, avoiding a
-  synchronous driver query per draw. Static opaque bucket 0 receives the full
-  effect. Static alpha/card bucket 1 receives orientation-aware wet noise and
-  normal impacts without puddles. Dynamic body/hair buckets, skinned
+- The selected `g_areaScene` gate is mandatory. Static opaque bucket 0 receives
+  the full effect. Static alpha/card bucket 1 receives orientation-aware wet
+  noise and normal impacts without puddles. Dynamic body/hair buckets,
   characters, native water, and unknown/out-of-bucket draws are excluded.
+  The current native bucket is authoritative per draw; cached `skinmesh`
+  uploads are diagnostic only because NWN reuses programs and does not reset
+  that uniform before every static draw. This prevents character movement and
+  the resulting draw-order changes from making entire static tile sections
+  lose or regain their snow layer.
 - The Linux weather hook uses the established remove/call/reinstall fallback
   because this executable's function prologue does not yield a Subhook
   trampoline. Native Linux runtime testing confirmed clear, snow, and rain
@@ -170,11 +173,52 @@ Mode 3 OIT is explicitly outside the Windows scope. The staged plan and exit
 criteria are in
 [WINDOWS_IMPLEMENTATION_PLAN.md](WINDOWS_IMPLEMENTATION_PLAN.md).
 
+As of 2026-10-07, local character reception is back on the accepted
+creature-category filter. The pre-character receiver samples the complete local
+map, so creature shadows remain attached to floors and scenery. The completed
+character-only receiver samples a parallel map that omits engine-classified
+creature draws, so creatures neither self-shadow nor shadow one another by
+default. Placeables, doors, moving trees, and other non-creature geometry remain
+casters on characters. Classification comes from NWN's external object type,
+which covers both skinned and rigid/part-based creature appearances. The
+development option `Characters shadow other characters` can restore the common
+map on character receivers, but defaults off. Contact separation remains zero.
+The failed per-owner identity maps and camera-depth duplication are no longer in
+the live path. Local bucket replay restores the complete GL state required by
+later NWN/A2C draws, including depth/blend/sample state and separate framebuffer
+bindings.
+
 The shipping panel now exposes local-shadow refresh as Low (25 ms), Medium
 (16 ms), or Ultra (every rendered frame). Low preserves the established cost;
 Ultra deliberately matches the sun-shadow update cadence. This cadence does
 not change the separate three-light local shadow-map budget or the ordinary
 light list used for sun-shadow lifting.
+
+## Parked volumetric fog lighting
+
+The injector now has a sun-lit volumetric fog pass selectable between quarter,
+half, and full resolution (quarter by default). It inherits NWN's authored fog
+range and color, reconstructs each camera ray from completed scene depth,
+marches through the visible medium, and samples the directional static/dynamic
+cascade maps at each step. Opaque and alpha-tested casters therefore shape the
+lit volume in world space; projected sun position is diagnostic-only and normal
+rendering never smears from a clamped screen edge. Every area uses a separate
+adjustable near-camera atmospheric density (default `0.32`), combined with any
+authored distant fog, so canopy and character occlusion can shape shafts before
+the area's fog ramp begins. During visual validation NWN still owns the base fog
+extinction and this pass replaces only the old fake shaft extraction with
+shadowed in-scattering, avoiding double fog and any shader change to UI/special
+passes. This prototype is now parked until its dedicated work resumes. A hard
+feature gate prevents the render pass from running, the settings panel does not
+expose it, saved values are ignored, its environment variables are ignored,
+and the development launcher no longer supplies them. The implementation and
+shader checks remain in-tree for compile coverage only; it is not an active
+development, production, shipping, or Windows-testing feature.
+
+A native Linux startup check on 2026-09-25 deliberately supplied
+`NWN_SHADOWMAP_GODRAYS=1` with settings disabled. Build 8193.37 on an NVIDIA
+GeForce RTX 3060 Ti using driver 615.71.09 still reported
+`godrays=parked/off`; no godray target, shader, or draw path initialized.
 
 Windows planning must account for:
 

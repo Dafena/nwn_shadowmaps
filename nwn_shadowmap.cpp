@@ -308,13 +308,16 @@ static float    g_localLightSoft         = 0.51f;   // same default as the sun
 // Slope-scaled depth offset used while FILLING a local shadow map. Kills the
 // self-shadow acne a character gets from its own map; 0 disables it.
 static float    g_localLightSlopeBias     = 1.8f;
-// DEAD: setting the cull mode before the replay achieves nothing, because NWN
-// sets its own cull state per draw and overwrites it before any geometry is
-// stored -- confirmed in game, the map is identical either way. Making it work
-// would mean intercepting glCullFace/glEnable for the whole local pass, which
-// is not worth it now that "No self-shadow" solves the problem it was aimed at.
-// Kept as a constant so the capture code reads clearly.
-static constexpr bool g_localLightCullFront = false;
+// Capture the back faces of closed character meshes for local-light shadows.
+// This stores the far side of the caster rather than the same surface being
+// tested by the receiver: a character therefore does not darken its own arm,
+// while a different character behind the complete body still receives its
+// shadow. Enforced immediately before each bucket-2 draw because NWN writes
+// its own cull state while preparing every material.
+// PS4's point-shadow scenes cull back faces normally.  The old injector-only
+// front-face character capture changed caster geometry to fight self-shadowing
+// and is deliberately retired by the PS4 receiver-side suppression path.
+static bool     g_localLightCullFront    = false;
 // Normal-offset bias, in shadow-map texels. The real cure for the acne pattern
 // on characters: the lookup moves along the surface normal instead of along
 // the light ray.
@@ -323,11 +326,29 @@ static float    g_localLightNormalBias    = 0.0f;   // maintainer-tuned
 // NWN dithers them in SCREEN space, so from a light they store as near-solid
 // and hair paints a blob across the face.
 static bool     g_localLightAlphaCasters  = false;
-// How much nearer, in WORLD UNITS, a caster must be before it shadows. This is
-// the "no self-shadowing" control: a character is ~0.3 units thick, so 0.3+
-// stops it shadowing itself entirely while a shadow cast onto the floor (metres
-// of separation) is untouched.
-static float    g_localLightMinSep        = 0.30f;  // world units; preserves contact
+// Retired global caster/receiver separation. PS4 does not trim contacts this
+// way. Its
+// lifted-light receiver fade suppresses self-shadowing after the comparison,
+// leaving the depth test itself free to begin at the caster's feet.
+static float    g_localLightMinSep        = 0.0f;
+// Floor/contact receivers deliberately use zero separation. Even 0.02 units
+// made the shadow visibly begin away from the caster's feet in the test scene.
+static float    g_localLightContactSep    = 0.0f;
+// Two-stage local receiver: contact onto static/alpha geometry before the
+// dynamic bucket, then character-only reception after it. This removes the
+// floor/contact tradeoff while preserving character-on-character shadows.
+// NWN_SHADOWMAP_LOCAL_GROUND_ONLY=0 restores the completed-scene receiver.
+static bool     g_localLightGroundOnly    = true;
+// Creature receivers use a second local map containing only non-creature
+// casters. This keeps character self-shadows and creature-to-creature shadows
+// out while placeables, doors, moving trees, and other objects still cast onto
+// creatures. The common map remains unchanged so creatures still cast onto
+// floors and scenery. Opting in restores the common map on creature receivers.
+static bool     g_localCharacterShadows   = false;
+// Published only after the pre-dynamic fullscreen draw actually succeeds. The
+// completed-scene receiver uses this both as its dynamic-only mask gate and to
+// fall back automatically when NWN did not present the expected bucket.
+static unsigned g_localGroundPrepassFrame = 0;
 // Emitter lights (flames, glowing water, spell effects) do not cast shadows.
 // They are numerous and short-lived, and each one in the shadow set costs a
 // full depth capture per frame. They still light the scene.
@@ -721,6 +742,8 @@ static bool     g_fogFromEngine          = false;
 static float    g_fogStartEngine         = 0.0f;
 static float    g_fogEndEngine           = 0.0f;
 static bool     g_haveEngineFog          = false;
+static float    g_fogColorEngine[3]      = {0.62f, 0.68f, 0.72f};
+static bool     g_haveEngineFogColor     = false;
 // THE dominant cost, measured 2026-08-10. The full-BSP submission injects every
 // static part in the area into NWN's OWN mesh buckets with camera culling
 // bypassed, so the ENGINE draws ~24,000 objects per frame instead of ~2,000.
@@ -918,6 +941,7 @@ static bool     g_cascadeReplayActive    = false;  // true only inside one repla
 // -- 16 extra whole-bucket renders per frame, which is exactly how the
 // local-light probe launcher ended up as slow as the pre-optimisation path.
 static bool     g_localLightPassActive   = false;
+static bool     g_localObjectCaptureActive = false;
 // REAL draw counts for the local-light capture, per bucket. The existing
 // g_localLightCaptureDraws counts BUCKETS THAT RETURNED TRUE (max 4), which is
 // not evidence that anything was rendered -- it reported "draws=4" for a map
@@ -970,6 +994,19 @@ static double now_seconds();
 // Composite-only policy fade.  It never invalidates or blends depth maps, so
 // sunset/sunrise can be pleasant without reviving dynamic-area-light rebuilds.
 static float    g_areaShadowFadeSeconds   = 0.75f;
+// The godrays prototype stays compiled for shader/build coverage, but is
+// deliberately unavailable until its dedicated work resumes. This single
+// gate is checked by the renderer and the panel; settings and environment
+// parsing are also kept behind it so stale configuration cannot revive it.
+static constexpr bool kGodraysFeatureAvailable = false;
+static bool     g_godraysEnabled           = false;
+static float    g_godraysStrength          = 0.55f;
+static int      g_godraysSamples           = 24;
+static int      g_godraysResolution        = 0;
+static float    g_atmosphereDensity        = 0.32f;
+// Development-only output ladder. Zero is the normal effect; non-zero modes
+// make an otherwise invisible early return or wrong sun vector diagnosable.
+static int      g_godraysDebug             = 0;
 static float    g_areaShadowFadeFrom      = 1.0f;
 static float    g_areaShadowFadeTo        = 1.0f;
 static double   g_areaShadowFadeStart     = 0.0;
@@ -1477,6 +1514,7 @@ static bool resolve_symbols() {
 
 #include "shadow_targets.inc"
 #include "shadow_diagnostics_settings.inc"
+static void restore_engine_program(GLuint program);
 #include "shadow_replay.inc"
 // ===========================================================================
 //  Phase 1: bind, clear, restore. Proves the target stays healthy every frame.
@@ -1607,6 +1645,10 @@ static subhook_t g_hookTraceManageSceneBSP = nullptr;
 static subhook_t g_hookTraceSceneSingle = nullptr;
 static subhook_t g_hookTraceSceneDynamic = nullptr;
 static subhook_t g_hookTraceBucket = nullptr;
+#ifdef _WIN32
+static subhook_t g_hookDrawBucketFirst = nullptr;
+#endif
+static subhook_t g_hookDrawBucketNext = nullptr;
 static subhook_t g_hookTracePrioritizeShadow = nullptr;
 static subhook_t g_hookTraceGetShadowLights = nullptr;
 static subhook_t g_hookSetLightGL           = nullptr;
@@ -1631,6 +1673,22 @@ static eng::MaterialDestroy_t g_materialDestroyTrampoline = nullptr;
 static eng::SharedMaterialDestroy_t g_sharedMaterialDestroyTrampoline = nullptr;
 #endif
 static eng::SharedMaterialParseField_t g_sharedMaterialParseTrampoline = nullptr;
+
+// Engine object ownership for the DrawItem currently being rendered. NWN
+// stores the originating CGameObject type in each model Gob's external-data
+// type. DrawBucketManager exposes the Part immediately before its draw, so the
+// renderer can retain this authoritative creature/placeable distinction even
+// for rigid, part-based creature appearances.
+enum class DrawOwnerKind : uint8_t { Unknown, Creature, NonCreature };
+static DrawOwnerKind g_currentDrawOwnerKind = DrawOwnerKind::Unknown;
+static const void* g_currentDrawOwner = nullptr;
+static uint64_t g_drawOwnerCreatureItems = 0;
+static uint64_t g_drawOwnerNonCreatureItems = 0;
+static uint64_t g_drawOwnerUnknownItems = 0;
+
+static bool current_draw_is_creature() {
+    return g_currentDrawOwnerKind == DrawOwnerKind::Creature;
+}
 
 static int material_hook_stage() {
 #ifdef _WIN32
@@ -2132,6 +2190,7 @@ static bool set_light_view_direct(const Vec3f& eye, const float dir[3]) {
 #include "weather_runtime.inc"
 #include "shadow_shader_interposition.inc"
 #include "shadow_fullscreen_receiver.inc"
+#include "godrays_runtime.inc"
 #include "shadow_overlay_runtime.inc"
 #include "shadow_trace_cascade.inc"
 #include "shadow_local_lights.inc"
@@ -2159,6 +2218,7 @@ struct A2cShadowLocations {
     GLint localRadius = -1, localFade = -1, localSlots = -1;
     GLint localStrength = -1, localBias = -1, localEdgeFade = -1;
     GLint localSoft = -1, localNormalBias = -1, localMinSep = -1;
+    GLint localContactSep = -1;
     GLint localTanHalfFov = -1, localLift = -1, localFalloff = -1;
     GLint lampFalloff = -1;
 };
@@ -2207,6 +2267,7 @@ A2cShadowLocations* a2c_shadow_locations(GLuint program) {
     l.localSoft     = gl::GetUniformLocation(program, "nwnA2cLocalSoft");
     l.localNormalBias = gl::GetUniformLocation(program, "nwnA2cLocalNormalBias");
     l.localMinSep   = gl::GetUniformLocation(program, "nwnA2cLocalMinSep");
+    l.localContactSep = gl::GetUniformLocation(program, "nwnA2cLocalContactSep");
     l.localTanHalfFov = gl::GetUniformLocation(program, "nwnA2cLocalTanHalfFov");
     l.localLift     = gl::GetUniformLocation(program, "nwnA2cLocalLift");
     l.localFalloff  = gl::GetUniformLocation(program, "nwnA2cLocalFalloff");
@@ -2252,7 +2313,11 @@ bool nwn_shadow_begin_a2c_receiver(unsigned int rawProgram) {
     gl::BindTexture(GL_TEXTURE_2D_ARRAY, g_cascadeDynamicTex);
     gl::ActiveTexture(GL_TEXTURE0 + kLocalUnit);
     gl::GetIntegerv(GL_TEXTURE_BINDING_2D_ARRAY, &g_a2cShadowOldLocal);
-    const bool localReady = g_localLightReceiver && g_localLightTargetUsable &&
+    // Ground-only mode composites this term once after the alpha bucket and
+    // before characters. Applying it directly in A2C as well would darken the
+    // same resolved surface twice.
+    const bool localReady = !g_localLightGroundOnly &&
+                            g_localLightReceiver && g_localLightTargetUsable &&
                             g_localLightDepthTex && g_haveLocalLightVP &&
                             g_localDeselectFadeShown > 0.0005f;
     gl::BindTexture(GL_TEXTURE_2D_ARRAY, localReady ? g_localLightDepthTex
@@ -2377,6 +2442,7 @@ bool nwn_shadow_begin_a2c_receiver(unsigned int rawProgram) {
     if (l->localSoft >= 0) gl::Uniform1f(l->localSoft, g_localLightSoft);
     if (l->localNormalBias >= 0) gl::Uniform1f(l->localNormalBias, g_localLightNormalBias);
     if (l->localMinSep >= 0) gl::Uniform1f(l->localMinSep, g_localLightMinSep);
+    if (l->localContactSep >= 0) gl::Uniform1f(l->localContactSep, g_localLightContactSep);
     if (l->localTanHalfFov >= 0) gl::Uniform1f(l->localTanHalfFov,
         (float)std::tan(local_face_fov_deg(local_source_faces()) * 3.14159265f / 360.0f));
     if (l->localLift >= 0) gl::Uniform1f(l->localLift, g_localLightHeight);
@@ -2551,6 +2617,8 @@ extern "C" void SceneRender_detour(void* self) {
         }
         const double tRecv0 = now_seconds();
         draw_static_receiver(self);
+        if constexpr (kGodraysFeatureAvailable)
+            draw_godrays(self);
         // glFinish so the number is the GPU's cost, not just submission time --
         // otherwise a fill-rate bound pass measures as ~0 ms and misleads.
         if ((g_receiverDebug || reportFrame) && gl::Finish) gl::Finish();
@@ -2957,6 +3025,17 @@ static void shadowmap_init() {
         if (std::isfinite(v) && v >= 0.0f && v <= 0.05f) g_localLightBias = v;
         else fprintf(stderr,"[shadowmap][local-light] ignoring NWN_SHADOWMAP_LOCAL_LIGHT_BIAS=%s\n", s);
     }
+    if (const char* s = shadow_getenv("NWN_SHADOWMAP_LOCAL_CONTACT_SEP")) {
+        float v = (float)atof(s);
+        if (std::isfinite(v) && v >= 0.0f && v <= 0.25f) g_localLightContactSep = v;
+        else fprintf(stderr,"[shadowmap][local-light] ignoring NWN_SHADOWMAP_LOCAL_CONTACT_SEP=%s\n", s);
+    }
+    if (const char* s = shadow_getenv("NWN_SHADOWMAP_LOCAL_GROUND_ONLY"))
+        g_localLightGroundOnly = (atoi(s) != 0);
+    if (const char* s = shadow_getenv("NWN_SHADOWMAP_LOCAL_CHARACTER_SHADOWS"))
+        g_localCharacterShadows = (atoi(s) != 0);
+    if (const char* s = shadow_getenv("NWN_SHADOWMAP_LOCAL_BACKFACE_CAST"))
+        g_localLightCullFront = (atoi(s) != 0);
     g_traceRelaxAreaViewport =
         shadow_getenv("NWN_SHADOWMAP_TRACE_RELAX_AREA_VIEWPORT") != nullptr;
     g_casterCullTrace = shadow_getenv("NWN_SHADOWMAP_CASTER_CULL_TRACE") != nullptr;
@@ -3109,6 +3188,39 @@ static void shadowmap_init() {
         const float v = strtof(s, nullptr);
         if (std::isfinite(v) && v >= 0.0f && v <= 10.0f) g_areaShadowFadeSeconds = v;
         else fprintf(stderr, "[shadowmap][area] ignoring NWN_SHADOWMAP_AREA_SHADOW_FADE=%s (expected 0..10 seconds)\n", s);
+    }
+    if constexpr (kGodraysFeatureAvailable) {
+        if (const char* s = shadow_getenv("NWN_SHADOWMAP_GODRAYS"))
+            g_godraysEnabled = (atoi(s) != 0);
+        if (const char* s = shadow_getenv("NWN_SHADOWMAP_GODRAYS_STRENGTH")) {
+            const float v = strtof(s, nullptr);
+            if (std::isfinite(v) && v >= 0.0f && v <= 2.0f) g_godraysStrength = v;
+            else fprintf(stderr, "[shadowmap][godrays] ignoring NWN_SHADOWMAP_GODRAYS_STRENGTH=%s (expected 0..2)\n", s);
+        }
+        if (const char* s = shadow_getenv("NWN_SHADOWMAP_GODRAYS_SAMPLES")) {
+            const int v = atoi(s);
+            if (v >= 8 && v <= 64) g_godraysSamples = v;
+            else fprintf(stderr, "[shadowmap][godrays] ignoring NWN_SHADOWMAP_GODRAYS_SAMPLES=%s (expected 8..64)\n", s);
+        }
+        if (const char* s = shadow_getenv("NWN_SHADOWMAP_GODRAYS_RESOLUTION")) {
+            const int v = atoi(s);
+            if (v >= 0 && v <= 2) g_godraysResolution = v;
+            else fprintf(stderr, "[shadowmap][godrays] ignoring NWN_SHADOWMAP_GODRAYS_RESOLUTION=%s (expected 0=quarter, 1=half, or 2=full)\n", s);
+        }
+        const char* atmosphereDensity = shadow_getenv("NWN_SHADOWMAP_ATMOSPHERE_DENSITY");
+        if (!atmosphereDensity)
+            atmosphereDensity = shadow_getenv("NWN_SHADOWMAP_GODRAYS_CLEAR_DENSITY");
+        if (const char* s = atmosphereDensity) {
+            const float v = strtof(s, nullptr);
+            if (std::isfinite(v) && v >= 0.0f && v <= 1.0f)
+                g_atmosphereDensity = v;
+            else fprintf(stderr, "[shadowmap][godrays] ignoring atmosphere density %s (expected 0..1)\n", s);
+        }
+        if (const char* s = shadow_getenv("NWN_SHADOWMAP_GODRAYS_DEBUG")) {
+            const int v = atoi(s);
+            if (v >= 0 && v <= 4) g_godraysDebug = v;
+            else fprintf(stderr, "[shadowmap][godrays] ignoring NWN_SHADOWMAP_GODRAYS_DEBUG=%s (expected 0..4)\n", s);
+        }
     }
     if (const char* s = shadow_getenv("NWN_SHADOWMAP_CSM_STRENGTH")) {
         const float v = strtof(s, nullptr);
@@ -3865,7 +3977,14 @@ static void shadowmap_init() {
     }
 
     const bool oitNeedsBucketHook = nwn_oit_needs_bucket_hook();
-    if (g_traceEnabled || oitNeedsBucketHook) {
+    const bool drawOwnerNeedsBucketHook =
+        (g_localLightCapture || g_localLightReceiver) &&
+        eng::DrawBucketGetNextItem &&
+#ifdef _WIN32
+        eng::DrawBucketGetFirstItem &&
+#endif
+        eng::PartGetAurObject && eng::GobGetExternalDataType;
+    if (g_traceEnabled || oitNeedsBucketHook || drawOwnerNeedsBucketHook) {
         auto install_trace = [](subhook_t& slot, void* target, void* detour,
                                 const char* name) {
             if (!target) {
@@ -3923,6 +4042,65 @@ static void shadowmap_init() {
         // turn on the shadow trace, targets, replay, or shader diagnostics.
         install_trace(g_hookTraceBucket, (void*)eng::SceneRenderDrawBucket,
                       (void*)SceneRenderDrawBucket_trace_detour, "Scene::RenderDrawBucket");
+        if (drawOwnerNeedsBucketHook) {
+#ifdef _WIN32
+            install_trace(g_hookDrawBucketFirst, (void*)eng::DrawBucketGetFirstItem,
+                          (void*)DrawBucketGetFirstItem_detour,
+                          "DrawBucketManager::GetFirstItem");
+#endif
+#ifdef _WIN32
+            // GetNextItem's short Windows leaf body does not yield a Subhook
+            // trampoline. Its detour contains the verified v89 accessor logic
+            // directly, so this hook neither needs a trampoline nor uses the
+            // unsafe remove/call/reinstall fallback.
+            g_hookDrawBucketNext = subhook_new(
+                (void*)eng::DrawBucketGetNextItem,
+                (void*)DrawBucketGetNextItem_detour, SUBHOOK_64BIT_OFFSET);
+            if (!g_hookDrawBucketNext || subhook_install(g_hookDrawBucketNext) != 0) {
+                fprintf(stderr,
+                        "[shadowmap][trace] WARNING: hook failed: "
+                        "DrawBucketManager::GetNextItem replacement\n");
+                if (g_hookDrawBucketNext) {
+                    subhook_free(g_hookDrawBucketNext);
+                    g_hookDrawBucketNext = nullptr;
+                }
+            } else {
+                fprintf(stderr,
+                        "[shadowmap][trace] hooked DrawBucketManager::GetNextItem "
+                        "(verified Windows replacement; trampoline not required)\n");
+            }
+#else
+            install_trace(g_hookDrawBucketNext, (void*)eng::DrawBucketGetNextItem,
+                          (void*)DrawBucketGetNextItem_detour,
+                          "DrawBucketManager::GetNextItem");
+#endif
+#ifdef _WIN32
+            // Windows GetFirstItem does not route through GetNextItem. Both
+            // hooks are mandatory: a partial installation would leave the
+            // previous item's ownership live for unobserved draws.
+            if (!g_hookDrawBucketFirst || !g_hookDrawBucketNext) {
+                if (g_hookDrawBucketFirst) {
+                    subhook_remove(g_hookDrawBucketFirst);
+                    subhook_free(g_hookDrawBucketFirst);
+                    g_hookDrawBucketFirst = nullptr;
+                }
+                if (g_hookDrawBucketNext) {
+                    subhook_remove(g_hookDrawBucketNext);
+                    subhook_free(g_hookDrawBucketNext);
+                    g_hookDrawBucketNext = nullptr;
+                }
+                fprintf(stderr,
+                        "[shadowmap][local-light] Windows draw classifier unavailable; "
+                        "creature-to-creature filtering will fail open\n");
+            } else
+#endif
+            fprintf(stderr,
+                    "[shadowmap][local-light] engine object-type draw classifier installed\n");
+        } else if (g_localLightCapture || g_localLightReceiver) {
+            fprintf(stderr,
+                    "[shadowmap][local-light] engine object-type draw classifier unavailable; "
+                    "creature-to-creature filtering will fail open\n");
+        }
         if (g_traceEnabled) {
             install_trace(g_hookTracePrioritizeShadow, (void*)eng::LightPrioritizeShadow,
                           (void*)LightPrioritizeShadow_trace_detour, "LightManager::PrioritizeShadow");
@@ -4084,6 +4262,10 @@ static void shadowmap_fini() {
     if (g_hookTraceManageSceneBSP) { subhook_remove(g_hookTraceManageSceneBSP); subhook_free(g_hookTraceManageSceneBSP); }
     if (g_hookTraceGetShadowLights) { subhook_remove(g_hookTraceGetShadowLights); subhook_free(g_hookTraceGetShadowLights); }
     if (g_hookTracePrioritizeShadow) { subhook_remove(g_hookTracePrioritizeShadow); subhook_free(g_hookTracePrioritizeShadow); }
+    if (g_hookDrawBucketNext) { subhook_remove(g_hookDrawBucketNext); subhook_free(g_hookDrawBucketNext); }
+#ifdef _WIN32
+    if (g_hookDrawBucketFirst) { subhook_remove(g_hookDrawBucketFirst); subhook_free(g_hookDrawBucketFirst); }
+#endif
     if (g_hookTraceBucket) { subhook_remove(g_hookTraceBucket); subhook_free(g_hookTraceBucket); }
     if (g_hookTraceSceneDynamic) { subhook_remove(g_hookTraceSceneDynamic); subhook_free(g_hookTraceSceneDynamic); }
     if (g_hookTraceSceneSingle) { subhook_remove(g_hookTraceSceneSingle); subhook_free(g_hookTraceSceneSingle); }

@@ -18,11 +18,18 @@
 // next frame with no plumbing: the receiver reads these globals each time it
 // uploads uniforms. Any pointer may be null.
 struct NwnOverlayState {
+    bool   godraysAvailable = false;
     float* csmStrength   = nullptr;
     float* csmBias       = nullptr;
     float* csmBlend      = nullptr;
     float* csmPcf        = nullptr;
     float* areaShadowFadeSeconds = nullptr;
+    bool*  godraysEnabled  = nullptr;
+    float* godraysStrength = nullptr;
+    int*   godraysSamples  = nullptr;
+    int*   godraysResolution = nullptr;
+    float* atmosphereDensity = nullptr;
+    int*   godraysDebug    = nullptr;
     bool*  csmComposite  = nullptr;
     bool*  localEnabled  = nullptr;
     float* localStrength = nullptr;
@@ -41,6 +48,10 @@ struct NwnOverlayState {
     float* localNormalBias= nullptr;  // normal-offset bias in texels
     bool*  localAlphaCast = nullptr;  // let dithered alpha cards cast
     float* localMinSep    = nullptr;  // world units a caster must be nearer to shadow
+    float* localContactSep= nullptr;  // smaller separation retained on floor contact
+    bool*  localGroundOnly = nullptr; // receive local shadows before characters draw
+    bool*  localBackfaceCast = nullptr; // back-face depth for closed character casters
+    bool*  localCharacterShadows = nullptr; // creature casters shadow creature receivers
     bool*  localEmitCast  = nullptr;  // emitter lights may take caster slots
     bool*  dynamicCasters = nullptr;  // "Moving casters": replay the dynamic buckets
     bool*  staticCasters  = nullptr;  // "Fixed casters": replay the static buckets

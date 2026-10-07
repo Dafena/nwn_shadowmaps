@@ -657,6 +657,142 @@ extern "C" void SceneRenderDynamicGeometry_detour(void* self) {
     }
 }
 
+// CGameObject's exported one-byte constants are 5 for creatures and 9 for
+// placeables in the Linux reference executable. Gob::InheritExternal copies
+// both external-data fields to attached models, so heads, weapons, and rigid
+// body-part Gobs retain the same owner type as the creature root.
+static constexpr int kEngineObjectTypeCreature = 5;
+static constexpr int kEngineObjectTypePlaceable = 9;
+
+static void classify_current_draw_item(const void* drawItem) {
+    g_currentDrawOwnerKind = DrawOwnerKind::Unknown;
+    g_currentDrawOwner = nullptr;
+    if (!drawItem || !eng::PartGetAurObject || !eng::GobGetExternalDataType) {
+        ++g_drawOwnerUnknownItems;
+        return;
+    }
+
+    // DrawBucketManager::GetFirstItem/GetNextItem return `DrawItem const*`.
+    // RenderDrawBucket immediately dereferences its first field as Part* before
+    // invoking Part::AsPartTriMesh(), which establishes this field without
+    // decoding the rest of DrawItem.
+    void* part = nullptr;
+    std::memcpy(&part, drawItem, sizeof(part));
+    if (!part) {
+        ++g_drawOwnerUnknownItems;
+        return;
+    }
+    void* aurObject = eng::PartGetAurObject(part);
+    if (!aurObject) {
+        ++g_drawOwnerUnknownItems;
+        return;
+    }
+    const int objectType = eng::GobGetExternalDataType(aurObject);
+    if (objectType == kEngineObjectTypeCreature) {
+        g_currentDrawOwnerKind = DrawOwnerKind::Creature;
+        // Gob::InheritExternal copies this pointer to heads, weapons, and
+        // rigid body parts, so every draw belonging to one creature shares an
+        // exact identity even when the appearance is not a skinmesh.
+        if (eng::GobGetExternalData)
+            g_currentDrawOwner = eng::GobGetExternalData(aurObject);
+        ++g_drawOwnerCreatureItems;
+        static bool reported = false;
+        if (!reported) {
+            reported = true;
+            fprintf(stderr,
+                    "[shadowmap][local-light] engine creature draw classification active "
+                    "(includes rigid part-based appearances)\n");
+        }
+        return;
+    }
+
+    // Zero is the normal value for renderer-owned world geometry. It is still
+    // non-creature for the filter, but keep the diagnostic counter separate
+    // from positively game-object-classified Parts.
+    g_currentDrawOwnerKind = DrawOwnerKind::NonCreature;
+    if (objectType > 0) {
+        ++g_drawOwnerNonCreatureItems;
+        if (objectType == kEngineObjectTypePlaceable) {
+            static bool reportedPlaceable = false;
+            if (!reportedPlaceable) {
+                reportedPlaceable = true;
+                fprintf(stderr,
+                        "[shadowmap][local-light] engine placeable draw classification "
+                        "active (remains a creature-shadow caster)\n");
+            }
+        }
+    } else {
+        ++g_drawOwnerUnknownItems;
+    }
+}
+
+static const void* call_draw_bucket_item_original(subhook_t hook,
+                                                   eng::DrawBucketGetItem_t fn,
+                                                   void* self, int bucket,
+                                                   int ordering) {
+    if (!fn) return nullptr;
+    if (hook) {
+        if (void* trampoline = subhook_get_trampoline(hook))
+            return reinterpret_cast<eng::DrawBucketGetItem_t>(trampoline)(
+                self, bucket, ordering);
+        subhook_remove(hook);
+        const void* result = fn(self, bucket, ordering);
+        subhook_install(hook);
+        return result;
+    }
+    return fn(self, bucket, ordering);
+}
+
+#ifdef _WIN32
+extern "C" const void* DrawBucketGetFirstItem_detour(void* self, int bucket,
+                                                       int ordering) {
+    const void* item = call_draw_bucket_item_original(
+        g_hookDrawBucketFirst, eng::DrawBucketGetFirstItem,
+        self, bucket, ordering);
+    classify_current_draw_item(item);
+    return item;
+}
+#endif
+
+extern "C" const void* DrawBucketGetNextItem_detour(void* self, int bucket,
+                                                      int ordering) {
+#ifdef _WIN32
+    // v89.8193.37-17's exported GetNextItem is a short leaf routine for which
+    // Subhook cannot construct a safe trampoline. Reproduce that routine's
+    // measured Windows layout instead of temporarily unpatching live render
+    // code: DrawBucket[3 * bucket + ordering] is 16 bytes, its list pointer is
+    // at +0, count at +8, and the manager cursor is at +0x308. DrawItem is one
+    // pointer (8 bytes). The engine's end sentinel is likewise a null DrawItem.
+    static void* endItem = nullptr;
+    if (!self) {
+        classify_current_draw_item(&endItem);
+        return &endItem;
+    }
+    unsigned char* manager = static_cast<unsigned char*>(self);
+    const ptrdiff_t drawBucketIndex =
+        static_cast<ptrdiff_t>(bucket) * 3 + static_cast<ptrdiff_t>(ordering);
+    unsigned char* drawBucket = manager + drawBucketIndex * 16;
+    int cursor = 0;
+    int count = 0;
+    std::memcpy(&cursor, manager + 0x308, sizeof(cursor));
+    std::memcpy(&count, drawBucket + 8, sizeof(count));
+    const void* item = &endItem;
+    if (cursor < count) {
+        const int nextCursor = cursor + 1;
+        std::memcpy(manager + 0x308, &nextCursor, sizeof(nextCursor));
+        const unsigned char* items = nullptr;
+        std::memcpy(&items, drawBucket, sizeof(items));
+        if (items) item = items + static_cast<ptrdiff_t>(cursor) * 8;
+    }
+#else
+    const void* item = call_draw_bucket_item_original(
+        g_hookDrawBucketNext, eng::DrawBucketGetNextItem,
+        self, bucket, ordering);
+#endif
+    classify_current_draw_item(item);
+    return item;
+}
+
 extern "C" void SceneRenderDrawBucket_trace_detour(void* self, int bucket) {
     // CRITICAL: any injector pass that drives geometry through
     // guarded_render_bucket() calls eng::SceneRenderDrawBucket(), which is
@@ -672,7 +808,11 @@ extern "C" void SceneRenderDrawBucket_trace_detour(void* self, int bucket) {
     // Neither re-entrant call needs anything below: the light transform is
     // applied by the caller through the matrix stack. Just draw and return.
     if (g_cascadeReplayActive || g_localLightPassActive) {
+        g_currentDrawOwnerKind = DrawOwnerKind::Unknown;
+        g_currentDrawOwner = nullptr;
         CALL_ORIGINAL(g_hookTraceBucket, eng::SceneRenderDrawBucket, self, bucket);
+        g_currentDrawOwnerKind = DrawOwnerKind::Unknown;
+        g_currentDrawOwner = nullptr;
         return;
     }
     const bool census = g_cascadeGeometryTrace && self == g_traceCurrentScene &&
@@ -754,9 +894,27 @@ extern "C" void SceneRenderDrawBucket_trace_detour(void* self, int bucket) {
     // Area scene only: UI/portrait scenes render buckets too, and attributing
     // their draws to an area bucket index would be worse than reporting none.
     const int priorBucket = nwn_core::g_currentBucket;
+    // Contact-shadow receiver ordering: at the entrance to the dynamic bucket,
+    // the camera depth buffer contains the floor, scenery, and alpha cards but
+    // not the character bodies. Composite the previous complete local-map
+    // generation now. Characters remain casters when this bucket is replayed
+    // below, but cannot receive their own shadow, while the floor shadow can
+    // still extend all the way to their feet.
+    if (g_localLightGroundOnly && self == g_areaScene &&
+        bucket == g_cascadeDynamicBucket && g_shadowFrameContext.valid) {
+        static unsigned attemptedFrame = ~0u;
+        if (attemptedFrame != g_shadowFrameContext.serial) {
+            attemptedFrame = g_shadowFrameContext.serial;
+            draw_static_receiver(self, true);
+        }
+    }
     if (self == g_areaScene) nwn_core::g_currentBucket = bucket;
     if (self == g_areaScene) nwn_oit_bucket_begin(self, bucket);
+    g_currentDrawOwnerKind = DrawOwnerKind::Unknown;
+    g_currentDrawOwner = nullptr;
     CALL_ORIGINAL(g_hookTraceBucket, eng::SceneRenderDrawBucket, self, bucket);
+    g_currentDrawOwnerKind = DrawOwnerKind::Unknown;
+    g_currentDrawOwner = nullptr;
     nwn_core::g_currentBucket = priorBucket;
     g_cascadeCameraCaptureActive = false;
     g_cascadeLightCaptureActive = false;

@@ -87,7 +87,7 @@ static constexpr unsigned kSettingsMax = 64;
 // too. On an older file the keys listed in settings_retuned() are ignored and
 // the file is rewritten at the new version; everything else the user set is
 // preserved.
-static constexpr int kSettingsVersion = 8;
+static constexpr int kSettingsVersion = 16;
 
 // Keys whose defaults changed in a local-light tuning pass.  Version 5 also
 // makes these controls live on the cube receiver; reset the old 1-unit
@@ -100,6 +100,18 @@ static constexpr int kSettingsVersion = 8;
 // reach them; the compiled-in default IS the shipped behaviour, and a stale
 // file must not be allowed to pin the old one.
 static bool settings_retuned(const char* key) {
+    // Version 15 adopts the PS4/GNM point-shadow capture bias.  Do not let a
+    // saved 1.8 factor override the reference factor=3 default.
+    if (std::strcmp(key, "local_slope") == 0) return true;
+    if (std::strcmp(key, "local_character_shadows") == 0) return true;
+    if (std::strcmp(key, "local_min_sep") == 0) return true;
+    if (std::strcmp(key, "local_contact_sep") == 0) return true;
+    if (std::strcmp(key, "local_backface_cast") == 0) return true;
+    if (std::strcmp(key, "local_ground_only") == 0) return true;
+    static const char* kV10[] = { "godrays_debug" };
+    for (const char* k : kV10) if (std::strcmp(k, key) == 0) return true;
+    static const char* kV9[] = { "godrays_enabled", "godrays_strength", "godrays_samples" };
+    for (const char* k : kV9) if (std::strcmp(k, key) == 0) return true;
     // Version 8 replaces the old five-rung experimental cadence index with a
     // stable three-rung product control.  Old numeric indices do not preserve
     // their meaning, so migrate them to the new Low default.
@@ -168,6 +180,14 @@ static unsigned settings_table(SettingRef* out, unsigned max) {
     addi("local_cube_sources", &g_localCubeSourceBudget);
     addf("selfillum_guard",    &g_liftThreshold);          // "Bright surfaces keep light"
     addb("lamp_lift",          &g_lampLiftEnabled);        // "Lights lift sun shadow"
+    addb("local_character_shadows", &g_localCharacterShadows);
+    if constexpr (kGodraysFeatureAvailable) {
+        addb("godrays_enabled",    &g_godraysEnabled);
+        addf("godrays_strength",   &g_godraysStrength);
+        addi("godrays_samples",    &g_godraysSamples);
+        addi("godrays_resolution", &g_godraysResolution);
+        addf("atmosphere_density", &g_atmosphereDensity);
+    }
 
 #if !NWN_SHIP
     // --- DEV BUILD ONLY: everything a SHIPPING panel HIDES ---------------------
@@ -194,6 +214,8 @@ static unsigned settings_table(SettingRef* out, unsigned max) {
     addb("dynamic_casters",    &g_dynamicCastersEnabled);  // "Moving casters"
     addb("static_casters",     &g_staticCastersEnabled);   // "Fixed casters"
     addb("receiver_enabled",   &g_receiverEnabled);        // "Sun shadows" master
+    if constexpr (kGodraysFeatureAvailable)
+        addi("godrays_debug",  &g_godraysDebug);
     addf("csm_strength",       &g_cascadeCompositeStrength);
     addf("csm_bias",           &g_cascadeReceiverBias);
     addf("csm_blend",          &g_cascadeBlendWidth);
@@ -217,6 +239,9 @@ static unsigned settings_table(SettingRef* out, unsigned max) {
     addf("local_normal_bias",  &g_localLightNormalBias);
     addb("local_alpha_cast",   &g_localLightAlphaCasters);
     addf("local_min_sep",      &g_localLightMinSep);
+    addf("local_contact_sep",  &g_localLightContactSep);
+    addb("local_ground_only",  &g_localLightGroundOnly);
+    addb("local_backface_cast",&g_localLightCullFront);
     addb("local_dyn_only",     &g_localLightDynamicOnly);
 #endif
     // TRIPWIRE: if the list outgrows the callers' array this fires at startup
@@ -254,6 +279,12 @@ static void settings_reset_defaults() {
     g_localLightReceiver       = false;  // opt-in on the development build
 #endif
     g_areaShadowFadeSeconds    = 0.75f;
+    g_godraysEnabled           = false;
+    g_godraysStrength          = 0.55f;
+    g_godraysSamples           = 24;
+    g_godraysResolution        = 0;
+    g_atmosphereDensity        = 0.32f;
+    g_godraysDebug             = 0;
     g_localLightStrength       = 0.77f;
     g_localLightBias           = 0.0f;
     g_localLightLift           = 1.0f;
@@ -265,7 +296,11 @@ static void settings_reset_defaults() {
     g_localLightSlopeBias      = 1.8f;
     g_localLightNormalBias     = 0.0f;
     g_localLightAlphaCasters   = false;
-    g_localLightMinSep         = 0.30f;
+    g_localLightMinSep         = 0.0f;
+    g_localLightContactSep     = 0.0f;
+    g_localLightGroundOnly     = true;
+    g_localLightCullFront      = false;
+    g_localCharacterShadows    = false;
     g_localLightEmittersCast   = true;
     g_pendingLocalSize         = 1024;  // Low -- the bottom of the panel's ladder
     g_localLightDynamicOnly    = true;

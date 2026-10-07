@@ -107,8 +107,15 @@ static bool guarded_render_bucket(void* scene, int bucket) {
 //  Target bind / restore
 // ===========================================================================
 struct SavedState {
-    GLint     fbo = 0, vp[4] = {0,0,0,0};
+    GLint     fbo = 0, readFbo = 0, vp[4] = {0,0,0,0};
+    GLint     program = 0, activeTexture = GL_TEXTURE0;
+    GLint     activeTex2D = 0, activeTexArray = 0;
+    GLint     depthFunc = GL_LESS, cullMode = GL_BACK;
+    GLint     blendSrcRGB = GL_ONE, blendDstRGB = GL_ZERO;
+    GLint     blendSrcAlpha = GL_ONE, blendDstAlpha = GL_ZERO;
+    GLint     blendEquationRGB = GL_FUNC_ADD, blendEquationAlpha = GL_FUNC_ADD;
     GLboolean depthMask = GL_TRUE, scissor = GL_FALSE, depthTest = GL_TRUE;
+    GLboolean blend = GL_FALSE, cull = GL_FALSE, alphaToCoverage = GL_FALSE;
     GLboolean colorMask[4] = {GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE};
     // Polygon offset, saved because the local fill turns it on (see
     // apply_local_slope_offset) and the engine's own passes must not inherit it.
@@ -116,26 +123,42 @@ struct SavedState {
     GLfloat   polyFactor = 0.0f, polyUnits = 0.0f;
 };
 
+static void save_state(SavedState& st) {
+    gl::GetIntegerv(GL_DRAW_FRAMEBUFFER_BINDING, &st.fbo);
+    gl::GetIntegerv(GL_READ_FRAMEBUFFER_BINDING, &st.readFbo);
+    gl::GetIntegerv(GL_VIEWPORT, st.vp);
+    gl::GetIntegerv(GL_CURRENT_PROGRAM, &st.program);
+    gl::GetIntegerv(GL_ACTIVE_TEXTURE, &st.activeTexture);
+    gl::GetIntegerv(GL_TEXTURE_BINDING_2D, &st.activeTex2D);
+    gl::GetIntegerv(GL_TEXTURE_BINDING_2D_ARRAY, &st.activeTexArray);
+    gl::GetIntegerv(GL_DEPTH_FUNC, &st.depthFunc);
+    gl::GetIntegerv(GL_CULL_FACE_MODE, &st.cullMode);
+    gl::GetIntegerv(GL_BLEND_SRC_RGB, &st.blendSrcRGB);
+    gl::GetIntegerv(GL_BLEND_DST_RGB, &st.blendDstRGB);
+    gl::GetIntegerv(GL_BLEND_SRC_ALPHA, &st.blendSrcAlpha);
+    gl::GetIntegerv(GL_BLEND_DST_ALPHA, &st.blendDstAlpha);
+    gl::GetIntegerv(GL_BLEND_EQUATION_RGB, &st.blendEquationRGB);
+    gl::GetIntegerv(GL_BLEND_EQUATION_ALPHA, &st.blendEquationAlpha);
+    gl::GetBooleanv(GL_DEPTH_WRITEMASK, &st.depthMask);
+    gl::GetBooleanv(GL_COLOR_WRITEMASK, st.colorMask);
+    st.scissor = gl::IsEnabled(GL_SCISSOR_TEST);
+    st.depthTest = gl::IsEnabled(GL_DEPTH_TEST);
+    st.blend = gl::IsEnabled(GL_BLEND);
+    st.cull = gl::IsEnabled(GL_CULL_FACE);
+    st.alphaToCoverage = gl::IsEnabled(GL_SAMPLE_ALPHA_TO_COVERAGE);
+    if (gl::PolygonOffset && gl::GetFloatv) {
+        st.polyOffset = gl::IsEnabled(GL_POLYGON_OFFSET_FILL);
+        gl::GetFloatv(GL_POLYGON_OFFSET_FACTOR, &st.polyFactor);
+        gl::GetFloatv(GL_POLYGON_OFFSET_UNITS, &st.polyUnits);
+    }
+}
+
 // forceDepth: also enable GL_DEPTH_TEST. The probe needs it -- if the engine
 // left depth testing off, geometry would draw but write no depth and the
 // target would look empty for entirely the wrong reason.
 static SavedState bind_target(bool forceDepth) {
     SavedState st;
-    gl::GetIntegerv(GL_FRAMEBUFFER_BINDING, &st.fbo);
-    gl::GetIntegerv(GL_VIEWPORT, st.vp);
-    gl::GetBooleanv(GL_DEPTH_WRITEMASK, &st.depthMask);
-    gl::GetBooleanv(GL_COLOR_WRITEMASK, st.colorMask);
-    // restore_state() puts polygon offset back, and EVERY caller shares that
-    // function -- so if this did not record the real values, the cascade paths
-    // would restore a default-constructed 0/0/disabled over whatever the engine
-    // had set for its own decals.
-    if (gl::PolygonOffset && gl::GetFloatv) {
-        st.polyOffset = gl::IsEnabled(GL_POLYGON_OFFSET_FILL);
-        gl::GetFloatv(GL_POLYGON_OFFSET_FACTOR, &st.polyFactor);
-        gl::GetFloatv(GL_POLYGON_OFFSET_UNITS,  &st.polyUnits);
-    }
-    st.scissor   = gl::IsEnabled(GL_SCISSOR_TEST);
-    st.depthTest = gl::IsEnabled(GL_DEPTH_TEST);
+    save_state(st);
 
     gl::BindFramebuffer(GL_FRAMEBUFFER, g_fbo);
     gl::Viewport(0, 0, g_size, g_size);
@@ -149,14 +172,32 @@ static SavedState bind_target(bool forceDepth) {
 static void restore_state(const SavedState& st) {
     if (gl::PolygonOffset) {
         gl::PolygonOffset(st.polyFactor, st.polyUnits);
-        if (!st.polyOffset && gl::Disable) gl::Disable(GL_POLYGON_OFFSET_FILL);
+        if (st.polyOffset) gl::Enable(GL_POLYGON_OFFSET_FILL);
+        else gl::Disable(GL_POLYGON_OFFSET_FILL);
     }
-    if (!st.depthTest) gl::Disable(GL_DEPTH_TEST);
-    if (!st.depthMask) gl::DepthMask(GL_FALSE);
-    if (st.scissor)    gl::Enable(GL_SCISSOR_TEST);
+    if (st.depthTest) gl::Enable(GL_DEPTH_TEST); else gl::Disable(GL_DEPTH_TEST);
+    if (st.scissor) gl::Enable(GL_SCISSOR_TEST); else gl::Disable(GL_SCISSOR_TEST);
+    if (st.blend) gl::Enable(GL_BLEND); else gl::Disable(GL_BLEND);
+    if (st.cull) gl::Enable(GL_CULL_FACE); else gl::Disable(GL_CULL_FACE);
+    if (st.alphaToCoverage) gl::Enable(GL_SAMPLE_ALPHA_TO_COVERAGE);
+    else gl::Disable(GL_SAMPLE_ALPHA_TO_COVERAGE);
+    gl::DepthMask(st.depthMask);
+    if (gl::DepthFunc) gl::DepthFunc((GLenum)st.depthFunc);
+    if (gl::CullFace) gl::CullFace((GLenum)st.cullMode);
+    if (gl::BlendEquationSeparate)
+        gl::BlendEquationSeparate((GLenum)st.blendEquationRGB,
+                                  (GLenum)st.blendEquationAlpha);
+    if (gl::BlendFuncSeparate)
+        gl::BlendFuncSeparate((GLenum)st.blendSrcRGB, (GLenum)st.blendDstRGB,
+                              (GLenum)st.blendSrcAlpha, (GLenum)st.blendDstAlpha);
     gl::ColorMask(st.colorMask[0], st.colorMask[1], st.colorMask[2], st.colorMask[3]);
+    restore_engine_program((GLuint)st.program);
+    gl::ActiveTexture((GLenum)st.activeTexture);
+    gl::BindTexture(GL_TEXTURE_2D, (GLuint)st.activeTex2D);
+    gl::BindTexture(GL_TEXTURE_2D_ARRAY, (GLuint)st.activeTexArray);
     gl::Viewport(st.vp[0], st.vp[1], st.vp[2], st.vp[3]);
-    gl::BindFramebuffer(GL_FRAMEBUFFER, (GLuint)st.fbo);
+    gl::BindFramebuffer(GL_DRAW_FRAMEBUFFER, (GLuint)st.fbo);
+    gl::BindFramebuffer(GL_READ_FRAMEBUFFER, (GLuint)st.readFbo);
 }
 
 // Phase 3d: prove that every private cascade layer can be written without
@@ -169,12 +210,7 @@ static void validate_cascade_target_clear_once() {
     done = true;
 
     SavedState st;
-    gl::GetIntegerv(GL_FRAMEBUFFER_BINDING, &st.fbo);
-    gl::GetIntegerv(GL_VIEWPORT, st.vp);
-    gl::GetBooleanv(GL_DEPTH_WRITEMASK, &st.depthMask);
-    gl::GetBooleanv(GL_COLOR_WRITEMASK, st.colorMask);
-    st.scissor = gl::IsEnabled(GL_SCISSOR_TEST);
-    st.depthTest = gl::IsEnabled(GL_DEPTH_TEST);
+    save_state(st);
     GLint oldArray = 0;
     gl::GetIntegerv(GL_TEXTURE_BINDING_2D_ARRAY, &oldArray);
 
@@ -657,12 +693,7 @@ static void render_static_world_map(void* scene, int bucket) {
     if (eng::SetMatrixMode) eng::SetMatrixMode(oldMode);
 
     SavedState ws;
-    gl::GetIntegerv(GL_FRAMEBUFFER_BINDING, &ws.fbo);
-    gl::GetIntegerv(GL_VIEWPORT, ws.vp);
-    gl::GetBooleanv(GL_DEPTH_WRITEMASK, &ws.depthMask);
-    gl::GetBooleanv(GL_COLOR_WRITEMASK, ws.colorMask);
-    ws.scissor = gl::IsEnabled(GL_SCISSOR_TEST);
-    ws.depthTest = gl::IsEnabled(GL_DEPTH_TEST);
+    save_state(ws);
     gl::BindFramebuffer(GL_FRAMEBUFFER, g_staticWorldFbo);
     gl::Viewport(0, 0, g_staticWorldSize, g_staticWorldSize);
     if (ws.scissor)    gl::Disable(GL_SCISSOR_TEST);
@@ -745,6 +776,10 @@ static void replay_bucket_into_local_light_layers(void* scene, int bucket) {
     if (g_localInlinePolicyEpoch != g_localLightCapturePolicyEpoch) return;
     const unsigned slots = g_localInlineSlotCount;
     if (slots == 0) return;
+    const bool captureFilteredDepth = g_localLightGroundOnly &&
+        g_localObjectTargetUsable &&
+        g_localObjectDepthTex && g_localObjectWriteDepthTex &&
+        g_localObjectFbo;
 
     // The light transform goes in through the engine's matrix stack, exactly as
     // the cascades do it. Without both entries we cannot build a light view at
@@ -756,17 +791,13 @@ static void replay_bucket_into_local_light_layers(void* scene, int bucket) {
     // Query the outer (real scene) state ONCE for the whole bucket, not per
     // layer, and restore it once at the end.
     SavedState outer;
-    gl::GetIntegerv(GL_FRAMEBUFFER_BINDING, &outer.fbo);
-    gl::GetIntegerv(GL_VIEWPORT, outer.vp);
-    gl::GetBooleanv(GL_DEPTH_WRITEMASK, &outer.depthMask);
-    gl::GetBooleanv(GL_COLOR_WRITEMASK, outer.colorMask);
-    outer.scissor   = gl::IsEnabled(GL_SCISSOR_TEST);
-    outer.depthTest = gl::IsEnabled(GL_DEPTH_TEST);
-    if (gl::PolygonOffset && gl::GetFloatv) {
-        outer.polyOffset = gl::IsEnabled(GL_POLYGON_OFFSET_FILL);
-        gl::GetFloatv(GL_POLYGON_OFFSET_FACTOR, &outer.polyFactor);
-        gl::GetFloatv(GL_POLYGON_OFFSET_UNITS,  &outer.polyUnits);
-    }
+    save_state(outer);
+    // Character back-face capture is enforced inside the draw wrapper, after
+    // NWN has applied each material's state. Preserve the scene's cull mode
+    // separately because SavedState is shared by passes that do not touch it.
+    const GLboolean outerCull = gl::IsEnabled(GL_CULL_FACE);
+    GLint outerCullMode = GL_BACK;
+    if (gl::GetIntegerv) gl::GetIntegerv(GL_CULL_FACE_MODE, &outerCullMode);
 
     gl::BindFramebuffer(GL_FRAMEBUFFER, g_localLightFbo);
     gl::Viewport(0, 0, g_localLightCaptureSize, g_localLightCaptureSize);
@@ -790,8 +821,6 @@ static void replay_bucket_into_local_light_layers(void* scene, int bucket) {
     // which is what the slider's own help text describes.
     if (gl::PolygonOffset && g_localLightSlopeBias > 0.0f) {
         gl::Enable(GL_POLYGON_OFFSET_FILL);
-        // factor = slope term, units = a small constant floor so a polygon
-        // exactly perpendicular to the light still clears its own depth texel.
         gl::PolygonOffset(g_localLightSlopeBias, 1.0f);
     } else if (gl::PolygonOffset) {
         gl::Disable(GL_POLYGON_OFFSET_FILL);
@@ -830,6 +859,8 @@ static void replay_bucket_into_local_light_layers(void* scene, int bucket) {
             gl::ClearDepth(1.0);
             gl::Clear(GL_DEPTH_BUFFER_BIT);
         }
+        // The draw wrapper duplicates non-creature draws into the filtered
+        // layer. Creature draws stay only in the common map used by the floor.
         std::memcpy(vm, g_localVisibleView[layer], sizeof(float) * 16);
         std::memcpy(pm, g_localVisibleProj[layer], sizeof(float) * 16);
         // Flag BOTH stacks dirty so NWN recomputes each object's derived
@@ -842,7 +873,11 @@ static void replay_bucket_into_local_light_layers(void* scene, int bucket) {
         if (eng::SetMatrixMode) eng::SetMatrixMode(oldMode);
 
         g_localLightCurrentBucket = bucket;
+        g_localObjectCaptureLayer = (int)layer;
+        g_localObjectCaptureActive = captureFilteredDepth;
         if (guarded_render_bucket(scene, bucket)) ++g_localInlineDraws[layer];
+        g_localObjectCaptureActive = false;
+        g_localObjectCaptureLayer = -1;
         g_localLightCurrentBucket = -1;
     }
 
@@ -857,6 +892,9 @@ static void replay_bucket_into_local_light_layers(void* scene, int bucket) {
     if (eng::SetMatrixMode) eng::SetMatrixMode(oldMode);
 
     restore_state(outer);
+    if (gl::CullFace) gl::CullFace((GLenum)outerCullMode);
+    if (outerCull) gl::Enable(GL_CULL_FACE);
+    else           gl::Disable(GL_CULL_FACE);
 
     // Buckets 0..3 are the complete local caster generation. Publish only
     // after the final alpha-card bucket has been replayed; until this exact
@@ -868,7 +906,14 @@ static void replay_bucket_into_local_light_layers(void* scene, int bucket) {
             complete = complete &&
                        g_localInlineLayerFrame[layer] == g_shadowFrameContext.serial;
         if (complete) {
+            bool filteredComplete = captureFilteredDepth;
+            for (unsigned layer = 0; filteredComplete && layer < slots; ++layer)
+                filteredComplete = g_localObjectLayerFrame[layer] ==
+                                   g_shadowFrameContext.serial;
+            g_localObjectMapReady = filteredComplete;
             std::swap(g_localLightDepthTex, g_localLightWriteDepthTex);
+            if (filteredComplete)
+                std::swap(g_localObjectDepthTex, g_localObjectWriteDepthTex);
             for (unsigned layer = 0; layer < slots; ++layer) {
                 std::memcpy(g_localLightFaceVP[layer], g_localVisibleVP[layer],
                             sizeof(g_localLightFaceVP[layer]));
@@ -892,6 +937,16 @@ static void replay_bucket_into_local_light_layers(void* scene, int bucket) {
                 reported = true;
                 fprintf(stderr, "[shadowmap][local-light] complete ping-pong generation published: read=%u write=%u slots=%u\n",
                         g_localLightDepthTex, g_localLightWriteDepthTex, slots);
+            }
+            static bool reportedFilter = false;
+            if (g_localObjectMapReady && !reportedFilter) {
+                reportedFilter = true;
+                unsigned draws = 0;
+                for (unsigned layer = 0; layer < slots; ++layer)
+                    draws += g_localObjectDraws[layer];
+                fprintf(stderr,
+                        "[shadowmap][local-light] non-creature receiver map active: "
+                        "%u filtered draw(s)\n", draws);
             }
         }
     }
@@ -941,12 +996,7 @@ static void replay_bucket_into_cascade_layers(void* scene, int bucket, bool stat
     // Query the "outer" (real scene) state ONCE for this whole bucket replay
     // -- not once per draw per layer -- and restore it once at the end.
     SavedState outer;
-    gl::GetIntegerv(GL_FRAMEBUFFER_BINDING, &outer.fbo);
-    gl::GetIntegerv(GL_VIEWPORT, outer.vp);
-    gl::GetBooleanv(GL_DEPTH_WRITEMASK, &outer.depthMask);
-    gl::GetBooleanv(GL_COLOR_WRITEMASK, outer.colorMask);
-    outer.scissor   = gl::IsEnabled(GL_SCISSOR_TEST);
-    outer.depthTest = gl::IsEnabled(GL_DEPTH_TEST);
+    save_state(outer);
 
     gl::BindFramebuffer(GL_FRAMEBUFFER, fbo);
     gl::Viewport(0, 0, g_size, g_size);

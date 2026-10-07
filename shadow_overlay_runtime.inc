@@ -238,6 +238,13 @@ static void draw_shadow_overlay_imgui(void* scene) {
     st.csmBlend      = &g_cascadeBlendWidth;
     st.csmPcf        = &g_cascadePcfRadius;
     st.areaShadowFadeSeconds = &g_areaShadowFadeSeconds;
+    st.godraysAvailable = kGodraysFeatureAvailable;
+    st.godraysEnabled  = &g_godraysEnabled;
+    st.godraysStrength = &g_godraysStrength;
+    st.godraysSamples  = &g_godraysSamples;
+    st.godraysResolution = &g_godraysResolution;
+    st.atmosphereDensity = &g_atmosphereDensity;
+    st.godraysDebug    = &g_godraysDebug;
     st.csmComposite  = &g_cascadeCompositeShadows;
     st.localEnabled  = &g_localLightReceiver;
     st.localStrength = &g_localLightStrength;
@@ -252,7 +259,11 @@ static void draw_shadow_overlay_imgui(void* scene) {
     st.localSlope    = &g_localLightSlopeBias;
     st.localNormalBias= &g_localLightNormalBias;
     st.localAlphaCast = &g_localLightAlphaCasters;
-    st.localMinSep    = &g_localLightMinSep;
+    st.localMinSep   = &g_localLightMinSep;
+    st.localContactSep = &g_localLightContactSep;
+    st.localGroundOnly = &g_localLightGroundOnly;
+    st.localBackfaceCast = &g_localLightCullFront;
+    st.localCharacterShadows = &g_localCharacterShadows;
     st.localEmitCast  = &g_localLightEmittersCast;
     st.localMapSize  = &g_pendingLocalSize;
     st.localMapLive  = g_localLightCaptureSize;
@@ -559,7 +570,7 @@ static float local_deselect_fade(bool fresh) {
     return level;
 }
 
-static void draw_static_receiver(void* scene) {
+static void draw_static_receiver(void* scene, bool localOnly = false) {
     if (!g_receiverEnabled) return;   // master A/B, not a fault
     // Bounded "why did I not draw" report. The receiver has ~10 independent
     // gates and returns silently from all of them, which on Windows left us
@@ -570,7 +581,7 @@ static void draw_static_receiver(void* scene) {
         // its whole budget on menu/loading scenes (ctxSerial=0, no area yet)
         // and was silent by the time the game was actually running.
         static unsigned gateReports = 0, gateSeen = 0;
-        if (g_staticReceiverDraws == 0 && g_areaScene && scene == g_areaScene &&
+        if (!localOnly && g_staticReceiverDraws == 0 && g_areaScene && scene == g_areaScene &&
             (gateReports < 6 || (++gateSeen % 300) == 0)) {
             ++gateReports;
             unsigned staleStatic = 0, staleDynamic = 0;
@@ -594,9 +605,7 @@ static void draw_static_receiver(void* scene) {
         }
     }
     const char* blocked = nullptr;
-    if (g_cascadeMultiLayerCapture && !g_cascadeCsmStaticReceiver) blocked = "multiLayerWithoutCsmStatic";
-    else if (!g_cascadeStaticReceiver)                             blocked = "staticReceiverOff";
-    else if (scene != g_areaScene) {
+    if (scene != g_areaScene) {
         // Do NOT record this one. draw_static_receiver runs for every scene,
         // menus included, so recording it overwrote the area scene's real
         // reason every frame -- the first version of this report said
@@ -605,13 +614,15 @@ static void draw_static_receiver(void* scene) {
     }
     else if (!g_shadowFrameContext.valid)                          blocked = "ctxInvalid";
     else if (g_shadowFrameContext.scene != scene)                  blocked = "ctxSceneMismatch";
-    else if (!g_cascadeMath.valid)                                 blocked = "mathInvalid";
-    else if (g_cascadeMath.sourceFrame != g_shadowFrameContext.serial) blocked = "mathFrameStale";
+    else if (!localOnly && g_cascadeMultiLayerCapture && !g_cascadeCsmStaticReceiver) blocked = "multiLayerWithoutCsmStatic";
+    else if (!localOnly && !g_cascadeStaticReceiver)               blocked = "staticReceiverOff";
+    else if (!localOnly && !g_cascadeMath.valid)                   blocked = "mathInvalid";
+    else if (!localOnly && g_cascadeMath.sourceFrame != g_shadowFrameContext.serial) blocked = "mathFrameStale";
     else if (!g_cascadeStaticTex)                                  blocked = "noStaticTex";
-    else if (g_cascadeDynamicReceiver && !g_cascadeDynamicTex)     blocked = "noDynamicTex";
-    else if (g_staticWorldEnabled && !g_staticWorldValid)          blocked = "worldMapInvalid";
-    if (blocked) { recv_block(blocked); return; }
-    if (g_cascadeCsmStaticReceiver) {
+    else if (!localOnly && g_cascadeDynamicReceiver && !g_cascadeDynamicTex) blocked = "noDynamicTex";
+    else if (!localOnly && g_staticWorldEnabled && !g_staticWorldValid) blocked = "worldMapInvalid";
+    if (blocked) { if (!localOnly) recv_block(blocked); return; }
+    if (!localOnly && g_cascadeCsmStaticReceiver) {
         const int activeLayers = (g_cascadeActiveCount < 1) ? 1
                                : (g_cascadeActiveCount > kCascadeCount ? kCascadeCount
                                                                        : g_cascadeActiveCount);
@@ -662,11 +673,11 @@ static void draw_static_receiver(void* scene) {
                 return;
             }
         }
-    } else if (g_cascadeStaticCaptureFrame != g_shadowFrameContext.serial ||
+    } else if (!localOnly && (g_cascadeStaticCaptureFrame != g_shadowFrameContext.serial ||
                !g_cascadeStaticCaptureDraws ||
                (g_cascadeDynamicReceiver &&
                 (g_cascadeDynamicCaptureFrame != g_shadowFrameContext.serial ||
-                 !g_cascadeDynamicCaptureDraws))) {
+                 !g_cascadeDynamicCaptureDraws)))) {
         recv_block("legacyCaptureStale");
         return;
     }
@@ -691,7 +702,7 @@ static void draw_static_receiver(void* scene) {
     if (!gl::CopyTexSubImage2D)    { recv_block("noCopyTexSubImage2D"); return; }
 
     GLint vp[4]={0,0,0,0}, oldProg=0, oldActive=GL_TEXTURE0, oldFbo=0;
-    GLint oldStaticTex=0, oldDynamicTex=0, oldSceneTex=0;
+    GLint oldStaticTex=0, oldDynamicTex=0, oldSceneTex=0, oldColorTex=0, oldPreDynamicTex=0;
     GLint oldBlendSrcRGB=GL_ONE, oldBlendDstRGB=GL_ZERO;
     GLint oldBlendSrcAlpha=GL_ONE, oldBlendDstAlpha=GL_ZERO;
     GLint oldBlendEquationRGB=GL_FUNC_ADD, oldBlendEquationAlpha=GL_FUNC_ADD;
@@ -708,15 +719,17 @@ static void draw_static_receiver(void* scene) {
     gl::GetIntegerv(GL_BLEND_EQUATION_RGB,&oldBlendEquationRGB);
     gl::GetIntegerv(GL_BLEND_EQUATION_ALPHA,&oldBlendEquationAlpha);
     gl::GetBooleanv(GL_DEPTH_WRITEMASK,&oldMask); gl::GetBooleanv(GL_COLOR_WRITEMASK,oldColor);
-    // The private copy is only defined for the completed area framebuffer.
-    // Refuse instead of sampling a UI/transition FBO and recreating the leak.
-    if (oldFbo != 0 || vp[2] <= 0 || vp[3] <= 0) {
+    // The private copy is only defined for the selected area's framebuffer.
+    // This may be the completed frame or the deliberate pre-dynamic contact
+    // stage, but never a UI/transition FBO.
+    if ((!localOnly && oldFbo != 0) || vp[2] <= 0 || vp[3] <= 0) {
         // NOT the default framebuffer, or no viewport. Worth naming precisely:
         // the receiver composites onto the finished scene, so an engine that is
         // still rendering into its own FBO at this point (post-processing,
         // upscaling) parks the whole feature silently.
-        recv_block((oldFbo != 0) ? "notDefaultFramebuffer" : "emptyViewport",
-                   oldFbo, vp[2], vp[3]);
+        if (!localOnly)
+            recv_block((oldFbo != 0) ? "notDefaultFramebuffer" : "emptyViewport",
+                       oldFbo, vp[2], vp[3]);
         return;
     }
 
@@ -740,7 +753,8 @@ static void draw_static_receiver(void* scene) {
         fprintf(stderr, "[shadowmap][static] shadow-sampler placeholder tex=%u created\n",
                 g_shadowSamplerDummyTex);
     }
-    constexpr int kColorUnit = 26, kWorldUnit = 27, kLocalUnit = 28, kDynamicUnit = 29, kStaticUnit = 30, kSceneUnit = 31;
+    constexpr int kPreDynamicUnit = 25, kColorUnit = 26, kWorldUnit = 27,
+                  kLocalUnit = 28, kDynamicUnit = 29, kStaticUnit = 30, kSceneUnit = 31;
     GLint maxUnits=0; gl::GetIntegerv(GL_MAX_TEXTURE_IMAGE_UNITS,&maxUnits);
     if (maxUnits <= kSceneUnit) { recv_block("tooFewTextureUnits", maxUnits); return; }
     // The local-light capture deliberately runs AFTER this receiver (see the
@@ -783,6 +797,15 @@ static void draw_static_receiver(void* scene) {
     const bool localReady = g_localLightReceiver && g_localLightTargetUsable &&
                             g_localLightDepthTex && deselectFade > 0.0005f &&
                             g_haveLocalLightVP;
+    // A local-only pass with no usable generation would only pay for a depth
+    // resolve and a fullscreen draw that cannot affect a pixel. The final
+    // receiver remains available as the fallback for this frame.
+    if (localOnly && !localReady) return;
+    const bool groundPrepassCurrent = g_localLightGroundOnly &&
+        g_localGroundPrepassFrame == g_shadowFrameContext.serial;
+    const bool dynamicReceiverOnly = !localOnly && groundPrepassCurrent &&
+        g_preDynamicDepthFrame == g_shadowFrameContext.serial;
+    const bool applyLocalHere = localReady;
     GLint oldLocalTex = 0, oldWorldTex = 0;
     gl::ActiveTexture(GL_TEXTURE0+kSceneUnit);
     gl::GetIntegerv(GL_TEXTURE_BINDING_2D,&oldSceneTex);
@@ -803,15 +826,23 @@ static void draw_static_receiver(void* scene) {
                             "raised before the receiver ran (not ours)\n", drained);
         }
     }
-    const bool copied=ensure_scene_depth_texture(vp[2],vp[3]);
+    const bool copied = localOnly
+        ? ensure_pre_dynamic_depth_texture(vp[2],vp[3])
+        : ensure_scene_depth_texture(vp[2],vp[3]);
     const double tCopy0 = now_seconds();
     bool depthOk = copied;
-    if (copied) depthOk = capture_scene_depth(vp);
-    // Same moment as the depth grab: the engine's frame is finished and our
-    // composite has not run yet.
+    if (copied)
+        depthOk = localOnly ? capture_pre_dynamic_depth(vp) : capture_scene_depth(vp);
+    if (localOnly && depthOk)
+        g_preDynamicDepthFrame = g_shadowFrameContext.serial;
+    const GLuint receiverDepthTex = localOnly ? g_preDynamicDepthTex : g_sceneDepthTex;
+    // Same moment as the final depth grab: the engine's frame is finished and
+    // our composite has not run yet. The local-only prepass deliberately skips
+    // colour/weather publication because characters have not been drawn yet.
     gl::ActiveTexture(GL_TEXTURE0+kColorUnit);
-    const bool colorOk = capture_scene_color(vp);
-    if (depthOk && colorOk && g_sceneColorCapturedNow)
+    gl::GetIntegerv(GL_TEXTURE_BINDING_2D,&oldColorTex);
+    const bool colorOk = !localOnly && capture_scene_color(vp);
+    if (!localOnly && depthOk && colorOk && g_sceneColorCapturedNow)
         weather_runtime::publish_framebuffer_capture(scene, g_sceneColorTex,
                                                      g_sceneDepthTex);
     // Finish on the reporting frame only, for the same reason recv does: with
@@ -849,20 +880,28 @@ static void draw_static_receiver(void* scene) {
     gl::BindTexture(GL_TEXTURE_2D_ARRAY,g_cascadeStaticTex);
     gl::ActiveTexture(GL_TEXTURE0+kDynamicUnit);
     gl::GetIntegerv(GL_TEXTURE_BINDING_2D_ARRAY,&oldDynamicTex);
-    gl::BindTexture(GL_TEXTURE_2D_ARRAY,g_cascadeDynamicTex);
+    gl::BindTexture(GL_TEXTURE_2D_ARRAY,g_cascadeDynamicTex
+                                             ? g_cascadeDynamicTex : g_cascadeStaticTex);
     // Always bind SOMETHING valid here -- the placeholder when there is no
     // local-light map -- or the shadow sampler invalidates the program and the
     // driver drops the draw entirely (see g_shadowSamplerDummyTex).
     gl::ActiveTexture(GL_TEXTURE0+kColorUnit);
-    gl::BindTexture(GL_TEXTURE_2D, colorOk ? g_sceneColorTex : g_sceneDepthTex);
+    gl::BindTexture(GL_TEXTURE_2D, colorOk ? g_sceneColorTex : receiverDepthTex);
     gl::ActiveTexture(GL_TEXTURE0+kLocalUnit);
     gl::GetIntegerv(GL_TEXTURE_BINDING_2D_ARRAY,&oldLocalTex);
     // 2D ARRAY (one layer per light). The fallback is the STATIC CASCADE array,
     // which is always allocated and is a depth array of the right type -- the
     // 1x1 dummy is a 2D texture and binding it here would leave the sampler
     // incomplete, which makes the driver discard the whole draw.
-    gl::BindTexture(GL_TEXTURE_2D_ARRAY, localReady ? g_localLightDepthTex
-                                                    : g_cascadeStaticTex);
+    const bool filteredCreatureMap = dynamicReceiverOnly &&
+        !g_localCharacterShadows && g_localObjectMapReady &&
+        g_localObjectTargetUsable && g_localObjectDepthTex;
+    const bool localMapAllowed = applyLocalHere &&
+        (!dynamicReceiverOnly || g_localCharacterShadows || filteredCreatureMap);
+    const GLuint receiverLocalMap = filteredCreatureMap
+        ? g_localObjectDepthTex : g_localLightDepthTex;
+    gl::BindTexture(GL_TEXTURE_2D_ARRAY, localMapAllowed ? receiverLocalMap
+                                                        : g_cascadeStaticTex);
     // Same rule as the local-light sampler: a sampler2DShadow must ALWAYS have
     // a comparison-mode depth texture bound or the driver discards the draw.
     gl::ActiveTexture(GL_TEXTURE0+kWorldUnit);
@@ -870,7 +909,11 @@ static void draw_static_receiver(void* scene) {
     gl::BindTexture(GL_TEXTURE_2D, (g_staticWorldEnabled && g_staticWorldValid)
                                    ? g_staticWorldTex : g_shadowSamplerDummyTex);
     gl::ActiveTexture(GL_TEXTURE0+kSceneUnit);
-    gl::BindTexture(GL_TEXTURE_2D,g_sceneDepthTex);
+    gl::BindTexture(GL_TEXTURE_2D,receiverDepthTex);
+    gl::ActiveTexture(GL_TEXTURE0+kPreDynamicUnit);
+    gl::GetIntegerv(GL_TEXTURE_BINDING_2D,&oldPreDynamicTex);
+    gl::BindTexture(GL_TEXTURE_2D, g_preDynamicDepthTex
+                                   ? g_preDynamicDepthTex : receiverDepthTex);
     // This was the last silent gate: when it was false the whole draw block --
     // uniforms, glDrawArrays, the draw counter -- was skipped with no log at
     // all, which is why the gate report kept saying "receiver-not-drawn" while
@@ -881,7 +924,7 @@ static void draw_static_receiver(void* scene) {
                    (long)preDrawErr, (long)vp[2], (long)vp[3]);
     if (depthOk && preDrawErr==GL_NO_ERROR) {
         if (oldDepth) gl::Disable(GL_DEPTH_TEST);
-        if (g_cascadeCompositeShadows) {
+        if (g_cascadeCompositeShadows || localOnly) {
             gl::Enable(GL_BLEND);
             gl::BlendEquationSeparate(GL_FUNC_ADD, GL_FUNC_ADD);
             gl::BlendFuncSeparate(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA,
@@ -909,6 +952,9 @@ static void draw_static_receiver(void* scene) {
         const GLint q=gl::GetUniformLocation(g_staticReceiverProgram,"nwnStaticReceiverBias");
         const GLint r=gl::GetUniformLocation(g_staticReceiverProgram,"nwnStaticCascadeBlend");
         const GLint s=gl::GetUniformLocation(g_staticReceiverProgram,"nwnStaticPCFRadius");
+        const GLint lo=gl::GetUniformLocation(g_staticReceiverProgram,"nwnLocalOnlyPass");
+        const GLint pd=gl::GetUniformLocation(g_staticReceiverProgram,"nwnPreDynamicSceneDepth");
+        const GLint dro=gl::GetUniformLocation(g_staticReceiverProgram,"nwnDynamicReceiverOnly");
         if(a>=0) gl::Uniform1i(a,kSceneUnit);
         if(b>=0) gl::Uniform1i(b,kStaticUnit);
         if(c>=0) gl::Uniform1i(c,kDynamicUnit);
@@ -917,17 +963,20 @@ static void draw_static_receiver(void* scene) {
         if(f>=0 && g_realUniform3f)
             g_realUniform3f(f,(GLfloat)vp[0],(GLfloat)vp[1],0.0f);
         if(g>=0) gl::Uniform1i(g,g_cascadeLightCaptureLayer);
-        if(h>=0) gl::Uniform1i(h,g_cascadeDynamicReceiver ? 1 : 0);
-        if(i>=0) gl::Uniform1i(i,g_cascadeCsmStaticReceiver ? 1 : 0);
+        if(h>=0) gl::Uniform1i(h,(!localOnly && g_cascadeDynamicReceiver) ? 1 : 0);
+        if(i>=0) gl::Uniform1i(i,(!localOnly && g_cascadeCsmStaticReceiver) ? 1 : 0);
         if(j>=0) gl::UniformMatrix4fv(j,kCascadeCount,GL_FALSE,&g_cascadeMath.lightVP[0][0]);
         if(k>=0) gl::Uniform1f(k,g_cascadeMath.clipFar[0]);
         if(l>=0) gl::Uniform1f(l,g_cascadeMath.clipFar[1]);
         if(m>=0) gl::Uniform1f(m,g_cascadeMath.clipFar[2]);
         if(n>=0) gl::Uniform1f(n,g_cascadeMath.clipFar[3]);
-        if(o>=0) gl::Uniform1i(o,g_cascadeCompositeShadows ? 1 : 0);
+        if(o>=0) gl::Uniform1i(o,(g_cascadeCompositeShadows || localOnly) ? 1 : 0);
+        if(lo>=0) gl::Uniform1i(lo,localOnly ? 1 : 0);
+        if(pd>=0) gl::Uniform1i(pd,kPreDynamicUnit);
+        if(dro>=0) gl::Uniform1i(dro,dynamicReceiverOnly ? 1 : 0);
         // Area policy gates/attenuates the directional sun only.  Local-light
         // shadowing deliberately remains available in indoor/no-sun areas.
-        if(p>=0) gl::Uniform1f(p,effective_area_sun_strength());
+        if(p>=0) gl::Uniform1f(p,localOnly ? 0.0f : effective_area_sun_strength());
         if(q>=0) gl::Uniform1f(q,g_cascadeReceiverBias);
         if(r>=0) gl::Uniform1f(r,g_cascadeBlendWidth);
         if(s>=0) gl::Uniform1f(s,g_cascadePcfRadius);
@@ -969,7 +1018,7 @@ static void draw_static_receiver(void* scene) {
             const GLint wc=gl::GetUniformLocation(g_staticReceiverProgram,"nwnStaticWorldEnabled");
             if(wa>=0) gl::Uniform1i(wa,kWorldUnit);
             if(wb>=0) gl::UniformMatrix4fv(wb,1,GL_FALSE,g_staticWorldVP);
-            if(wc>=0) gl::Uniform1i(wc,(g_staticWorldEnabled && g_staticWorldValid) ? 1 : 0);
+            if(wc>=0) gl::Uniform1i(wc,(!localOnly && g_staticWorldEnabled && g_staticWorldValid) ? 1 : 0);
         }
         {   // Phase 6d local-light term.
             const GLint la=gl::GetUniformLocation(g_staticReceiverProgram,"nwnLocalLightDepth");
@@ -1045,6 +1094,8 @@ static void draw_static_receiver(void* scene) {
                 if(sn>=0) gl::Uniform1f(sn,g_localLightNormalBias);
                 const GLint sm=gl::GetUniformLocation(g_staticReceiverProgram,"nwnLocalMinSep");
                 if(sm>=0) gl::Uniform1f(sm,g_localLightMinSep);
+                const GLint scm=gl::GetUniformLocation(g_staticReceiverProgram,"nwnLocalContactSep");
+                if(scm>=0) gl::Uniform1f(scm,g_localLightContactSep);
                 const GLint st2=gl::GetUniformLocation(g_staticReceiverProgram,"nwnLocalTanHalfFov");
                 // THE FOV ACTUALLY USED, which is per-FACE. g_localLightFovDeg is
                 // the ONE-FACE value (170); four-face mode captures at 110. Feeding
@@ -1081,7 +1132,7 @@ static void draw_static_receiver(void* scene) {
                                 g_localLightSlotPos[i][2], g_localLightSlotRadius[i]);
                 }
             }
-            if(lc>=0) gl::Uniform1i(lc,localReady ? 1 : 0);
+            if(lc>=0) gl::Uniform1i(lc,localMapAllowed ? 1 : 0);
             if(ld>=0 && g_realUniform3f)
                 g_realUniform3f(ld,g_localLightWorldPos[0],g_localLightWorldPos[1],
                                 g_localLightWorldPos[2]);
@@ -1097,7 +1148,8 @@ static void draw_static_receiver(void* scene) {
             // the last shadow draw happened to leave there.
             // Engine-driven fade-out (see update_engine_shadow_fade). Holds at
             // 1.0 outside a transition, so nothing changes in normal play.
-            if(lf>=0) gl::Uniform1f(lf,g_localLightStrength * g_engineFadeLevel * deselectFade);
+            if(lf>=0) gl::Uniform1f(lf,localMapAllowed
+                ? g_localLightStrength * g_engineFadeLevel * deselectFade : 0.0f);
             if(lg>=0) gl::Uniform1f(lg,g_localLightBias);
             // THE off switch for "Lights lift sun shadow". Zeroing the lift
             // amount is what actually disables it: the shader's whole lift
@@ -1109,7 +1161,8 @@ static void draw_static_receiver(void* scene) {
             // -- this is. The count is still zeroed below as well; both are
             // cheap and the shader needs only one of them to be right.
             {
-                const float liftNow = g_lampLiftEnabled ? g_localLightLift : 0.0f;
+                const float liftNow = (!localOnly && g_lampLiftEnabled)
+                                    ? g_localLightLift : 0.0f;
                 if(li>=0) gl::Uniform1f(li,liftNow);
                 // Diagnosing the Windows toggle. Prints only on change, and
                 // reports the LOCATION too: a -1 there means the uniform was
@@ -1118,8 +1171,9 @@ static void draw_static_receiver(void* scene) {
                 static int   lastLoc = -2;
                 static float lastVal = -1.0f;
                 static bool  lastEn  = false;
-                if (li != lastLoc || std::fabs(liftNow - lastVal) > 1e-6f ||
-                    g_lampLiftEnabled != lastEn) {
+                if (!localOnly &&
+                    (li != lastLoc || std::fabs(liftNow - lastVal) > 1e-6f ||
+                     g_lampLiftEnabled != lastEn)) {
                     lastLoc = li; lastVal = liftNow; lastEn = g_lampLiftEnabled;
                     fprintf(stderr, "[shadowmap][lift] checkbox=%d slider=%.3f "
                                     "uploaded=%.3f loc=%d\n",
@@ -1186,9 +1240,9 @@ static void draw_static_receiver(void* scene) {
             if(sic>=0) gl::Uniform1i(sic,kColorUnit);
             // 1.0 disables it: the shader skips the whole block, and a scene with
             // no colour capture cannot then darken wrongly.
-            if(sig>=0) gl::Uniform1f(sig,colorOk ? g_liftThreshold : 1.0f);
+            if(sig>=0) gl::Uniform1f(sig,(!localOnly && colorOk) ? g_liftThreshold : 1.0f);
             const GLint lh=gl::GetUniformLocation(g_staticReceiverProgram,"nwnReceiverDebug");
-            if(lh>=0) gl::Uniform1i(lh,g_receiverDebug);
+            if(lh>=0) gl::Uniform1i(lh,localOnly ? 0 : g_receiverDebug);
         }
         if (!g_nextDrawArrays)
             g_nextDrawArrays=(void(*)(GLenum,GLint,GLsizei))dlsym(RTLD_NEXT,"glDrawArrays");
@@ -1199,8 +1253,8 @@ static void draw_static_receiver(void* scene) {
         // is NOT the same as "anything rendered": an invalid sampler binding
         // makes the driver discard the draw and raise GL_INVALID_OPERATION.
         // That cost a lot of debugging, so check it and say so.
+        const GLenum drawErr = gl::GetError();
         {
-            const GLenum drawErr = gl::GetError();
             static unsigned errReports = 0;
             if (drawErr != GL_NO_ERROR && errReports < 8) {
                 ++errReports;
@@ -1208,9 +1262,19 @@ static void draw_static_receiver(void* scene) {
                                "-- the draw was DISCARDED, nothing rendered\n", drawErr);
             }
         }
-        g_staticReceiverFrame=g_shadowFrameContext.serial;
-        ++g_staticReceiverDraws;
-        if (g_costReport &&
+        if (localOnly && drawErr == GL_NO_ERROR) {
+            g_localGroundPrepassFrame = g_shadowFrameContext.serial;
+            static bool logged = false;
+            if (!logged) {
+                logged = true;
+                fprintf(stderr, "[shadowmap][local-light] contact-safe receiver stages active "
+                                "around dynamic bucket %d\n", g_cascadeDynamicBucket);
+            }
+        } else if (!localOnly) {
+            g_staticReceiverFrame=g_shadowFrameContext.serial;
+            ++g_staticReceiverDraws;
+        }
+        if (!localOnly && g_costReport &&
             (g_staticReceiverDraws == 1 || (g_staticReceiverDraws % 300) == 0)) {
             unsigned reportedStaticDraws = g_cascadeStaticCaptureDraws;
             unsigned reportedDynamicDraws = g_cascadeDynamicCaptureDraws;
@@ -1265,8 +1329,12 @@ static void draw_static_receiver(void* scene) {
     gl::BindTexture(GL_TEXTURE_2D_ARRAY,(GLuint)oldLocalTex);   // array now, see the bind above
     gl::ActiveTexture(GL_TEXTURE0+kWorldUnit);
     gl::BindTexture(GL_TEXTURE_2D,(GLuint)oldWorldTex);
+    gl::ActiveTexture(GL_TEXTURE0+kColorUnit);
+    gl::BindTexture(GL_TEXTURE_2D,(GLuint)oldColorTex);
     gl::ActiveTexture(GL_TEXTURE0+kSceneUnit);
     gl::BindTexture(GL_TEXTURE_2D,(GLuint)oldSceneTex);
+    gl::ActiveTexture(GL_TEXTURE0+kPreDynamicUnit);
+    gl::BindTexture(GL_TEXTURE_2D,(GLuint)oldPreDynamicTex);
     gl::ActiveTexture((GLenum)oldActive);
     if(oldDepth) gl::Enable(GL_DEPTH_TEST); else gl::Disable(GL_DEPTH_TEST);
     if(oldBlend) gl::Enable(GL_BLEND); else gl::Disable(GL_BLEND);
@@ -1455,8 +1523,10 @@ static void install_windows_gl_interposition() {
     nwn_win_register_gl_wrapper("glUniform3fv",        (void*)my_uniform3fv,         (void**)&g_realUniform3fv);
     nwn_win_register_gl_wrapper("glShaderSource",      (void*)my_shader_source,      (void**)&g_realShaderSource);
     nwn_win_register_gl_wrapper("glCompileShader",     (void*)my_compile_shader,     (void**)&g_realCompileShader);
+    nwn_win_register_gl_wrapper("glCreateProgram",     (void*)my_create_program,     (void**)&g_realCreateProgram);
     nwn_win_register_gl_wrapper("glAttachShader",      (void*)my_attach_shader,      (void**)&g_realAttachShader);
     nwn_win_register_gl_wrapper("glLinkProgram",       (void*)my_link_program,       (void**)&g_realLinkProgram);
+    nwn_win_register_gl_wrapper("glDeleteProgram",     (void*)my_delete_program,     (void**)&g_realDeleteProgram);
     nwn_win_register_gl_wrapper("glDrawRangeElements", (void*)my_draw_range_elements,(void**)&g_realDrawRangeElements);
     nwn_win_register_gl_wrapper("glMultiDrawArrays",   (void*)my_multi_draw_arrays,  (void**)&g_realMultiDrawArrays);
     nwn_win_register_gl_wrapper("glMultiDrawElements", (void*)my_multi_draw_elements,(void**)&g_realMultiDrawElements);
@@ -1574,8 +1644,8 @@ static void install_geometry_trace_patch() {
 }
 
 static void install_shadersource_patch() {
-    static bool sourceDone = false, compileDone = false;
-    static bool attachDone = false, linkDone = false;
+    static bool sourceDone = false, compileDone = false, createDone = false;
+    static bool attachDone = false, linkDone = false, deleteDone = false;
     auto install = [](void** slot, void* replacement, void** real,
                       bool& done, const char* label) {
         if (done || !slot || !*slot) return;
@@ -1589,10 +1659,14 @@ static void install_shadersource_patch() {
             (void**)&g_realShaderSource, sourceDone, "glShaderSource");
     install(eng::GlewCompileShader, (void*)my_compile_shader,
             (void**)&g_realCompileShader, compileDone, "glCompileShader");
+    install(eng::GlewCreateProgram, (void*)my_create_program,
+            (void**)&g_realCreateProgram, createDone, "glCreateProgram");
     install(eng::GlewAttachShader, (void*)my_attach_shader,
             (void**)&g_realAttachShader, attachDone, "glAttachShader");
     install(eng::GlewLinkProgram, (void*)my_link_program,
             (void**)&g_realLinkProgram, linkDone, "glLinkProgram");
+    install(eng::GlewDeleteProgram, (void*)my_delete_program,
+            (void**)&g_realDeleteProgram, deleteDone, "glDeleteProgram");
     if (sourceDone) {
         static bool reported = false;
         if (!reported) {

@@ -10,6 +10,80 @@
 // notes on COMPARE_MODE/border colour) but at its own, typically smaller,
 // resolution and FBO: a single-light probe has no reason to pay full sun-CSM
 // cost, and must never alias the sun's targets.
+static void destroy_local_object_target() {
+    if (g_localObjectFbo && gl::DeleteFramebuffers)
+        gl::DeleteFramebuffers(1, &g_localObjectFbo);
+    if (g_localObjectDepthTex && gl::DeleteTextures)
+        gl::DeleteTextures(1, &g_localObjectDepthTex);
+    if (g_localObjectWriteDepthTex && gl::DeleteTextures)
+        gl::DeleteTextures(1, &g_localObjectWriteDepthTex);
+    g_localObjectFbo = 0;
+    g_localObjectDepthTex = 0;
+    g_localObjectWriteDepthTex = 0;
+    g_localObjectMapSize = 0;
+    g_localObjectTargetUsable = false;
+    g_localObjectMapReady = false;
+    std::memset(g_localObjectLayerFrame, 0, sizeof(g_localObjectLayerFrame));
+    std::memset(g_localObjectDraws, 0, sizeof(g_localObjectDraws));
+}
+
+static void ensure_local_object_target() {
+    if (!g_localLightGroundOnly || g_localObjectTargetUsable)
+        return;
+    destroy_local_object_target();
+    GLint prevFbo = 0, prevTex = 0;
+    gl::GetIntegerv(GL_FRAMEBUFFER_BINDING, &prevFbo);
+    gl::GetIntegerv(GL_TEXTURE_BINDING_2D_ARRAY, &prevTex);
+    drain_gl_errors_bounded();
+    // This is the visible map sampled by creature receivers, so it follows the
+    // selected local-shadow resolution exactly.
+    g_localObjectMapSize = g_localLightCaptureSize;
+    gl::GenTextures(1, &g_localObjectDepthTex);
+    gl::BindTexture(GL_TEXTURE_2D_ARRAY, g_localObjectDepthTex);
+    gl::TexImage3D(GL_TEXTURE_2D_ARRAY, 0, GL_DEPTH_COMPONENT24,
+                   g_localObjectMapSize, g_localObjectMapSize,
+                   g_localLightLayers, 0,
+                   GL_DEPTH_COMPONENT, GL_UNSIGNED_INT, nullptr);
+    gl::TexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+    gl::TexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+    gl::TexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    gl::TexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    gl::TexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_COMPARE_MODE, GL_NONE);
+    const GLenum texErr = gl::GetError();
+    gl::GenTextures(1, &g_localObjectWriteDepthTex);
+    gl::BindTexture(GL_TEXTURE_2D_ARRAY, g_localObjectWriteDepthTex);
+    gl::TexImage3D(GL_TEXTURE_2D_ARRAY, 0, GL_DEPTH_COMPONENT24,
+                   g_localObjectMapSize, g_localObjectMapSize,
+                   g_localLightLayers, 0,
+                   GL_DEPTH_COMPONENT, GL_UNSIGNED_INT, nullptr);
+    gl::TexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+    gl::TexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+    gl::TexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    gl::TexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    gl::TexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_COMPARE_MODE, GL_NONE);
+    const GLenum writeTexErr = gl::GetError();
+    gl::GenFramebuffers(1, &g_localObjectFbo);
+    gl::BindFramebuffer(GL_FRAMEBUFFER, g_localObjectFbo);
+    gl::FramebufferTextureLayer(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT,
+                                g_localObjectWriteDepthTex, 0, 0);
+    gl::DrawBuffer(GL_NONE);
+    gl::ReadBuffer(GL_NONE);
+    const GLenum status = gl::CheckFramebufferStatus(GL_FRAMEBUFFER);
+    const GLenum fboErr = gl::GetError();
+    g_localObjectTargetUsable = g_localObjectDepthTex &&
+        g_localObjectWriteDepthTex && g_localObjectFbo &&
+        status == GL_FRAMEBUFFER_COMPLETE && texErr == GL_NO_ERROR &&
+        writeTexErr == GL_NO_ERROR && fboErr == GL_NO_ERROR;
+    gl::BindFramebuffer(GL_FRAMEBUFFER, (GLuint)prevFbo);
+    gl::BindTexture(GL_TEXTURE_2D_ARRAY, (GLuint)prevTex);
+    fprintf(stderr,
+            "[shadowmap][local-light] non-creature caster target %dx%dx%d fbo=%u read=%u write=%u status=%s usable=%s\n",
+            g_localObjectMapSize, g_localObjectMapSize,
+            g_localLightLayers, g_localObjectFbo,
+            g_localObjectDepthTex, g_localObjectWriteDepthTex,
+            fbo_status_str(status), g_localObjectTargetUsable ? "yes" : "no");
+}
+
 static void create_local_light_target() {
     if (g_localLightFbo) return;   // already created (or already attempted)
 
@@ -84,18 +158,14 @@ static void create_local_light_target() {
             g_localLightLayers, g_localLightFbo, g_localLightDepthTex,
             g_localLightWriteDepthTex, fbo_status_str(status),
             g_localLightTargetUsable ? "yes" : "no");
+    ensure_local_object_target();
 }
 
 // Same shape as bind_target()/restore_state() (SavedState is generic), but
 // binds the private local-light FBO instead and never touches colour output.
 static SavedState bind_local_light_target() {
     SavedState st;
-    gl::GetIntegerv(GL_FRAMEBUFFER_BINDING, &st.fbo);
-    gl::GetIntegerv(GL_VIEWPORT, st.vp);
-    gl::GetBooleanv(GL_DEPTH_WRITEMASK, &st.depthMask);
-    gl::GetBooleanv(GL_COLOR_WRITEMASK, st.colorMask);
-    st.scissor   = gl::IsEnabled(GL_SCISSOR_TEST);
-    st.depthTest = gl::IsEnabled(GL_DEPTH_TEST);
+    save_state(st);
 
     gl::BindFramebuffer(GL_FRAMEBUFFER, g_localLightFbo);
     gl::Viewport(0, 0, g_localLightCaptureSize, g_localLightCaptureSize);
@@ -147,6 +217,7 @@ static void capture_local_light_shadow(void* scene) {
             gl::DeleteFramebuffers(1, &g_localLightFbo);
             if (g_localLightDepthTex) gl::DeleteTextures(1, &g_localLightDepthTex);
             if (g_localLightWriteDepthTex) gl::DeleteTextures(1, &g_localLightWriteDepthTex);
+            destroy_local_object_target();
             g_localLightFbo = 0; g_localLightDepthTex = 0;
             g_localLightWriteDepthTex = 0;
             g_localLightTargetUsable = false;
@@ -167,6 +238,7 @@ static void capture_local_light_shadow(void* scene) {
         if (g_localLightFbo)      gl::DeleteFramebuffers(1, &g_localLightFbo);
         if (g_localLightDepthTex) gl::DeleteTextures(1, &g_localLightDepthTex);
         if (g_localLightWriteDepthTex) gl::DeleteTextures(1, &g_localLightWriteDepthTex);
+        destroy_local_object_target();
         g_localLightFbo = 0;
         g_localLightDepthTex = 0;
         g_localLightWriteDepthTex = 0;
@@ -181,6 +253,7 @@ static void capture_local_light_shadow(void* scene) {
         g_localLightCaptureSize = g_pendingLocalSize;
     }
     if (!g_localLightFbo) create_local_light_target();
+    ensure_local_object_target();
     if (!g_localLightTargetUsable) return;
     // MASTER SWITCH for local-light shadows.
     //

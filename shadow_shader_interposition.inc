@@ -166,6 +166,18 @@ static long     g_progHits  = 0;
 typedef void (*UseProgram_t)(GLuint);
 static UseProgram_t g_realUseProgram = nullptr;
 
+static void restore_engine_program(GLuint program) {
+    if (g_realUseProgram) {
+        g_realUseProgram(program);
+        g_curProgram = program;
+        return;
+    }
+    if (eng::GlewUseProgram && *eng::GlewUseProgram) {
+        ((UseProgram_t)*eng::GlewUseProgram)(program);
+        g_curProgram = program;
+    }
+}
+
 using UniformMatrix4fv_t = void (*)(GLint, GLsizei, GLboolean, const GLfloat*);
 static UniformMatrix4fv_t g_realUniformMatrix4fv = nullptr;
 
@@ -197,16 +209,33 @@ using LinkProgram_t = void (*)(GLuint);
 using GetProgramiv_t = void (*)(GLuint, GLenum, GLint*);
 using GetProgramInfoLog_t = void (*)(GLuint, GLsizei, GLsizei*, char*);
 using DeleteShader_t = void (*)(GLuint);
+using DeleteProgram_t = void (*)(GLuint);
 
 // Record only shader objects whose source we actually changed.  Compile/link
 // status for these objects is the useful vendor comparison: logging every
 // stock NWN shader would obscure the first modified program that fails.
 static CompileShader_t g_realCompileShader = nullptr;
+static CreateProgram_t g_realCreateProgram = nullptr;
 static AttachShader_t g_realAttachShader = nullptr;
 static LinkProgram_t g_realLinkProgram = nullptr;
+static DeleteProgram_t g_realDeleteProgram = nullptr;
 static std::unordered_set<GLuint> g_patchedRuntimeShaders;
 static std::unordered_set<GLuint> g_programsWithPatchedRuntimeShaders;
 static int g_shaderCheckLogs = 0;
+
+// GL object names are recyclable. A program ID that once attached an injected
+// shader must not carry that label into a later unrelated program.
+extern "C" GLuint my_create_program() {
+    if (!g_realCreateProgram) return 0;
+    const GLuint program = g_realCreateProgram();
+    if (program) g_programsWithPatchedRuntimeShaders.erase(program);
+    return program;
+}
+
+extern "C" void my_delete_program(GLuint program) {
+    if (g_realDeleteProgram) g_realDeleteProgram(program);
+    g_programsWithPatchedRuntimeShaders.erase(program);
+}
 
 static void shader_check_log(GLuint object, bool program, const char* status) {
     if (g_shaderCheckLogs++ >= 96) return;
@@ -573,6 +602,7 @@ static bool inject_oit_foliage_branch(std::string& source) {
         "uniform float nwnA2cLocalSoft;\n"
         "uniform float nwnA2cLocalNormalBias;\n"
         "uniform float nwnA2cLocalMinSep;\n"
+        "uniform float nwnA2cLocalContactSep;\n"
         "uniform float nwnA2cLocalTanHalfFov;\n"
         "uniform float nwnA2cLocalLift;\n"
         "uniform float nwnA2cLocalFalloff;\n"
@@ -607,6 +637,7 @@ static bool inject_oit_foliage_branch(std::string& source) {
         "uniform float nwnA2cLocalSoft;\n"
         "uniform float nwnA2cLocalNormalBias;\n"
         "uniform float nwnA2cLocalMinSep;\n"
+        "uniform float nwnA2cLocalContactSep;\n"
         "uniform float nwnA2cLocalTanHalfFov;\n"
         "uniform float nwnA2cLocalLift;\n"
         "uniform float nwnA2cLocalFalloff;\n"
@@ -767,7 +798,9 @@ static bool inject_oit_foliage_branch(std::string& source) {
         "    vec3 dxw=dFdx(w.xyz), dyw=dFdy(w.xyz);\n"
         "    vec3 nrm=cross(dxw,dyw);\n"
         "    float nl=length(nrm); nrm=nl>1e-6?nrm/nl:vec3(0.0);\n"
+        "    float contactUp=smoothstep(0.60,0.92,abs(nrm.z));\n"
         "    float step2=max(dot(dxw,dxw),dot(dyw,dyw));\n"
+        "    float contactFactor=(1.0-smoothstep(0.02,0.09,step2))*contactUp;\n"
         "    nrm*=1.0-smoothstep(0.02,0.09,step2);\n"
         "    float best=0.0;\n"
         "    for(int sl=0;sl<nwnA2cLocalSlots&&sl<32;++sl){\n"
@@ -777,7 +810,7 @@ static bool inject_oit_foliage_branch(std::string& source) {
         "        float dist=sqrt(max(d2,1e-8));\n"
         "        float texw=nwnA2cLocalTanHalfFov*dist/float(textureSize(nwnA2cLocalDepth,0).x);\n"
         "        vec3 nlight=nrm*(dot(nrm,nwnA2cLocalPos[sl].xyz-w.xyz)>=0.0?1.0:-1.0);\n"
-        "        vec4 lp=nwnA2cLocalVP[sl]*vec4(w.xyz+nlight*texw*nwnA2cLocalNormalBias,1.0);\n"
+        "        vec4 lp=nwnA2cLocalVP[sl]*vec4(w.xyz+nlight*texw*nwnA2cLocalNormalBias*(1.0-contactFactor),1.0);\n"
         "        if(lp.w<=0.0) continue;\n"
         "        vec3 s=lp.xyz/lp.w*0.5+0.5;\n"
         "        if(s.x<=0.0||s.x>=1.0||s.y<=0.0||s.y>=1.0||s.z<=0.0||s.z>=1.0) continue;\n"
@@ -788,7 +821,8 @@ static bool inject_oit_foliage_branch(std::string& source) {
         "        float zn=max(0.05,min(0.5,rr*0.01));\n"
         "        float zf=max(20.0,rr*2.0+max(0.0,nwnA2cLocalLift));\n"
         "        float dzdd=zn*zf/max(1e-6,dist*dist*(zf-zn));\n"
-        "        float need=nwnA2cLocalBias+nwnA2cLocalMinSep*dzdd;\n"
+        "        float sep=mix(nwnA2cLocalMinSep,nwnA2cLocalContactSep,contactFactor);\n"
+        "        float need=nwnA2cLocalBias+sep*dzdd;\n"
         "        float lit=0.0;\n"
         "        if(nwnA2cLocalSoft<=0.0){\n"
         "            float st=texture(nwnA2cLocalDepth,vec3(s.xy,float(sl))).r;\n"
@@ -804,7 +838,17 @@ static bool inject_oit_foliage_branch(std::string& source) {
         "        float f=d2/(rr*rr);\n"
         "        float att=clamp((1.0-f)/max(1e-4,nwnA2cLampFalloff.x+nwnA2cLampFalloff.y*f),0.0,1.0);\n"
         "        att=pow(att,max(0.05,nwnA2cLocalFalloff));\n"
-        "        best=max(best,clamp(1.0-lit,0.0,1.0)*att*edge*nwnA2cLocalFade[sl]);\n"
+        // Keep Mode 2 on the same PS4 displacement-sphere suppression as the
+        // fullscreen receiver.  This path becomes active when the diagnostic
+        // completed-scene local receiver is selected.
+        "        float selfFade=1.0;\n"
+        "        if(nwnA2cLocalLift>0.0){\n"
+        "            vec3 lifted=nwnA2cLocalPos[sl].xyz+vec3(0.0,0.0,nwnA2cLocalLift);\n"
+        "            vec3 vo=lifted-w.xyz;\n"
+        "            float fm=nwnA2cLocalLift*nwnA2cLocalLift-dot(vo,vo)+4.0;\n"
+        "            selfFade=clamp(1.0-fm*0.25,0.0,1.0);\n"
+        "        }\n"
+        "        best=max(best,clamp(1.0-lit,0.0,1.0)*selfFade*att*edge*nwnA2cLocalFade[sl]);\n"
         "    }\n"
         "    return 1.0-nwnA2cLocalStrength*best;\n"
         "}\n";
@@ -1430,6 +1474,32 @@ static void poll_engine_fog() {
     }
     g_haveEngineFog = (bestVotes > 0);
     if (g_haveEngineFog) { g_fogStartEngine = bestStart; g_fogEndEngine = bestEnd; }
+    // Fog colour is authored per area alongside fogParams. Read it from a
+    // program carrying the winning range rather than guessing from the scene
+    // framebuffer (which is already lit and fogged). The uniform may be vec3
+    // or vec4; glGetUniformfv safely writes the active component count.
+    g_haveEngineFogColor = false;
+    if (g_haveEngineFog) {
+        for (unsigned i = 0; i < g_fogProgramCount; ++i) {
+            const GLuint program = g_fogPrograms[i];
+            const GLint paramsLoc = gl::GetUniformLocation(program, "fogParams");
+            const GLint colorLoc = gl::GetUniformLocation(program, "fogColor");
+            if (paramsLoc < 0 || colorLoc < 0) continue;
+            GLfloat fp[4] = {0,0,0,0};
+            GLfloat color[4] = {0,0,0,1};
+            gl::GetUniformfv(program, paramsLoc, fp);
+            if (fp[0] == 0.0f || std::fabs(fp[1] - bestStart) > 1.0e-4f ||
+                std::fabs(fp[2] - bestEnd) > 1.0e-4f) continue;
+            gl::GetUniformfv(program, colorLoc, color);
+            if (!std::isfinite(color[0]) || !std::isfinite(color[1]) ||
+                !std::isfinite(color[2])) continue;
+            g_fogColorEngine[0] = std::max(0.0f, color[0]);
+            g_fogColorEngine[1] = std::max(0.0f, color[1]);
+            g_fogColorEngine[2] = std::max(0.0f, color[2]);
+            g_haveEngineFogColor = true;
+            break;
+        }
+    }
     if (!loggedCensus) {
         loggedCensus = true;
         if (g_haveEngineFog)
@@ -2126,6 +2196,23 @@ static void dump_quad_program_source(unsigned prog, int bucket) {
 // NWN exactly once and with its unmodified state.
 static void trace_normal_geometry_draw(GLsizei count, bool indexed) {
     if (g_overlayPassActive) return;   // UI draws are not scene geometry
+    // NWN applies culling while preparing each material, after the local replay
+    // begins. Override it at the common draw funnel so closed character bodies
+    // store their far side in the local depth map. This is intentionally bucket
+    // 2 only: floors/scenery and one-sided alpha cards retain their native state.
+    if (g_localLightPassActive && g_localLightCurrentBucket == 2 &&
+        g_localCharacterShadows && g_localLightCullFront &&
+        current_draw_is_creature() &&
+        gl::Enable && gl::CullFace) {
+        gl::Enable(GL_CULL_FACE);
+        gl::CullFace(GL_FRONT);
+        static bool loggedLocalBackfaces = false;
+        if (!loggedLocalBackfaces) {
+            loggedLocalBackfaces = true;
+            fprintf(stderr,
+                    "[shadowmap][local-light] back-face character capture active\n");
+        }
+    }
     weather_observe_draw(g_curProgram, count);
     if (!g_inOurPass && !g_cascadeReplayActive &&
         nwn_core::g_currentBucket == 2 && weather_tracks_dynamic_creatures()) {
@@ -2458,6 +2545,37 @@ static bool local_cube_visible_dynamic_draw() {
         }                                                                     \
     } while (0)
 
+// Duplicate non-creature draws into the map used by creature receivers. NWN's
+// external object type is authoritative, including for rigid part-based
+// creatures. Placeables and unknown/world geometry remain eligible casters.
+#define DUPLICATE_SELECTIVE_LOCAL_DEPTH(drawCall, drawCount)                 \
+    do {                                                                      \
+        if (g_localObjectCaptureActive && !current_draw_is_creature() &&      \
+            g_localObjectTargetUsable && g_localObjectFbo &&                  \
+            g_localObjectWriteDepthTex) {                                     \
+            const int selectiveLayer = g_localObjectCaptureLayer;             \
+            gl::BindFramebuffer(GL_FRAMEBUFFER, g_localObjectFbo);            \
+            gl::Viewport(0, 0, g_localObjectMapSize, g_localObjectMapSize);   \
+            gl::FramebufferTextureLayer(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT,  \
+                                        g_localObjectWriteDepthTex, 0,         \
+                                        selectiveLayer);                      \
+            if (g_localObjectLayerFrame[selectiveLayer] !=                    \
+                g_shadowFrameContext.serial) {                                \
+                g_localObjectLayerFrame[selectiveLayer] =                     \
+                    g_shadowFrameContext.serial;                              \
+                g_localObjectDraws[selectiveLayer] = 0;                       \
+                gl::ClearDepth(1.0);                                          \
+                gl::Clear(GL_DEPTH_BUFFER_BIT);                               \
+            }                                                                 \
+            drawCall;                                                         \
+            drawCount;                                                        \
+            ++g_localObjectDraws[selectiveLayer];                             \
+            gl::BindFramebuffer(GL_FRAMEBUFFER, g_localLightFbo);             \
+            gl::Viewport(0, 0, g_localLightCaptureSize,                       \
+                         g_localLightCaptureSize);                            \
+        }                                                                     \
+    } while (0)
+
 extern "C" void NWN_GL_INTERPOSE(glDrawElements)(GLenum mode, GLsizei count, GLenum type,
                                 const void* indices) {
     if (!g_nextDrawElements)
@@ -2468,6 +2586,9 @@ extern "C" void NWN_GL_INTERPOSE(glDrawElements)(GLenum mode, GLsizei count, GLe
     const bool suppressNative = nwn_oit_suppress_current_draw();
     if (g_nextDrawElements && !suppressNative)
         g_nextDrawElements(mode, count, type, indices);
+    if (g_nextDrawElements && !suppressNative)
+        DUPLICATE_SELECTIVE_LOCAL_DEPTH(
+            g_nextDrawElements(mode, count, type, indices), (void)0);
     if (g_nextDrawElements)
         DUPLICATE_OIT_FRINGE(g_nextDrawElements(mode, count, type, indices));
     if (g_nextDrawElements)
@@ -2502,6 +2623,9 @@ extern "C" void NWN_GL_INTERPOSE(glDrawArrays)(GLenum mode, GLint first, GLsizei
     const bool suppressNative = nwn_oit_suppress_current_draw();
     if (g_nextDrawArrays && !suppressNative)
         g_nextDrawArrays(mode, first, count);
+    if (g_nextDrawArrays && !suppressNative)
+        DUPLICATE_SELECTIVE_LOCAL_DEPTH(
+            g_nextDrawArrays(mode, first, count), (void)0);
     if (g_nextDrawArrays)
         DUPLICATE_OIT_FRINGE(g_nextDrawArrays(mode, first, count));
     if (g_nextDrawArrays)
@@ -2566,6 +2690,9 @@ extern "C" void my_draw_range_elements(GLenum mode, GLuint start, GLuint end,
     const bool suppressNative = nwn_oit_suppress_current_draw();
     if (g_realDrawRangeElements && !suppressNative)
         g_realDrawRangeElements(mode, start, end, count, type, indices);
+    if (g_realDrawRangeElements && !suppressNative)
+        DUPLICATE_SELECTIVE_LOCAL_DEPTH(
+            g_realDrawRangeElements(mode, start, end, count, type, indices), (void)0);
     if (g_realDrawRangeElements)
         DUPLICATE_OIT_FRINGE(g_realDrawRangeElements(mode, start, end, count,
                                                       type, indices));
@@ -2601,6 +2728,9 @@ extern "C" void my_multi_draw_arrays(GLenum mode, const GLint* first,
     const bool suppressNative = nwn_oit_suppress_current_draw();
     if (g_realMultiDrawArrays && !suppressNative)
         g_realMultiDrawArrays(mode, first, count, drawcount);
+    if (g_realMultiDrawArrays && !suppressNative)
+        DUPLICATE_SELECTIVE_LOCAL_DEPTH(
+            g_realMultiDrawArrays(mode, first, count, drawcount), (void)0);
     if (g_realMultiDrawArrays)
         DUPLICATE_OIT_FRINGE(g_realMultiDrawArrays(mode, first, count, drawcount));
     if (g_realMultiDrawArrays)
@@ -2635,6 +2765,9 @@ extern "C" void my_multi_draw_elements(GLenum mode, const GLsizei* count,
     const bool suppressNative = nwn_oit_suppress_current_draw();
     if (g_realMultiDrawElements && !suppressNative)
         g_realMultiDrawElements(mode, count, type, indices, drawcount);
+    if (g_realMultiDrawElements && !suppressNative)
+        DUPLICATE_SELECTIVE_LOCAL_DEPTH(
+            g_realMultiDrawElements(mode, count, type, indices, drawcount), (void)0);
     if (g_realMultiDrawElements)
         DUPLICATE_OIT_FRINGE(g_realMultiDrawElements(mode, count, type, indices,
                                                       drawcount));
@@ -2670,6 +2803,9 @@ extern "C" void my_draw_elements_base_vertex(GLenum mode, GLsizei count,
     const bool suppressNative = nwn_oit_suppress_current_draw();
     if (g_realDrawElementsBaseVertex && !suppressNative)
         g_realDrawElementsBaseVertex(mode, count, type, indices, basevertex);
+    if (g_realDrawElementsBaseVertex && !suppressNative)
+        DUPLICATE_SELECTIVE_LOCAL_DEPTH(
+            g_realDrawElementsBaseVertex(mode, count, type, indices, basevertex), (void)0);
     if (g_realDrawElementsBaseVertex)
         DUPLICATE_OIT_FRINGE(g_realDrawElementsBaseVertex(mode, count, type,
                                                           indices, basevertex));
@@ -2708,6 +2844,10 @@ extern "C" void my_draw_range_elements_base_vertex(GLenum mode, GLuint start,
     if (g_realDrawRangeElementsBaseVertex && !suppressNative)
         g_realDrawRangeElementsBaseVertex(mode, start, end, count, type,
                                            indices, basevertex);
+    if (g_realDrawRangeElementsBaseVertex && !suppressNative)
+        DUPLICATE_SELECTIVE_LOCAL_DEPTH(
+            g_realDrawRangeElementsBaseVertex(mode, start, end, count, type,
+                                               indices, basevertex), (void)0);
     if (g_realDrawRangeElementsBaseVertex)
         DUPLICATE_OIT_FRINGE(g_realDrawRangeElementsBaseVertex(
             mode, start, end, count, type, indices, basevertex));
@@ -2746,6 +2886,9 @@ extern "C" void my_draw_elements_instanced(GLenum mode, GLsizei count,
     const bool suppressNative = nwn_oit_suppress_current_draw();
     if (g_realDrawElementsInstanced && !suppressNative)
         g_realDrawElementsInstanced(mode, count, type, indices, instances);
+    if (g_realDrawElementsInstanced && !suppressNative)
+        DUPLICATE_SELECTIVE_LOCAL_DEPTH(
+            g_realDrawElementsInstanced(mode, count, type, indices, instances), (void)0);
     if (g_realDrawElementsInstanced)
         DUPLICATE_OIT_FRINGE(g_realDrawElementsInstanced(
             mode, count, type, indices, instances));
@@ -2783,6 +2926,10 @@ extern "C" void my_draw_elements_instanced_base_vertex(GLenum mode, GLsizei coun
     if (g_realDrawElementsInstancedBaseVertex && !suppressNative)
         g_realDrawElementsInstancedBaseVertex(mode, count, type, indices,
                                                instances, basevertex);
+    if (g_realDrawElementsInstancedBaseVertex && !suppressNative)
+        DUPLICATE_SELECTIVE_LOCAL_DEPTH(
+            g_realDrawElementsInstancedBaseVertex(mode, count, type, indices,
+                                                   instances, basevertex), (void)0);
     if (g_realDrawElementsInstancedBaseVertex)
         DUPLICATE_OIT_FRINGE(g_realDrawElementsInstancedBaseVertex(
             mode, count, type, indices, instances, basevertex));

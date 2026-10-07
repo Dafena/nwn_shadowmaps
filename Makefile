@@ -64,7 +64,7 @@ $(DEPLOY_DIR)/%.o: %.cpp | $(DEPLOY_DIR)
 $(DEPLOY_DIR)/nwn_shadowmap.o: nwn_shadowmap.cpp \
 	shadow_gl_api.inc shadow_engine_bindings.inc weather_runtime.inc \
 	shadow_targets.inc shadow_diagnostics_settings.inc shadow_replay.inc \
-	shadow_shader_interposition.inc shadow_fullscreen_receiver.inc \
+	shadow_shader_interposition.inc shadow_fullscreen_receiver.inc godrays_runtime.inc \
 	shadow_overlay_runtime.inc shadow_trace_cascade.inc shadow_local_lights.inc \
 	nwn_overlay.h nwn_hooks_core.h nwn_platform.h shadow_config.h shadow_math.h \
 	| $(DEPLOY_DIR)
@@ -102,7 +102,7 @@ $(TARGET): $(OBJS)
 nwn_shadowmap.o: nwn_shadowmap.cpp \
 	shadow_gl_api.inc shadow_engine_bindings.inc weather_runtime.inc \
 	shadow_targets.inc shadow_diagnostics_settings.inc shadow_replay.inc \
-	shadow_shader_interposition.inc shadow_fullscreen_receiver.inc \
+	shadow_shader_interposition.inc shadow_fullscreen_receiver.inc godrays_runtime.inc \
 	shadow_overlay_runtime.inc shadow_trace_cascade.inc shadow_local_lights.inc \
 	nwn_overlay.h nwn_hooks_core.h nwn_platform.h shadow_config.h shadow_math.h
 	$(CXX) $(CXXFLAGS) -c $< -o $@

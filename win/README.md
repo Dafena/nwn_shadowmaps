@@ -70,7 +70,8 @@ WINEDLLOVERRIDES=version=n,b
 ```
 
 The DLL carries shipping defaults, so no batch launcher is required. Environment
-variables still override those defaults.
+variables still override active settings. Parked prototypes are exceptions:
+the godrays variables are deliberately ignored.
 
 Strict material routing is one of those Windows shipping defaults. Materials
 declaring `parameter int NWN_ALPHA_MODE 2` use A2C whenever the live framebuffer
@@ -92,6 +93,9 @@ build; their compiled defaults define shipping behaviour.
 
 ## Known Windows-specific status
 
+- Volumetric fog/godrays are parked behind the same hard feature gate as
+  Linux. The render call is compiled out, the panel is hidden, and old saved
+  values or environment variables cannot reactivate the prototype.
 - Private client `StartWeather`/`StopWeather` calls and the active client-area
   lookup are resolved from the v89.8193.37-17 network decoder. At scene start,
   the injector reads the loaded client area's stored weather so a weather
@@ -108,6 +112,14 @@ build; their compiled defaults define shipping behaviour.
 - The Windows local-light fast path has separate caster culling, current-
   program tracking, and relaxed generation publication rules. Linux does not
   use those mechanics.
+- Creature-to-creature local-shadow suppression uses NWN's own external object
+  type and a parallel non-creature-caster map, so skinned and rigid part-based
+  creatures are treated alike while placeables, doors, and other non-creature
+  objects remain casters. Windows'
+  `GetFirstItem` and `GetNextItem` are separate code paths; both are observed.
+  The v89 `GetNextItem` leaf cannot provide a safe Subhook trampoline, so its
+  verified 16-byte bucket/8-byte item accessor is reproduced in the Windows
+  detour instead of temporarily unpatching live renderer code.
 - `Bright surfaces keep light` is a start threshold, not an intensity: lower
   values protect a wider brightness range from the later directional-shadow
   composite. Windows defaults it to `0` so ordinary torch-lit surfaces retain

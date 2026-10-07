@@ -22,11 +22,20 @@ As of 2026-09-03:
   bucket, using the engine's matrix stack and the engine's selected shadow-light
   list. This is a contact-shadow path, not a cube-map implementation.
 - The local-light receiver supports falloff, cone edge fading, PCF, normal
-  offset, minimum separation, slope-scaled fill bias, and lamp lift.
+  offset, slope-scaled fill bias, and lamp lift. A pre-character pass samples
+  the complete map for joined floor contact. Character receivers use a parallel
+  non-creature-caster map by default, preventing self-shadow and
+  creature-to-creature shadowing while preserving shadows from placeables,
+  doors, moving trees, and other non-creature objects. NWN's object type covers
+  both skinned and rigid/part-based creatures.
 - NWN's area shadow policy is observed and applied to the directional composite.
   Local-light shadows remain independent of the area's sun/moon policy.
 - The Dear ImGui settings panel is live. Development builds expose diagnostics;
   shipping builds keep only user-facing controls.
+- The volumetric fog/godrays prototype is parked. Its source remains compiled
+  for build and shader coverage, but a hard feature gate disables rendering,
+  the panel does not expose it, and saved settings or environment variables
+  cannot enable it.
 - Linux and Windows automatically observe NWN clear/rain/snow area weather
   through one shared weather-effects renderer. Rain applies gradual wetness,
   compact fog-aware reflective/refractive puddles, and normal-based impacts.
@@ -109,6 +118,7 @@ ABI:
 | `weather_runtime.inc` | Shared rain/snow rendering, platform weather authority, precipitation occlusion, and snow trails |
 | `shadow_shader_interposition.inc` | Shader interception and draw wrappers |
 | `shadow_fullscreen_receiver.inc` | Receiver shader construction and scene copies |
+| `godrays_runtime.inc` | Parked shadow-aware volumetric fog prototype (compile coverage only) |
 | `shadow_overlay_runtime.inc` | Overlay runtime, input, and frame ordering |
 | `shadow_diagnostics_settings.inc` | Diagnostics and persisted settings |
 | `shadow_trace_cascade.inc` | Scene tracing, cascade setup, and hooks |
@@ -150,7 +160,8 @@ Run these from the repository directory:
 ```
 
 `run-dev.sh` enables the diagnostics-heavy development capture and delegates
-game-directory discovery to `run-shadowmap-trace.sh`. Set
+game-directory discovery to `run-shadowmap-trace.sh`. Godrays remain parked and
+off in this path. Set
 `NWN_SHADOWMAP_GAME_DIR` when the game is not found by the launcher. Diagnostic
 logs and PGM output go to the repository by default; override the locations
 with `NWN_SHADOWMAP_LOG` and `NWN_SHADOWMAP_OUT_DIR`.

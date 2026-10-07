@@ -25,6 +25,7 @@ import shutil
 # found and compiled, so adding a shader needs no edit here.
 SOURCES = [
     "shadow_fullscreen_receiver.inc",
+    "godrays_runtime.inc",
     "shadow_overlay_runtime.inc",
     "shadow_shader_interposition.inc",
     "nwn_oit.cpp",

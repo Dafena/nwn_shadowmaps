@@ -46,15 +46,15 @@ static void build_fullscreen_receiver_program() {
     fprintf(stderr,"[shadowmap] fullscreen depth receiver compiled (program=%u)\n",p);
 }
 
-static bool ensure_scene_depth_texture(int w, int h) {
+static bool ensure_depth_texture(GLuint& tex, int& texW, int& texH, int w, int h) {
     if (w <= 0 || h <= 0) return false;
-    if (!g_sceneDepthTex) gl::GenTextures(1, &g_sceneDepthTex);
-    if (!g_sceneDepthTex) return false;
-    gl::BindTexture(GL_TEXTURE_2D, g_sceneDepthTex);
-    if (w != g_sceneDepthW || h != g_sceneDepthH) {
+    if (!tex) gl::GenTextures(1, &tex);
+    if (!tex) return false;
+    gl::BindTexture(GL_TEXTURE_2D, tex);
+    if (w != texW || h != texH) {
         gl::TexImage2D(GL_TEXTURE_2D, 0, GL_DEPTH_COMPONENT24, w, h, 0,
                        GL_DEPTH_COMPONENT, GL_UNSIGNED_INT, nullptr);
-        g_sceneDepthW=w; g_sceneDepthH=h;
+        texW=w; texH=h;
     }
     gl::TexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
     gl::TexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
@@ -64,6 +64,15 @@ static bool ensure_scene_depth_texture(int w, int h) {
     // which has already been copied into a reliable R32F colour texture.
     gl::TexParameteri(GL_TEXTURE_2D, GL_TEXTURE_COMPARE_MODE, GL_NONE);
     return gl::GetError() == GL_NO_ERROR;
+}
+
+static bool ensure_scene_depth_texture(int w, int h) {
+    return ensure_depth_texture(g_sceneDepthTex, g_sceneDepthW, g_sceneDepthH, w, h);
+}
+
+static bool ensure_pre_dynamic_depth_texture(int w, int h) {
+    return ensure_depth_texture(g_preDynamicDepthTex,
+                                g_preDynamicDepthW, g_preDynamicDepthH, w, h);
 }
 
 // Get the scene depth into g_sceneDepthTex.
@@ -97,6 +106,8 @@ static GLuint g_sceneColorFbo = 0;
 static GLuint g_sceneColorFboTex = 0;
 static GLuint g_sceneDepthFbo = 0;
 static GLuint g_sceneDepthFboTex = 0;
+static GLuint g_preDynamicDepthFbo = 0;
+static GLuint g_preDynamicDepthFboTex = 0;
 
 static bool capture_scene_color(const GLint vp[4]) {
     g_sceneColorCapturedNow = false;
@@ -192,7 +203,8 @@ static bool capture_scene_color(const GLint vp[4]) {
     return everOk;
 }
 
-static bool capture_scene_depth(const GLint vp[4]) {
+static bool capture_scene_depth_to(const GLint vp[4], GLuint targetTex,
+                                   GLuint& targetFbo, GLuint& attachedTex) {
     const int w = vp[2], h = vp[3];
     if (w <= 0 || h <= 0) return false;
 
@@ -216,15 +228,15 @@ static bool capture_scene_depth(const GLint vp[4]) {
     }();
     if (kUseBlit && gl::BlitFramebuffer && gl::GenFramebuffers && gl::BindFramebuffer &&
         gl::FramebufferTexture2D && gl::CheckFramebufferStatus) {
-        if (!g_sceneDepthFbo) gl::GenFramebuffers(1, &g_sceneDepthFbo);
-        if (g_sceneDepthFbo) {
+        if (!targetFbo) gl::GenFramebuffers(1, &targetFbo);
+        if (targetFbo) {
             GLint prevRead = 0, prevDraw = 0;
             gl::GetIntegerv(GL_READ_FRAMEBUFFER_BINDING, &prevRead);
             gl::GetIntegerv(GL_FRAMEBUFFER_BINDING, &prevDraw);
-            gl::BindFramebuffer(GL_DRAW_FRAMEBUFFER, g_sceneDepthFbo);
-            if (g_sceneDepthFboTex != g_sceneDepthTex) {
+            gl::BindFramebuffer(GL_DRAW_FRAMEBUFFER, targetFbo);
+            if (attachedTex != targetTex) {
                 gl::FramebufferTexture2D(GL_DRAW_FRAMEBUFFER, GL_DEPTH_ATTACHMENT,
-                                         GL_TEXTURE_2D, g_sceneDepthTex, 0);
+                                         GL_TEXTURE_2D, targetTex, 0);
                 // Depth-only: without this the FBO is incomplete on drivers that
                 // still expect a colour draw buffer. DrawBuffer is per-framebuffer
                 // and OUR fbo is the bound DRAW target here, so this is safe.
@@ -237,7 +249,7 @@ static bool capture_scene_depth(const GLint vp[4]) {
                 // the engine's reads were broken too. The receiver got garbage depth
                 // and shadowed everything. We never read from our own FBO, so the
                 // call is simply gone -- do not "fix" it by binding and restoring.
-                g_sceneDepthFboTex = g_sceneDepthTex;
+                attachedTex = targetTex;
             }
             const GLenum status = gl::CheckFramebufferStatus(GL_DRAW_FRAMEBUFFER);
             GLenum blitErr = GL_NO_ERROR;
@@ -313,6 +325,16 @@ static bool capture_scene_depth(const GLint vp[4]) {
     // Fallback: the historical path. Kept because it is what Linux shipped.
     gl::CopyTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, vp[0], vp[1], w, h);
     return gl::GetError() == GL_NO_ERROR;
+}
+
+static bool capture_scene_depth(const GLint vp[4]) {
+    return capture_scene_depth_to(vp, g_sceneDepthTex,
+                                  g_sceneDepthFbo, g_sceneDepthFboTex);
+}
+
+static bool capture_pre_dynamic_depth(const GLint vp[4]) {
+    return capture_scene_depth_to(vp, g_preDynamicDepthTex,
+                                  g_preDynamicDepthFbo, g_preDynamicDepthFboTex);
 }
 
 static void draw_fullscreen_depth_receiver(void* scene) {
@@ -409,6 +431,7 @@ static void build_static_receiver_program() {
         "#version 330 core\n"
         "out vec4 nwnFragColor;\n"
         "uniform sampler2D nwnStaticSceneDepth;\n"
+        "uniform sampler2D nwnPreDynamicSceneDepth; uniform int nwnDynamicReceiverOnly;\n"
         // SELF-ILLUMINATION GUARD. The engine's finished colour for this pixel.
         // A self-illuminated surface is bright no matter how it is lit, so a
         // shadow laid over it is simply wrong -- glowing runes and lava went
@@ -422,7 +445,7 @@ static void build_static_receiver_program() {
         "uniform mat4 nwnStaticLightVP[4];\n"
         "uniform float nwnStaticClipFar0,nwnStaticClipFar1,nwnStaticClipFar2,nwnStaticClipFar3;\n"
         "uniform vec3 nwnStaticViewportOrigin; uniform int nwnStaticLayer;\n"
-        "uniform int nwnStaticDynamicEnabled,nwnStaticCSMEnabled,nwnStaticComposite;\n"
+        "uniform int nwnStaticDynamicEnabled,nwnStaticCSMEnabled,nwnStaticComposite,nwnLocalOnlyPass;\n"
         "uniform int nwnDynamicLayers; uniform int nwnStaticNearLayers;\n"
         "uniform int nwnFogEnabled; uniform float nwnFogStart,nwnFogEnd;\n"
         "uniform float nwnStaticCompositeStrength,nwnStaticReceiverBias,nwnStaticCascadeBlend,nwnStaticPCFRadius;\n"
@@ -453,6 +476,7 @@ static void build_static_receiver_program() {
         "uniform float nwnLocalTanHalfFov;\n"
         "uniform vec3 nwnLocalLightPos;\n"
         "uniform float nwnLocalLightRadius,nwnLocalLightStrength,nwnLocalLightBias,nwnLocalLightLift;\n"
+        "uniform float nwnLocalContactSep;\n"
         // The LIFT's own light, separate from the shadow cube's. The shadow
         // lookup must use the position the map was rendered with (one frame
         // old); the lift only needs "is a lamp near this pixel", so it takes
@@ -521,7 +545,7 @@ static void build_static_receiver_program() {
         //
         // n MUST be computed in uniform control flow (derivatives), so main()
         // works it out once and passes it in.
-        "vec2 nwnLocalShadeCov(vec4 w, vec3 nrm){"
+        "vec2 nwnLocalShadeCov(vec4 w, vec3 nrm,float contactFactor){"
         "if(nwnLocalLightEnabled==0)return vec2(0.0);"
         // SIX FACES: pick the one this fragment falls in from the major axis of
         // (fragment - light). A point light is a sphere of directions; a single
@@ -546,7 +570,10 @@ static void build_static_receiver_program() {
         // Orient it toward THIS light before offsetting, so the offset is a
         // world/light-space operation rather than a camera-space one.
         "vec3 nlight=nrm*(dot(nrm,nwnLocalSlotPos[sl].xyz-w.xyz)>=0.0?1.0:-1.0);"
-        "vec4 wo=vec4(w.xyz+nlight*texw*nwnLocalNormalBias,1.0);"
+        // Normal offset is for self-shadowing on the caster. Do not apply it
+        // to an upward-facing contact receiver, where it would lift the foot
+        // shadow off the floor before the separation test even runs.
+        "vec4 wo=vec4(w.xyz+nlight*texw*nwnLocalNormalBias*(1.0-contactFactor),1.0);"
         "vec4 l=nwnLocalLightVP[sl]*wo; if(l.w<=0.0) continue;"
         "vec3 s=l.xyz/l.w*0.5+0.5;"
         "if(s.x<=0.0||s.x>=1.0||s.y<=0.0||s.y>=1.0||s.z<=0.0||s.z>=1.0) continue;"
@@ -589,17 +616,23 @@ static void build_static_receiver_program() {
         // never rendered, which is what the note above warns about.
         "float zfi=max(20.0,rr*2.0+max(0.0,nwnLocalLift));"
         "float dzdd=zni*zfi/max(1e-6,dist*dist*(zfi-zni));"
-        "float need=nwnLocalLightBias+nwnLocalMinSep*dzdd;"
+        // A single minimum separation was previously used everywhere. It
+        // removed character acne, but also removed the first few centimetres
+        // of the legitimate caster-to-floor shadow. Upward-facing receivers
+        // use a small contact threshold; steep/curved receivers retain the
+        // stronger self-shadow threshold.
+        "float sep=mix(nwnLocalMinSep,nwnLocalContactSep,contactFactor);"
+        "float need=nwnLocalLightBias+sep*dzdd;"
         "float lit=0.0;"
         "if(nwnLocalSoft<=0.0){"
-        "float st=texture(nwnLocalLightDepth,vec3(s.xy,float(sl))).r;"
-        "lit=(s.z-need<=st)?1.0:0.0;"
+        "float stAll=texture(nwnLocalLightDepth,vec3(s.xy,float(sl))).r;"
+        "lit=s.z-need<=stAll?1.0:0.0;"
         "}else{"
         "vec2 tx=vec2(1.0)/vec2(textureSize(nwnLocalLightDepth,0).xy);"
         "for(int py=-1;py<=1;++py)for(int px=-1;px<=1;++px){"
         "vec2 u=s.xy+vec2(float(px),float(py))*tx*nwnLocalSoft;"
-        "float st=texture(nwnLocalLightDepth,vec3(u,float(sl))).r;"
-        "lit+=(s.z-need<=st)?1.0:0.0;}"
+        "float stAll=texture(nwnLocalLightDepth,vec3(u,float(sl))).r;"
+        "lit+=s.z-need<=stAll?1.0:0.0;}"
         "lit/=9.0;}"
         "float fa=d2/(r2*r2);"
         "float att=clamp((1.0-fa)/max(1e-4,nwnLampFalloff.x+nwnLampFalloff.y*fa),0.0,1.0);"
@@ -637,8 +670,10 @@ static void build_static_receiver_program() {
         "float d=texture(nwnStaticSceneDepth,uv).r; if(d>=0.999999) discard;"
         "if(nwnReceiverDebug==1){nwnFragColor=vec4(0.0,1.0,0.0,1.0);return;}"
         "vec4 w=nwnStaticCameraVPInv*vec4(uv*2.0-1.0,d*2.0-1.0,1.0); w/=w.w;"
-        "float z=0.0;int layer=nwnStaticLayer; if(nwnStaticCSMEnabled!=0){"
-        "z=-((nwnStaticCameraView*w).z); if(z<=0.0||z>nwnStaticClipFar3) discard;"
+        "float z=-((nwnStaticCameraView*w).z);"
+        "int layer=nwnStaticLayer;float sunShade=0.0;"
+        "if(nwnLocalOnlyPass==0){"
+        "if(nwnStaticCSMEnabled!=0){if(z<=0.0||z>nwnStaticClipFar3) discard;"
         "if(z<=nwnStaticClipFar0)layer=0;else if(z<=nwnStaticClipFar1)layer=1;"
         "else if(z<=nwnStaticClipFar2)layer=2;else layer=3;}"
         // PERFORMANCE: evaluate the world-anchored static term ONCE per pixel.
@@ -659,7 +694,7 @@ static void build_static_receiver_program() {
         // every local-light shadow invisible. With the local term disabled
         // this reduces to exactly the previous behaviour.
         "bool filtered=nwnStaticPCFRadius>0.0||nwnStaticCascadeBlend>0.0;"
-        "float sunShade=filtered?clamp(1.0-lit,0.0,1.0):(lit>0.5?0.0:1.0);"
+        "sunShade=filtered?clamp(1.0-lit,0.0,1.0):(lit>0.5?0.0:1.0);}"
         // Geometric normal of the receiving surface, from the depth-derived
         // world position. Cheap, and the only normal available here.
         // The derivative normal is only valid across a CONTINUOUS surface. At
@@ -673,8 +708,27 @@ static void build_static_receiver_program() {
         "vec3 nrmW=normalize(cross(dxw,dyw));"
         "float step2=max(dot(dxw,dxw),dot(dyw,dyw));"
         "float cont=1.0-smoothstep(0.02,0.09,step2);"   // ~0.14..0.3 world units/px
-        "vec2 localTerm=nwnLocalShadeCov(w,nrmW*cont);"
+        // The local path is a downward contact cone. A stable world-up normal
+        // is therefore a useful receiver classification: preserve contact on
+        // floors and gentle slopes, but keep the self-shadow guard on the
+        // vertical/curved surfaces that are prone to acne.
+        "float contactFactor=cont*smoothstep(0.60,0.92,abs(nrmW.z));"
+        // The second half of the contact-safe path receives only on character
+        // pixels, and those must use the full self-shadow separation even on
+        // upward-facing shoulders or helmets.
+        "if(nwnDynamicReceiverOnly!=0)contactFactor=0.0;"
+        "vec2 localTerm=nwnLocalShadeCov(w,nrmW*cont,contactFactor);"
         "float localShade=localTerm.x;"
+        // Compare completed depth with the snapshot taken immediately before
+        // bucket 2. Unchanged pixels already received the ground/static pass;
+        // only newly visible dynamic geometry receives this second pass. World
+        // distance is used instead of raw nonlinear depth so the tolerance is
+        // stable across camera distance.
+        "if(nwnDynamicReceiverOnly!=0){"
+        "float pd=texture(nwnPreDynamicSceneDepth,uv).r;float dyn=1.0;"
+        "if(pd<0.999999){vec4 pw=nwnStaticCameraVPInv*vec4(uv*2.0-1.0,pd*2.0-1.0,1.0);"
+        "pw/=pw.w;dyn=smoothstep(0.01,0.05,length(pw.xyz-w.xyz));}"
+        "localShade*=dyn;}"
         // A SURFACE LIT BY A LOCAL LIGHT MUST NOT BE DARKENED BY THE SUN'S
         // SHADOW. The composite is flat translucent black over every
         // sun-shadowed pixel, which knows nothing about torches: walk under an

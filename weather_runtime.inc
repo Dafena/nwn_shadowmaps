@@ -769,7 +769,9 @@ static bool ensure_precipitation_occlusion_target() {
     gl::ActiveTexture(GL_TEXTURE0 + kPrecipitationOcclusionUnit);
     gl::GetIntegerv(GL_TEXTURE_BINDING_2D, &oldTexture);
     gl::GetIntegerv(GL_FRAMEBUFFER_BINDING, &oldFbo);
-    while (gl::GetError() != GL_NO_ERROR) {}
+    // An allocation failure or lost context can leave an error sticky. Never
+    // turn that into an infinite render-thread spin while clearing NWN's state.
+    drain_gl_errors_bounded();
     gl::GenTextures(1, &g.precipitationOcclusionTexture);
     gl::BindTexture(GL_TEXTURE_2D, g.precipitationOcclusionTexture);
     gl::TexImage2D(GL_TEXTURE_2D, 0, GL_DEPTH_COMPONENT24,
@@ -1330,17 +1332,6 @@ static void observe_draw(GLuint program, GLsizei count) {
     }
     ++g.sceneDraws;
 
-    if (state->skinmesh >= 0 && !state->skinmeshKnown) {
-        push_draw_state(state, false);
-        ++g.unclassifiedDraws;
-        return;
-    }
-    if (state->skinmesh >= 0 && state->skinmeshValue != 0) {
-        push_draw_state(state, false);
-        ++g.skinnedDraws;
-        return;
-    }
-
     const bool water = state->waterTime >= 0 && state->waterWind >= 0 &&
                        state->waterNoise >= 0;
     if (water) {
@@ -1353,11 +1344,24 @@ static void observe_draw(GLuint program, GLsizei count) {
     // static alpha/card geometry and receives wet noise without puddles.
     // Buckets 2/3 are dynamic body/hair geometry and remain excluded, keeping
     // players out independently of a particular model or material variant.
+    //
+    // Do not let the cached skinmesh uniform override this bucket decision.
+    // NWN reuses stock programs across buckets and does not promise to upload
+    // skinmesh=0 before every static draw. A creature draw can therefore leave
+    // the cached per-program value at 1; treating it as per-draw authority made
+    // complete terrain/tile submissions lose weather as character movement
+    // changed the visible draw order. The native bucket is fresh for every
+    // draw and is the measured geometry authority here.
     const int bucket = nwn_core::g_currentBucket;
     if (bucket != 0 && bucket != 1) {
         push_draw_state(state, false);
-        if (bucket >= 0 && bucket < kBucketCount) ++g.nonSceneDraws;
-        else                                     ++g.unclassifiedDraws;
+        if (state->skinmesh >= 0 && state->skinmeshKnown &&
+            state->skinmeshValue != 0)
+            ++g.skinnedDraws;
+        else if (bucket >= 0 && bucket < kBucketCount)
+            ++g.nonSceneDraws;
+        else
+            ++g.unclassifiedDraws;
         return;
     }
     if (state->weatherEligible < 0) {

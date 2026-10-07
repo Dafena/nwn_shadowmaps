@@ -46,8 +46,12 @@ result after the scene is complete.
 - A spare layer allows a dropped source to fade out. Receiver metadata and
   generation state must remain coherent with the depth contents.
 - The local receiver applies NWN attenuation with a configurable falloff,
-  cone/far-edge fading, PCF, normal bias, minimum separation, slope-scaled fill
-  offset, and optional lamp lift.
+  cone/far-edge fading, PCF, normal bias, slope-scaled fill offset, and optional
+  lamp lift. The floor/contact stage samples the complete caster map. Character
+  receivers sample a parallel map that omits engine-classified creatures by
+  default, preventing self-shadow and creature-to-creature shadowing while
+  preserving shadows from placeables and other non-creature casters. The
+  classifier includes rigid/part-based as well as skinned creatures.
 - The receiver runs before post-scene local capture. The one-frame staging
   lifetime is intentional and must not be changed casually.
 
@@ -146,6 +150,7 @@ controls include:
 | --- | --- |
 | Sun | strength, bias, cascade overlap, PCF, composite |
 | Area | day/night fade |
+| Godrays | parked and not exposed; source retained for compile coverage only |
 | Local light | enable, strength, falloff, cone angle, lamp lift, edge fade, slope bias, normal bias, minimum separation, map size |
 | Performance | cascade count, local-shadow update (25 ms / 16 ms / every frame), moving/static caster policy, world-map size/extent, receiver and capture A/B controls |
 | Diagnostics | receiver debug modes, frame-cost and target status |

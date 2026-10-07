@@ -30,6 +30,12 @@ static GLuint g_gpuMirrorFbo = 0;
 // receiver.  This is intentionally separate from the light depth target.
 static GLuint g_sceneDepthTex = 0;
 static int    g_sceneDepthW = 0, g_sceneDepthH = 0;
+// Depth immediately before the dynamic-character bucket. The two-stage local
+// receiver compares this with completed depth so its second pass touches only
+// pixels introduced by characters, leaving the ground contact pass undoubled.
+static GLuint g_preDynamicDepthTex = 0;
+static int    g_preDynamicDepthW = 0, g_preDynamicDepthH = 0;
+static unsigned g_preDynamicDepthFrame = 0;
 static GLuint g_staticReceiverProgram = 0;
 static unsigned g_staticReceiverFrame = 0;
 static unsigned g_staticReceiverDraws = 0;
@@ -94,6 +100,18 @@ static float         g_localJoinLevel[kLocalSlotsMax] = {};
 // bucket 0 has just cleared and only partially refilled.
 static GLuint g_localLightDepthTex      = 0;
 static GLuint g_localLightWriteDepthTex = 0;
+// Local depth used only by creature receivers. It contains non-creature
+// casters, one layer per selected light. The common map still contains every
+// caster and is used by the pre-character floor/contact receiver.
+static GLuint g_localObjectDepthTex     = 0;
+static GLuint g_localObjectWriteDepthTex = 0;
+static GLuint g_localObjectFbo          = 0;
+static int    g_localObjectMapSize      = 0;
+static bool   g_localObjectTargetUsable = false;
+static bool   g_localObjectMapReady     = false;
+static unsigned g_localObjectLayerFrame[kLocalSlotsMax] = {};
+static unsigned g_localObjectDraws[kLocalSlotsMax] = {};
+static int      g_localObjectCaptureLayer = -1;
 static bool   g_localLightTargetUsable = false;
 // SUN-PATH state. capture_local_light_shadow() publishes the slots and sets
 // these; replay_bucket_into_local_light_layers() consumes them from inside the
@@ -324,11 +342,18 @@ static double injector_target_mib() {
     if (g_cascadeDynamicTex) bytes += (double)g_size * g_size * kCascadeCount * depth24;
     if (g_staticWorldTex)    bytes += (double)g_staticWorldSize * g_staticWorldSize * depth24;
     if (g_sceneDepthTex)     bytes += (double)g_sceneDepthW * g_sceneDepthH * depth24;
+    if (g_preDynamicDepthTex) bytes += (double)g_preDynamicDepthW * g_preDynamicDepthH * depth24;
     if (g_localLightDepthTex)
         bytes += (double)g_localLightCaptureSize * g_localLightCaptureSize *
                  g_localLightLayers * depth24;
     if (g_localLightWriteDepthTex)
         bytes += (double)g_localLightCaptureSize * g_localLightCaptureSize *
+                 g_localLightLayers * depth24;
+    if (g_localObjectDepthTex)
+        bytes += (double)g_localObjectMapSize * g_localObjectMapSize *
+                 g_localLightLayers * depth24;
+    if (g_localObjectWriteDepthTex)
+        bytes += (double)g_localObjectMapSize * g_localObjectMapSize *
                  g_localLightLayers * depth24;
     return bytes / (1024.0 * 1024.0);
 }

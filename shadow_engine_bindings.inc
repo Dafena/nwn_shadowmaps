@@ -11,6 +11,18 @@ namespace eng {
     using AddPartToMeshBuckets_t = void (*)(void* part);
     using SceneAddPartsToDrawBuckets_t = void (*)(void* self);
     using SceneRenderDrawBucket_t= void (*)(void* self, int bucket);
+    // RenderDrawBucket walks DrawItem records through these accessors. Linux's
+    // GetFirstItem resets the cursor and tail-jumps into GetNextItem, so Linux
+    // hooks only GetNextItem. Windows returns its first item directly and must
+    // hook both accessors.
+    // Each DrawItem starts with its Part pointer; Part::GetAurObject then gives
+    // the Gob whose engine-owned external-data type is the originating game
+    // object type (creature, placeable, door, ...).
+    using DrawBucketGetItem_t   = const void* (*)(void* self, int bucket,
+                                                  int ordering);
+    using PartGetAurObject_t    = void* (*)(void* part);
+    using GobGetExternalData_t  = void* (*)(void* gob);
+    using GobGetExternalDataType_t = int (*)(void* gob);
     using SceneRenderShadows_t   = void (*)(void* self, int light, bool clearStencil);
     using SceneRenderSinglePass_t = void (*)(void* self);
     using SceneRenderDynamicGeometry_t = void (*)(void* self);
@@ -72,6 +84,13 @@ namespace eng {
     AddPartToMeshBuckets_t  AddPartToMeshBuckets  = nullptr;
     SceneAddPartsToDrawBuckets_t SceneAddPartsToDrawBuckets = nullptr;
     SceneRenderDrawBucket_t SceneRenderDrawBucket = nullptr;
+#ifdef _WIN32
+    DrawBucketGetItem_t     DrawBucketGetFirstItem = nullptr;
+#endif
+    DrawBucketGetItem_t     DrawBucketGetNextItem = nullptr;
+    PartGetAurObject_t      PartGetAurObject = nullptr;
+    GobGetExternalData_t    GobGetExternalData = nullptr;
+    GobGetExternalDataType_t GobGetExternalDataType = nullptr;
     SceneRenderShadows_t    SceneRenderShadows    = nullptr;
     SceneRenderSinglePass_t SceneRenderSinglePass = nullptr;
     SceneRenderDynamicGeometry_t SceneRenderDynamicGeometry = nullptr;
@@ -224,6 +243,16 @@ static const struct { const char* mangled; void** slot; bool required; } kBindin
     // Scene::RenderDrawBucket(int) -- optional: without it the Phase 2 probe
     // and the Phase 3 light pass are unavailable, but Phase 1 still installs.
     {"_ZN5Scene16RenderDrawBucketEi",  (void**)&eng::SceneRenderDrawBucket, false},
+#ifdef _WIN32
+    {"_ZN17DrawBucketManager12GetFirstItemEii",
+                              (void**)&eng::DrawBucketGetFirstItem, false},
+#endif
+    {"_ZN17DrawBucketManager11GetNextItemEii",
+                              (void**)&eng::DrawBucketGetNextItem, false},
+    {"_ZN4Part12GetAurObjectEv", (void**)&eng::PartGetAurObject, false},
+    {"_ZN3Gob15GetExternalDataEv", (void**)&eng::GobGetExternalData, false},
+    {"_ZN3Gob19GetExternalDataTypeEv",
+                              (void**)&eng::GobGetExternalDataType, false},
     // The engine's stable stencil-volume pass. Used only for opt-in tracing;
     // no shadow-map state is substituted here.
     {"_ZN5Scene13RenderShadowsEib",    (void**)&eng::SceneRenderShadows,    false},
