@@ -94,6 +94,8 @@ static const NwnWinSymbol kNwnWinSymbols[] = {
     {"_ZN8Material23BindAllStandardTexturesEv",
                                          "?BindAllStandardTextures@Material@@QEAAXXZ",          false},
     {"_ZN8Material10GetTextureEi",      "?GetTexture@Material@@QEAAPEAVCAurTexture@@H@Z",      false},
+    {"_ZN14SharedMaterial23BindAllStandardTexturesEv",
+                                      "?BindAllStandardTextures@SharedMaterial@@QEAAXXZ", false},
     {"_ZN8Material18InitSharedMaterialEPKc",
                                          "?InitSharedMaterial@Material@@AEAAPEAVSharedMaterial@@PEBD@Z", false},
     {"_ZN14SharedMaterial4InitEPKc",      "?Init@SharedMaterial@@QEAAXPEBD@Z",                      false},

@@ -1,5 +1,32 @@
 # Current task
 
+## 2026-10-11: private rain checkpoint (runtime acceptance pending)
+
+The user confirmed native hiding works, requested extreme rain budgets, and
+reported missing rain in Storm Crown. The saved logarithmic budget slider and
+numeric input now allow up to 262144 (default still 2048). Both parser and GPU
+draw clamp use shared bounds. Storm Crown's authored area is exterior, 100%
+rain, empty cc tileset, with non-static st_floor_tile floors; the shader's old
+empty-height rejection suppressed rain in open-air cells. Falling streaks now
+continue over empty cells, while splashes still require static-map collision.
+Headless GL3.3 tests exercise open air, no fabricated splashes, max budget,
+roofs, depth, alpha and state restoration. In-game Storm Crown confirmation
+and high-budget performance testing remain required. No module edits were made.
+
+weather_particles.inc adds shared GL3.3 rain/splashes and saved opt-in controls.
+It uses authoritative weather and the completed static precipitation map.
+The user confirmed visible private rain on Windows and explicitly requested
+native rain hiding for comparison. A saved, default-on Hide native rain toggle
+now suppresses only exact fxpa_rain01 particle draws while the enabled private
+pass has a current/previous-frame completion and valid same-area shelter map.
+The Windows shared-material adapter follows the installed 89.8193.37-17 emitter
+binding path; it does not guess a Linux field offset. Lightning, snow,
+wet-ground ripples, transparency routing and full-BSP submission are unchanged.
+See [WEATHER_PARTICLES.md](WEATHER_PARTICLES.md)
+for enabling, limits, headless tests and required in-game acceptance.
+Offline tests do not establish NWN acceptance. Native hiding itself still
+needs in-game validation; this is not a complete replacement or final acceptance.
+
 Updated 2026-10-07. Linux remains the behavioural reference. The automatic
 clear/rain/snow weather-effects system, including precipitation occlusion and
 height-aware snow deformation, is accepted on Linux and ported to native

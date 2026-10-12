@@ -62,7 +62,7 @@ $(DEPLOY_DIR)/%.o: %.cpp | $(DEPLOY_DIR)
 # otherwise `make deploy` can silently reuse a stale object after an .inc-only
 # fix (as happened with the startup settings reconciliation).
 $(DEPLOY_DIR)/nwn_shadowmap.o: nwn_shadowmap.cpp \
-	shadow_gl_api.inc shadow_engine_bindings.inc weather_runtime.inc \
+	shadow_gl_api.inc shadow_engine_bindings.inc weather_runtime.inc weather_particles.inc \
 	shadow_targets.inc shadow_diagnostics_settings.inc shadow_replay.inc \
 	shadow_shader_interposition.inc shadow_fullscreen_receiver.inc godrays_runtime.inc \
 	shadow_overlay_runtime.inc shadow_trace_cascade.inc shadow_local_lights.inc \
@@ -100,7 +100,7 @@ $(TARGET): $(OBJS)
 	$(CXX) -shared $^ -o $@ -ldl
 
 nwn_shadowmap.o: nwn_shadowmap.cpp \
-	shadow_gl_api.inc shadow_engine_bindings.inc weather_runtime.inc \
+	shadow_gl_api.inc shadow_engine_bindings.inc weather_runtime.inc weather_particles.inc \
 	shadow_targets.inc shadow_diagnostics_settings.inc shadow_replay.inc \
 	shadow_shader_interposition.inc shadow_fullscreen_receiver.inc godrays_runtime.inc \
 	shadow_overlay_runtime.inc shadow_trace_cascade.inc shadow_local_lights.inc \
@@ -142,3 +142,13 @@ subhook.o: $(SUBHOOK)/subhook.c
 clean:
 	rm -f $(TARGET) $(OBJS)
 .PHONY: all clean
+
+# Real GL-context smoke test; requires Mesa/EGL headers. No game process.
+test-weather:
+	@set -eu; weather_test_path="$$(mktemp /tmp/nwn-weather-test.XXXXXX)"; \
+	trap 'rm -f "$$weather_test_path"' EXIT; \
+	$(CXX) $(CXXFLAGS) tests/weather_particles_gl.cpp shadow_math.cpp \
+	    -o "$$weather_test_path" -lEGL -lGL -ldl; \
+	LIBGL_ALWAYS_SOFTWARE=1 "$$weather_test_path"; \
+	MESA_GL_VERSION_OVERRIDE=3.3 LIBGL_ALWAYS_SOFTWARE=1 "$$weather_test_path"
+.PHONY: test-weather

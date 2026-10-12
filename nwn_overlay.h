@@ -14,10 +14,22 @@
 // interception and remains later work.
 #pragma once
 
+// Shared bounds for the live UI, environment parser and GPU draw count.
+inline constexpr int kNwnShaderRainMinBudget = 256;
+inline constexpr int kNwnShaderRainMaxBudget = 262144;
+
 // Pointers reference the injector's live tunables, so edits take effect on the
 // next frame with no plumbing: the receiver reads these globals each time it
 // uploads uniforms. Any pointer may be null.
 struct NwnOverlayState {
+    bool*  shaderRain = nullptr;
+    bool*  shaderRainHideNative = nullptr;
+    int*   shaderRainBudget = nullptr;
+    float* shaderRainRadius = nullptr;
+    float* shaderRainWindX = nullptr;
+    float* shaderRainWindY = nullptr;
+    float* shaderRainSplashes = nullptr;
+    const char* shaderRainStatus = "off";
     bool   godraysAvailable = false;
     float* csmStrength   = nullptr;
     float* csmBias       = nullptr;

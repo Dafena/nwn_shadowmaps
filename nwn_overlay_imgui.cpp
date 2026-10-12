@@ -202,6 +202,25 @@ void nwn_overlay_render(int viewportW, int viewportH, const NwnOverlayState& st)
         }
 
 #endif   // !NWN_SHIP -- Sun shadows
+        if (st.shaderRain && ImGui::CollapsingHeader("Shader rain (preview)")) {
+            ImGui::Checkbox("Private rain and splashes", st.shaderRain);
+            if (st.shaderRainHideNative) ImGui::Checkbox("Hide native rain (preview only)", st.shaderRainHideNative);
+            ImGui::TextWrapped("Only native rain is hidden when the private pass is ready. Lightning and snow remain native.");
+            ImGui::Text("Pass: %s", st.shaderRainStatus);
+            if (st.shaderRainBudget) {
+                ImGui::SliderInt("Drop budget", st.shaderRainBudget,
+                    kNwnShaderRainMinBudget, kNwnShaderRainMaxBudget, "%d", ImGuiSliderFlags_Logarithmic);
+                ImGui::InputInt("Exact drop budget", st.shaderRainBudget, 1024, 8192);
+                if (*st.shaderRainBudget < kNwnShaderRainMinBudget) *st.shaderRainBudget = kNwnShaderRainMinBudget;
+                if (*st.shaderRainBudget > kNwnShaderRainMaxBudget) *st.shaderRainBudget = kNwnShaderRainMaxBudget;
+                if (*st.shaderRainBudget > 32768)
+                    ImGui::TextWrapped("Extreme rain: high budgets can substantially reduce FPS, especially with many lights.");
+            }
+            if (st.shaderRainRadius) ImGui::SliderFloat("Rain radius", st.shaderRainRadius, 8.0f, 64.0f, "%.1f m");
+            if (st.shaderRainWindX) ImGui::SliderFloat("Wind X (manual)", st.shaderRainWindX, -8.0f, 8.0f, "%.1f m/s");
+            if (st.shaderRainWindY) ImGui::SliderFloat("Wind Y (manual)", st.shaderRainWindY, -8.0f, 8.0f, "%.1f m/s");
+            if (st.shaderRainSplashes) ImGui::SliderFloat("Splash strength", st.shaderRainSplashes, 0.0f, 2.0f);
+        }
         if (st.godraysAvailable && ImGui::CollapsingHeader("Volumetric fog")) {
             if (st.godraysEnabled) {
                 bool enabled = *st.godraysEnabled;

@@ -53,6 +53,7 @@ field offset is verified.
 | Symbol | File | Purpose |
 | --- | --- | --- |
 | `draw_static_receiver` | `shadow_overlay_runtime.inc` | Main fullscreen composite and receiver gating |
+| `draw_weather_particles` | `weather_particles.inc` | Post-area rain/splash preview, gated by weather and completed shelter depth |
 | `build_static_receiver_program` | `shadow_fullscreen_receiver.inc` | Builds the current receiver GLSL |
 | `capture_scene_depth` / `capture_scene_color` | `shadow_fullscreen_receiver.inc` | Copies completed scene buffers for reconstruction/composite |
 | `nwnLayerLit` | receiver GLSL string | Directional cascade visibility test |

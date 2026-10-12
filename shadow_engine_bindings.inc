@@ -134,6 +134,9 @@ namespace eng {
     AurTextureBindInUnit_t  AurTextureBindInUnit  = nullptr;
     AurTextureGetName_t     AurTextureGetName     = nullptr;
     MaterialBindAllStandardTextures_t MaterialBindAllStandardTextures = nullptr;
+#ifdef _WIN32
+    MaterialBindAllStandardTextures_t SharedMaterialBindAllStandardTextures = nullptr;
+#endif
     MaterialGetTexture_t    MaterialGetTexture    = nullptr;
     MaterialInitSharedMaterial_t MaterialInitSharedMaterial = nullptr;
     SharedMaterialInit_t SharedMaterialInit = nullptr;
@@ -273,6 +276,10 @@ static const struct { const char* mangled; void** slot; bool required; } kBindin
     {"_ZN8Material23BindAllStandardTexturesEv",
                               (void**)&eng::MaterialBindAllStandardTextures, false},
     {"_ZN8Material10GetTextureEi",      (void**)&eng::MaterialGetTexture, false},
+#ifdef _WIN32
+    {"_ZN14SharedMaterial23BindAllStandardTexturesEv",
+                              (void**)&eng::SharedMaterialBindAllStandardTextures, false},
+#endif
     {"_ZN8Material18InitSharedMaterialEPKc",
                               (void**)&eng::MaterialInitSharedMaterial, false},
     {"_ZN14SharedMaterial4InitEPKc",

@@ -1,0 +1,4 @@
+FROM debian:11-slim@sha256:e5b6442dd2e9684cf5e87d8338b5968f3b348636fc0be6d7850a381e3731a2bd
+# Isolated compiler/test image, never a deployed runtime service.
+RUN sed -i '/security/d' /etc/apt/sources.list && apt-get update && apt-get install -y --allow-downgrades --no-install-recommends libc6=2.31-13+deb11u11 g++ make python3 glslang-tools g++-mingw-w64-x86-64-posix file binutils libegl1-mesa-dev libgl1-mesa-dev && rm -rf /var/lib/apt/lists/*
+WORKDIR /src
