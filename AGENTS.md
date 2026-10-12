@@ -205,6 +205,7 @@ Other known limitations:
 | `shadow_replay.inc` | Sun/static-world/local replay implementation |
 | `shadow_local_lights.inc` | Local selection, matrices, preparation, capture |
 | `weather_runtime.inc` | Shared weather rendering plus Linux/Windows authority adapters, precipitation occlusion, and snow trails |
+| `weather_particles.inc` | Opt-in GL3.3 rain/splash preview; reversible exact-resource native rain hiding with fallback |
 | `shadow_shader_interposition.inc` | Shader and draw interception |
 | `shadow_fullscreen_receiver.inc` | Receiver programs and scene copies |
 | `shadow_overlay_runtime.inc` | Overlay lifecycle and frame ordering |

@@ -181,6 +181,13 @@ static unsigned settings_table(SettingRef* out, unsigned max) {
     addf("selfillum_guard",    &g_liftThreshold);          // "Bright surfaces keep light"
     addb("lamp_lift",          &g_lampLiftEnabled);        // "Lights lift sun shadow"
     addb("local_character_shadows", &g_localCharacterShadows);
+    addb("shader_rain", &g_shaderRainEnabled);
+    addb("shader_rain_hide_native", &g_shaderRainHideNative);
+    addi("shader_rain_budget", &g_shaderRainBudget);
+    addf("shader_rain_radius", &g_shaderRainRadius);
+    addf("shader_rain_wind_x", &g_shaderRainWindX);
+    addf("shader_rain_wind_y", &g_shaderRainWindY);
+    addf("shader_rain_splashes", &g_shaderRainSplashes);
     if constexpr (kGodraysFeatureAvailable) {
         addb("godrays_enabled",    &g_godraysEnabled);
         addf("godrays_strength",   &g_godraysStrength);
@@ -279,6 +286,13 @@ static void settings_reset_defaults() {
     g_localLightReceiver       = false;  // opt-in on the development build
 #endif
     g_areaShadowFadeSeconds    = 0.75f;
+    g_shaderRainEnabled        = false;
+    g_shaderRainHideNative     = true;
+    g_shaderRainBudget         = 2048;
+    g_shaderRainRadius         = 28.0f;
+    g_shaderRainWindX          = 0.0f;
+    g_shaderRainWindY          = 0.0f;
+    g_shaderRainSplashes       = 1.0f;
     g_godraysEnabled           = false;
     g_godraysStrength          = 0.55f;
     g_godraysSamples           = 24;

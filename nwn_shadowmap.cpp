@@ -999,6 +999,18 @@ static float    g_areaShadowFadeSeconds   = 0.75f;
 // gate is checked by the renderer and the panel; settings and environment
 // parsing are also kept behind it so stale configuration cannot revive it.
 static constexpr bool kGodraysFeatureAvailable = false;
+// Private precipitation preview; optional exact-resource native-rain hiding.
+static bool     g_shaderRainEnabled = false;
+static bool     g_shaderRainHideNative = true;
+namespace weather_particles {
+static void note_material_texture(const char* name);
+static bool suppress_native_draw(bool nativeAreaDraw);
+}
+static int      g_shaderRainBudget = 2048;
+static float    g_shaderRainRadius = 28.0f;
+static float    g_shaderRainWindX = 0.0f;
+static float    g_shaderRainWindY = 0.0f;
+static float    g_shaderRainSplashes = 1.0f;
 static bool     g_godraysEnabled           = false;
 static float    g_godraysStrength          = 0.55f;
 static int      g_godraysSamples           = 24;
@@ -1659,6 +1671,8 @@ static subhook_t g_hookMaterialBind         = nullptr;
 static subhook_t g_hookMaterialInit         = nullptr;
 #ifdef _WIN32
 static subhook_t g_hookSharedMaterialInit   = nullptr;
+static subhook_t g_hookSharedMaterialBindRain = nullptr;
+static eng::MaterialBindAllStandardTextures_t g_sharedMaterialBindRainTrampoline = nullptr;
 #endif
 #ifndef _WIN32
 static subhook_t g_hookMaterialDestroy      = nullptr;
@@ -1799,6 +1813,20 @@ extern "C" void* MaterialInitSharedMaterial_detour(void* material,
     return sharedMaterial;
 }
 
+#ifdef _WIN32
+extern "C" void SharedMaterialBindRain_detour(void* sharedMaterial) {
+    if (g_sharedMaterialBindRainTrampoline) g_sharedMaterialBindRainTrampoline(sharedMaterial);
+    // NWN 89.8193.37-17: PartEmitter::RenderEmitter RVA 0x62900 calls
+    // SharedMaterial::BindAllStandardTextures RVA 0x82630. The latter loads
+    // its base CAurTexture* from +0x50 at 0x8263e and binds it to unit zero.
+    // Do not use Material::GetTexture on a SharedMaterial or guess Linux offsets.
+    void* texture = nullptr;
+    if (sharedMaterial) std::memcpy(&texture,
+        static_cast<const unsigned char*>(sharedMaterial) + 0x50, sizeof(texture));
+    weather_particles::note_material_texture(
+        texture && eng::AurTextureGetName ? eng::AurTextureGetName(texture) : nullptr);
+}
+#endif
 extern "C" void MaterialBindAllStandardTextures_detour(void* material) {
 #ifdef _WIN32
     static unsigned reports = 0;
@@ -1837,6 +1865,7 @@ extern "C" void MaterialBindAllStandardTextures_detour(void* material) {
     // This per-material hot-path hook is installed only when subhook produced
     // a real trampoline. Never remove/call/reinstall it around every draw.
     if (g_materialBindTrampoline) g_materialBindTrampoline(material);
+    weather_particles::note_material_texture(texture0Name);
 #ifdef _WIN32
     if (report) fprintf(stderr, "[oit][win-material] BindAll original returned\n");
 #endif
@@ -2191,6 +2220,7 @@ static bool set_light_view_direct(const Vec3f& eye, const float dir[3]) {
 #include "shadow_shader_interposition.inc"
 #include "shadow_fullscreen_receiver.inc"
 #include "godrays_runtime.inc"
+#include "weather_particles.inc"
 #include "shadow_overlay_runtime.inc"
 #include "shadow_trace_cascade.inc"
 #include "shadow_local_lights.inc"
@@ -2753,6 +2783,7 @@ extern "C" void SceneRender_detour(void* self) {
         // to 1-0.65^5 = 0.88 -- and it ran over the Load Game menu, where there
         // is no area at all. Same gate as the receiver and the overlay.
         if (self == g_areaScene) nwn_oit_frame(self);
+        draw_weather_particles(self);
         // The overlay is intentionally later than the receiver so it is never
         // copied into the scene-depth texture or interpreted as a shadow
         // receiver.  It shares the same selected-area/FBO gate.
@@ -3926,6 +3957,25 @@ static void shadowmap_init() {
     }
 #endif
 
+#ifdef _WIN32
+    // Install independently of the preview's saved state so its live toggle
+    // works without restarting. Only a relocatable trampoline is acceptable.
+    if (eng::SharedMaterialBindAllStandardTextures && eng::AurTextureGetName) {
+        g_hookSharedMaterialBindRain = subhook_new(
+            (void*)eng::SharedMaterialBindAllStandardTextures,
+            (void*)SharedMaterialBindRain_detour, SUBHOOK_64BIT_OFFSET);
+        if (g_hookSharedMaterialBindRain && subhook_install(g_hookSharedMaterialBindRain) == 0)
+            g_sharedMaterialBindRainTrampoline = (eng::MaterialBindAllStandardTextures_t)
+                subhook_get_trampoline(g_hookSharedMaterialBindRain);
+        if (!g_sharedMaterialBindRainTrampoline && g_hookSharedMaterialBindRain) {
+            subhook_remove(g_hookSharedMaterialBindRain);
+            subhook_free(g_hookSharedMaterialBindRain);
+            g_hookSharedMaterialBindRain = nullptr;
+        }
+        fprintf(stderr, "[shadowmap][rain-particles] native-rain identity hook %s\n",
+            g_sharedMaterialBindRainTrampoline ? "ready" : "unavailable; native retained");
+    }
+#endif
     if (g_areaShadowFlagsEnabled && eng::AreaUpdateShadowingLights) {
         g_hookAreaShadowFlags = subhook_new((void*)eng::AreaUpdateShadowingLights,
                                             (void*)AreaUpdateShadowingLights_detour,
@@ -4170,6 +4220,7 @@ static void shadowmap_init() {
         now_seconds() + double(g_localLightDumpAt < 0 ? 0 : g_localLightDumpAt);
     // AFTER the environment, so the panel's saved choices win over the
     // launcher's defaults -- see load_settings().
+    weather_particles::load_environment();
     load_settings();
     fprintf(stderr, "[shadowmap] active. Scene::Render detoured, target %dx%d.\n",
             g_size, g_size);
@@ -4243,6 +4294,14 @@ static void shadowmap_fini() {
         g_hookMaterialInit = nullptr;
         g_materialInitTrampoline = nullptr;
     }
+#ifdef _WIN32
+    if (g_hookSharedMaterialBindRain) {
+        subhook_remove(g_hookSharedMaterialBindRain);
+        subhook_free(g_hookSharedMaterialBindRain);
+        g_hookSharedMaterialBindRain = nullptr;
+        g_sharedMaterialBindRainTrampoline = nullptr;
+    }
+#endif
     if (g_hookMaterialBind) {
         subhook_remove(g_hookMaterialBind);
         subhook_free(g_hookMaterialBind);

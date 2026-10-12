@@ -24,6 +24,7 @@ import shutil
 # Files to scan. Every `static const char* <name> = "#version ...` in them is
 # found and compiled, so adding a shader needs no edit here.
 SOURCES = [
+    "weather_particles.inc",
     "shadow_fullscreen_receiver.inc",
     "godrays_runtime.inc",
     "shadow_overlay_runtime.inc",
