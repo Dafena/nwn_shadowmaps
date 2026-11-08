@@ -55,6 +55,7 @@ field offset is verified.
 | `draw_static_receiver` | `shadow_overlay_runtime.inc` | Main fullscreen composite and receiver gating |
 | `inject_sun_receiver_tag` / `begin_sun_receiver_tag` / `end_sun_receiver_tag` | `shadow_receiver_tags.inc` | Native-draw receiver classification with exact coverage, primitive depth span and reversible MRT attachment |
 | `current_draw_is_highlighted` | `nwn_shadowmap.cpp` | Reads the verified native Linux Scene highlight list and inherited owner identity; no Windows offset assumption |
+| `draw_weather_particles` | `weather_particles.inc` | Post-area rain/splash preview, gated by weather and completed shelter depth |
 | `build_static_receiver_program` | `shadow_fullscreen_receiver.inc` | Builds the current receiver GLSL |
 | `capture_scene_depth` / `capture_scene_color` | `shadow_fullscreen_receiver.inc` | Copies completed scene buffers for reconstruction/composite |
 | `nwnLayerLit` | receiver GLSL string | Directional cascade visibility test |

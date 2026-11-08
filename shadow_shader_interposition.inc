@@ -2437,6 +2437,12 @@ static bool static_alpha_program_current() {
     return false;
 }
 
+static bool suppress_native_rain_draw() {
+    return weather_particles::suppress_native_draw(
+        g_traceFrameActive && g_traceCurrentScene == g_areaScene &&
+        !g_inOurPass && !g_overlayPassActive && !g_inStencilShadow &&
+        !g_cascadeReplayActive && !g_localLightPassActive && !nwn_core::g_ownedPass);
+}
 static void (*g_nextDrawElements)(GLenum, GLsizei, GLenum, const void*) = nullptr;
 // The normal call is always issued before this macro.  It redirects only the
 // duplicate into our depth layer and restores the two original uniforms before
@@ -2602,6 +2608,7 @@ extern "C" void NWN_GL_INTERPOSE(glDrawElements)(GLenum mode, GLsizei count, GLe
                              dlsym(RTLD_NEXT, "glDrawElements");
     shadow_before_draw();
     trace_normal_geometry_draw(count, true);
+    if (suppress_native_rain_draw()) { finish_observed_engine_draw(); return; }
     const bool suppressNative = nwn_oit_suppress_current_draw();
     if (g_nextDrawElements && !suppressNative)
         g_nextDrawElements(mode, count, type, indices);
@@ -2639,6 +2646,7 @@ extern "C" void NWN_GL_INTERPOSE(glDrawArrays)(GLenum mode, GLint first, GLsizei
                            dlsym(RTLD_NEXT, "glDrawArrays");
     shadow_before_draw();
     trace_normal_geometry_draw(count, false);
+    if (suppress_native_rain_draw()) { finish_observed_engine_draw(); return; }
     const bool suppressNative = nwn_oit_suppress_current_draw();
     if (g_nextDrawArrays && !suppressNative)
         g_nextDrawArrays(mode, first, count);
@@ -2706,6 +2714,7 @@ extern "C" void my_draw_range_elements(GLenum mode, GLuint start, GLuint end,
                                         GLsizei count, GLenum type,
                                         const void* indices) {
     trace_normal_geometry_draw(count, true);
+    if (suppress_native_rain_draw()) { finish_observed_engine_draw(); return; }
     const bool suppressNative = nwn_oit_suppress_current_draw();
     if (g_realDrawRangeElements && !suppressNative)
         g_realDrawRangeElements(mode, start, end, count, type, indices);
@@ -2744,6 +2753,7 @@ extern "C" void my_multi_draw_arrays(GLenum mode, const GLint* first,
                                      const GLsizei* count, GLsizei drawcount) {
     if (count) for (GLsizei i = 0; i < drawcount; ++i)
         trace_normal_geometry_draw(count[i], false);
+    if (suppress_native_rain_draw()) { finish_observed_engine_draw(); return; }
     const bool suppressNative = nwn_oit_suppress_current_draw();
     if (g_realMultiDrawArrays && !suppressNative)
         g_realMultiDrawArrays(mode, first, count, drawcount);
@@ -2781,6 +2791,7 @@ extern "C" void my_multi_draw_elements(GLenum mode, const GLsizei* count,
                                        GLsizei drawcount) {
     if (count) for (GLsizei i = 0; i < drawcount; ++i)
         trace_normal_geometry_draw(count[i], true);
+    if (suppress_native_rain_draw()) { finish_observed_engine_draw(); return; }
     const bool suppressNative = nwn_oit_suppress_current_draw();
     if (g_realMultiDrawElements && !suppressNative)
         g_realMultiDrawElements(mode, count, type, indices, drawcount);
@@ -2819,6 +2830,7 @@ extern "C" void my_draw_elements_base_vertex(GLenum mode, GLsizei count,
                                                GLenum type, const void* indices,
                                                GLint basevertex) {
     trace_normal_geometry_draw(count, true);
+    if (suppress_native_rain_draw()) { finish_observed_engine_draw(); return; }
     const bool suppressNative = nwn_oit_suppress_current_draw();
     if (g_realDrawElementsBaseVertex && !suppressNative)
         g_realDrawElementsBaseVertex(mode, count, type, indices, basevertex);
@@ -2859,6 +2871,7 @@ extern "C" void my_draw_range_elements_base_vertex(GLenum mode, GLuint start,
                                                      GLenum type, const void* indices,
                                                      GLint basevertex) {
     trace_normal_geometry_draw(count, true);
+    if (suppress_native_rain_draw()) { finish_observed_engine_draw(); return; }
     const bool suppressNative = nwn_oit_suppress_current_draw();
     if (g_realDrawRangeElementsBaseVertex && !suppressNative)
         g_realDrawRangeElementsBaseVertex(mode, start, end, count, type,
@@ -2902,6 +2915,7 @@ extern "C" void my_draw_elements_instanced(GLenum mode, GLsizei count,
                                             GLenum type, const void* indices,
                                             GLsizei instances) {
     for (GLsizei i = 0; i < instances; ++i) trace_normal_geometry_draw(count, true);
+    if (suppress_native_rain_draw()) { finish_observed_engine_draw(); return; }
     const bool suppressNative = nwn_oit_suppress_current_draw();
     if (g_realDrawElementsInstanced && !suppressNative)
         g_realDrawElementsInstanced(mode, count, type, indices, instances);
@@ -2941,6 +2955,7 @@ extern "C" void my_draw_elements_instanced_base_vertex(GLenum mode, GLsizei coun
                                                         GLenum type, const void* indices,
                                                         GLsizei instances, GLint basevertex) {
     for (GLsizei i = 0; i < instances; ++i) trace_normal_geometry_draw(count, true);
+    if (suppress_native_rain_draw()) { finish_observed_engine_draw(); return; }
     const bool suppressNative = nwn_oit_suppress_current_draw();
     if (g_realDrawElementsInstancedBaseVertex && !suppressNative)
         g_realDrawElementsInstancedBaseVertex(mode, count, type, indices,

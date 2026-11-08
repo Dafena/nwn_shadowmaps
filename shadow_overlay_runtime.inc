@@ -233,6 +233,14 @@ static void draw_shadow_overlay_imgui(void* scene) {
     // Hand the panel the live tunables so edits apply on the next frame: the
     // receiver re-reads every one of these when it uploads its uniforms.
     NwnOverlayState st;
+    st.shaderRain = &g_shaderRainEnabled;
+    st.shaderRainHideNative = &g_shaderRainHideNative;
+    st.shaderRainBudget = &g_shaderRainBudget;
+    st.shaderRainRadius = &g_shaderRainRadius;
+    st.shaderRainWindX = &g_shaderRainWindX;
+    st.shaderRainWindY = &g_shaderRainWindY;
+    st.shaderRainSplashes = &g_shaderRainSplashes;
+    st.shaderRainStatus = weather_particles::status;
     st.csmStrength   = &g_cascadeCompositeStrength;
     st.csmBias       = &g_cascadeReceiverBias;
     st.csmBlend      = &g_cascadeBlendWidth;
