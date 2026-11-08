@@ -32,7 +32,7 @@ after installing a DLL; never overwrite a running client's loaded proxy.
 
 Open the renderer ImGui panel, expand **Shader rain (preview)** and enable
 **Private rain and splashes**. Status reports why the pass is waiting.
-**Hide native rain (preview only)** defaults on. With both boxes checked,
+**Hide native rain (preview only)** defaults off. With both boxes checked,
 Windows suppresses matching native rain draws after the private pass is ready.
 The first frame remains native; missing prerequisites restore native rain.
 Uncheck either box to restore it immediately. The pass status reports
@@ -46,7 +46,7 @@ Environment defaults (saved panel settings take precedence):
 | Variable | Default | Range |
 | --- | --- | --- |
 | NWN_SHADER_RAIN | 0 | 0 / 1 |
-| NWN_SHADER_RAIN_HIDE_NATIVE | 1 | 0 / 1; only active with preview |
+| NWN_SHADER_RAIN_HIDE_NATIVE | 0 | 0 / 1; only active with preview |
 | NWN_SHADER_RAIN_BUDGET | 2048 | 256–262144 |
 | NWN_SHADER_RAIN_RADIUS | 28 | 8–64 world metres |
 | NWN_SHADER_RAIN_WIND_X | 0 | -8–8 metres/second |

@@ -287,7 +287,7 @@ static void settings_reset_defaults() {
 #endif
     g_areaShadowFadeSeconds    = 0.75f;
     g_shaderRainEnabled        = false;
-    g_shaderRainHideNative     = true;
+    g_shaderRainHideNative     = false;
     g_shaderRainBudget         = 2048;
     g_shaderRainRadius         = 28.0f;
     g_shaderRainWindX          = 0.0f;

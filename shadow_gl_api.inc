@@ -126,6 +126,7 @@ typedef void          GLvoid;
 
 namespace gl {
     void     (*GetIntegerv)(GLenum, GLint*)                                = nullptr;
+    void     (*GetBooleani_v)(GLenum, GLuint, GLboolean*) = nullptr;
     void     (*GetBooleanv)(GLenum, GLboolean*)                            = nullptr;
     void     (*GetFloatv)(GLenum, GLfloat*)                                = nullptr;
     GLboolean(*IsEnabled)(GLenum)                                          = nullptr;
@@ -141,6 +142,7 @@ namespace gl {
     void     (*Clear)(GLbitfield)                                          = nullptr;
     void     (*ClearColor)(GLfloat, GLfloat, GLfloat, GLfloat)             = nullptr;
     void     (*ClearDepth)(GLclampd)                                       = nullptr;
+    void     (*ColorMaski)(GLuint, GLboolean, GLboolean, GLboolean, GLboolean) = nullptr;
     void     (*ColorMask)(GLboolean, GLboolean, GLboolean, GLboolean)      = nullptr;
     void     (*DepthMask)(GLboolean)                                       = nullptr;
     void     (*DepthFunc)(GLenum)                                          = nullptr;
@@ -261,7 +263,7 @@ static void refresh_gl_identity() {
 
 static bool bind_gl() {
     bool ok = true;
-    GLBIND(GetIntegerv);  GLBIND(GetBooleanv);   GLBIND(IsEnabled);  GLBIND(GetFloatv);
+    GLBIND(GetIntegerv); GLBIND(GetBooleani_v); GLBIND(ColorMaski); GLBIND(GetBooleanv);   GLBIND(IsEnabled);  GLBIND(GetFloatv);
     GLBIND(IsProgram); GLBIND(BlitFramebuffer);
     GLBIND(GetError);     GLBIND(GetString);
     GLBIND(Enable);       GLBIND(Disable);       GLBIND(PolygonOffset); GLBIND(CullFace);       GLBIND(BlendFuncSeparate); GLBIND(BlendEquationSeparate); GLBIND(Viewport);

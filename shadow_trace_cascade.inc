@@ -746,9 +746,11 @@ static const void* call_draw_bucket_item_original(subhook_t hook,
 #ifdef _WIN32
 extern "C" const void* DrawBucketGetFirstItem_detour(void* self, int bucket,
                                                        int ordering) {
-    const void* item = call_draw_bucket_item_original(
-        g_hookDrawBucketFirst, eng::DrawBucketGetFirstItem,
-        self, bucket, ordering);
+    const void* item = nullptr;
+    if (!layer_stack::iterator(self, bucket, ordering, &item, true))
+        item = call_draw_bucket_item_original(
+            g_hookDrawBucketFirst, eng::DrawBucketGetFirstItem,
+            self, bucket, ordering);
     classify_current_draw_item(item);
     return item;
 }
@@ -757,6 +759,11 @@ extern "C" const void* DrawBucketGetFirstItem_detour(void* self, int bucket,
 extern "C" const void* DrawBucketGetNextItem_detour(void* self, int bucket,
                                                       int ordering) {
 #ifdef _WIN32
+    const void* orderedItem = nullptr;
+    if (layer_stack::iterator(self, bucket, ordering, &orderedItem)) {
+        classify_current_draw_item(orderedItem);
+        return orderedItem;
+    }
     // v89.8193.37-17's exported GetNextItem is a short leaf routine for which
     // Subhook cannot construct a safe trampoline. Reproduce that routine's
     // measured Windows layout instead of temporarily unpatching live render

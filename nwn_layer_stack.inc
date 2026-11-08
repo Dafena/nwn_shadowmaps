@@ -1,5 +1,5 @@
-// Opt-in ordered continuous-alpha layers. Linux is the measured reference;
-// other platforms remain native until their iterator ABI is verified.
+// Opt-in ordered continuous-alpha layers. Linux is the visual reference;
+// Windows uses separately verified iterator exports/layout and hook readiness.
 // No geometry, colour, blend function, depth function or cull state is changed.
 #include "nwn_layer_stack_plan.h"
 
@@ -9,8 +9,8 @@ static int submission_pass = 0;
 static int draw_pass = 0;
 static void* active_scene = nullptr;
 static int active_bucket = -1;
-struct Entry { void* scene; void* part; int priority; };
-static std::vector<Entry> entries;
+static nwn_layer_stack::Registry registry;
+static subhook_t part_draw_hook = nullptr;
 static GLint alpha_location = -1;
 static GLuint alpha_program = 0;
 static GLfloat saved_alpha = 0;
@@ -22,6 +22,9 @@ struct BucketScope {
         : scene(active_scene), bucket(active_bucket), part(current_part), pass(submission_pass) {
         active_scene = next_scene; active_bucket = next_bucket;
         current_part = nullptr; submission_pass = 0;
+        if (next_bucket == 1 && !g_inOurPass && !g_cascadeReplayActive &&
+            !g_localLightPassActive && !nwn_core::g_ownedPass)
+            registry.begin(next_scene, static_cast<unsigned long>(g_frames));
     }
     ~BucketScope() {
         active_scene = scene; active_bucket = bucket;
@@ -31,44 +34,56 @@ struct BucketScope {
 
 static bool visible_context() {
 #ifdef _WIN32
-    return false;
-#else
+    // GetFirstItem consumes an item on Windows. Do not enable scheduling with
+    // only half the required adapter installed.
+    if (!part_draw_hook || !g_hookDrawBucketFirst || !g_hookDrawBucketNext)
+        return false;
+#endif
     // The native bucket call is authoritative even when optional shadow trace
     // mode is disabled and g_areaScene has not been selected. Only publishing
     // shaders can opt in; never infer a layer from viewport size or distance.
     return active_scene && active_bucket == 1 && !g_inOurPass &&
         !g_overlayPassActive && !g_inStencilShadow && !g_cascadeReplayActive &&
         !g_localLightPassActive && !nwn_core::g_ownedPass;
-#endif
 }
 static int priority(void* part) {
-    for (const auto& e : entries) if (e.scene == active_scene && e.part == part) return e.priority;
-    return -1;
+    return registry.priority(part);
 }
-#ifndef _WIN32
-static subhook_t part_draw_hook = nullptr;
 static void part_draw_detour(void* part) {
+    if (visible_context() && !nwn_layer_stack::submit_cached_pass(priority(part), submission_pass))
+        return;
     void* previous_part = current_part;
     const int previous_pass = draw_pass;
     current_part = part; draw_pass = submission_pass;
     if (void* trampoline = subhook_get_trampoline(part_draw_hook))
         reinterpret_cast<eng::LayerStackPartDraw_t>(trampoline)(part);
     else {
+#ifndef _WIN32
         subhook_remove(part_draw_hook);
         eng::LayerStackPartDraw(part);
         subhook_install(part_draw_hook);
+#endif
     }
     current_part = previous_part; draw_pass = previous_pass;
 }
-#endif
-static bool iterator(void* self, int bucket, int ordering, const void** item) {
+static bool iterator(void* self, int bucket, int ordering, const void** item, bool first) {
     submission_pass = 0;
-#ifndef _WIN32
     if (!self || bucket != 1 || ordering < 0 || ordering > 1 || !visible_context()) return false;
-    // Verified v89 Linux DrawBucketManager layout, same as the accepted trial.
+    // v89 Linux and Windows both have 16-byte lists and cursor+0x308.
+    // Windows GetFirstItem RVA0xd94f0 also resets+0x300 before consuming item0.
     struct List { void** items; int count; int capacity; };
     static_assert(sizeof(List) == 16, "Linux draw-list ABI");
     auto manager = static_cast<unsigned char*>(self);
+#ifdef _WIN32
+    if (first) {
+        const uint64_t zero = 0;
+        std::memcpy(manager + 0x300, &zero, sizeof(zero));
+        const int start = 0;
+        std::memcpy(manager + 0x308, &start, sizeof(start));
+    }
+#else
+    (void)first;
+#endif
     int cursor = 0; std::memcpy(&cursor, manager + 0x308, sizeof(cursor));
     static void* owner = nullptr;
     static int active_ordering = -1;
@@ -102,10 +117,6 @@ static bool iterator(void* self, int bucket, int ordering, const void** item) {
     *item = &draws[cursor].part;
     ++cursor; std::memcpy(manager + 0x308, &cursor, sizeof(cursor));
     return true;
-#else
-    (void)self; (void)bucket; (void)ordering; (void)item;
-    return false;
-#endif
 }
 #if !NWN_SHIP
 // Optional one-frame native evidence. No framebuffer readback or rendering
@@ -173,11 +184,7 @@ static void before_draw() {
     GLboolean colour[4] = {};
     gl::GetBooleanv(GL_COLOR_WRITEMASK, colour);
     if (!colour[0] && !colour[1] && !colour[2]) return;
-    bool found = false;
-    for (auto& e : entries) if (e.scene == active_scene && e.part == current_part) {
-        e.priority = hint; found = true; break;
-    }
-    if (!found && hint >= 0 && entries.size() < 4096) entries.push_back({active_scene, current_part, hint});
+    registry.remember(current_part, hint);
     static bool reported = false;
     if (hint >= 0 && !reported) {
         reported = true;

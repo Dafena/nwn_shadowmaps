@@ -32,6 +32,7 @@ static const NwnWinSymbol kNwnWinSymbols[] = {
      "?GetFirstItem@DrawBucketManager@@QEAAPEBUDrawItem@@HH@Z",                                false},
     {"_ZN17DrawBucketManager11GetNextItemEii",
      "?GetNextItem@DrawBucketManager@@QEAAPEBUDrawItem@@HH@Z",                                 false},
+    {"_ZN11PartTriMesh4DrawEv", "?Draw@PartTriMesh@@UEAAXXZ", false},
     {"_ZN4Part12GetAurObjectEv",               "?GetAurObject@Part@@UEAAPEAVCAurObject@@XZ",   false},
     {"_ZN3Gob15GetExternalDataEv",             "?GetExternalData@Gob@@UEAAPEAXXZ",            false},
     {"_ZN3Gob19GetExternalDataTypeEv",         "?GetExternalDataType@Gob@@UEAAHXZ",            false},

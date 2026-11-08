@@ -43,7 +43,19 @@ static void attach(GLenum, GLenum, GLenum, GLuint tex, GLint) {
 static void buffers(GLsizei n, const GLenum *data) { std::copy_n(data, n, drawBuffers); }
 static GLenum complete(GLenum) { return GL_FRAMEBUFFER_COMPLETE; }
 static void clear_uint(GLenum, GLint, const GLuint *) { ++clears; }
-static void color_mask(GLboolean, GLboolean, GLboolean, GLboolean) {}
+static GLboolean masks[8][4] = {
+    {GL_FALSE, GL_TRUE, GL_FALSE, GL_TRUE},
+    {GL_TRUE, GL_FALSE, GL_TRUE, GL_FALSE},
+    {}, {}, {}, {}, {}, {GL_FALSE, GL_TRUE, GL_FALSE, GL_TRUE}};
+static void get_bool_indexed(GLenum, GLuint index, GLboolean* out) {
+    std::copy_n(masks[index], 4, out);
+}
+static void color_mask_indexed(GLuint index, GLboolean r, GLboolean g, GLboolean b, GLboolean a) {
+    masks[index][0]=r; masks[index][1]=g; masks[index][2]=b; masks[index][3]=a;
+}
+static void color_mask(GLboolean r, GLboolean g, GLboolean b, GLboolean a) {
+    for (GLuint i=0;i<8;++i) color_mask_indexed(i,r,g,b,a);
+}
 static void uniform_int(GLint, GLint value) { tagKind = value; }
 static void bind_texture(GLenum target, GLuint tex) {
     if (target == GL_TEXTURE_2D)
@@ -57,6 +69,8 @@ static void* highlight_external(void* gob) {
     return static_cast<HighlightGobFixture*>(gob)->owner;
 }
 int main() {
+    GLboolean savedMasks[8][4];
+    std::memcpy(savedMasks, masks, sizeof(masks));
     gl::GetIntegerv = get_int;
     gl::GetBooleanv = get_bool;
     gl::IsEnabled = enabled;
@@ -67,6 +81,8 @@ int main() {
     gl::CheckFramebufferStatus = complete;
     gl::ClearBufferuiv = clear_uint;
     gl::ColorMask = color_mask;
+    gl::ColorMaski = color_mask_indexed;
+    gl::GetBooleani_v = get_bool_indexed;
     gl::Uniform1i = uniform_int;
     gl::BindTexture = bind_texture;
     gl::TexImage2DMultisample = multisample;
@@ -135,5 +151,8 @@ int main() {
     printf("sun native highlight ownership: inherited-part=%d other=%d removed=%d %s\n",
            matchedPart, otherObject, removed, highlightOk ? "PASS" : "FAIL");
     if (!highlightOk) ++failures;
+    const bool masksRestored = std::memcmp(savedMasks, masks, sizeof(masks)) == 0;
+    printf("sun indexed colour-mask restore: %s\n", masksRestored ? "PASS" : "FAIL");
+    if (!masksRestored) ++failures;
     return failures ? 1 : 0;
 }

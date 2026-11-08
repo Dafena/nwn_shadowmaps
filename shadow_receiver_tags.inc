@@ -111,7 +111,7 @@ static void begin_sun_receiver_tag() {
         g_localLightPassActive || g_overlayPassActive || nwn_core::g_ownedPass ||
         g_inStencilShadow || !g_shadowFrameContext.valid || !g_traceFrameActive ||
         g_traceCurrentScene != g_areaScene || nwn_core::g_currentBucket < 0 || !gl::DrawBuffers ||
-        !gl::ClearBufferuiv)
+        !gl::ClearBufferuiv || !gl::GetBooleani_v || !gl::ColorMaski)
         return;
     GLboolean depthWrite = GL_FALSE;
     gl::GetBooleanv(GL_DEPTH_WRITEMASK, &depthWrite);
@@ -176,12 +176,12 @@ static void begin_sun_receiver_tag() {
         const GLuint clear[4] = {0xffffffffu, 0, 0, 0};
         const GLboolean scissor = gl::IsEnabled(GL_SCISSOR_TEST);
         GLboolean mask[4];
-        gl::GetBooleanv(GL_COLOR_WRITEMASK, mask);
+        gl::GetBooleani_v(GL_COLOR_WRITEMASK, kSunTagOutput, mask);
         if (scissor)
             gl::Disable(GL_SCISSOR_TEST);
-        gl::ColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
+        gl::ColorMaski(kSunTagOutput, GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
         gl::ClearBufferuiv(GL_COLOR, kSunTagOutput, clear);
-        gl::ColorMask(mask[0], mask[1], mask[2], mask[3]);
+        gl::ColorMaski(kSunTagOutput, mask[0], mask[1], mask[2], mask[3]);
         if (scissor)
             gl::Enable(GL_SCISSOR_TEST);
         g_sunTagFrame = g_shadowFrameContext.serial;

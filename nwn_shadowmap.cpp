@@ -1001,7 +1001,7 @@ static float    g_areaShadowFadeSeconds   = 0.75f;
 static constexpr bool kGodraysFeatureAvailable = false;
 // Private precipitation preview; optional exact-resource native-rain hiding.
 static bool     g_shaderRainEnabled = false;
-static bool     g_shaderRainHideNative = true;
+static bool     g_shaderRainHideNative = false;
 namespace weather_particles {
 static void note_material_texture(const char* name);
 static bool suppress_native_draw(bool nativeAreaDraw);
@@ -2243,7 +2243,7 @@ static bool set_light_view_direct(const Vec3f& eye, const float dir[3]) {
 #include "weather_runtime.inc"
 #include "shadow_receiver_tags.inc"
 namespace layer_stack {
-static bool iterator(void*, int, int, const void**);
+static bool iterator(void*, int, int, const void**, bool first = false);
 static void before_draw();
 static void after_draw();
 }
@@ -4087,11 +4087,11 @@ static void shadowmap_init() {
         eng::DrawBucketGetFirstItem &&
 #endif
         eng::PartGetAurObject && eng::GobGetExternalDataType;
-#ifndef _WIN32
-    const bool layerStackNeedsBucketHook = eng::DrawBucketGetNextItem && eng::LayerStackPartDraw;
-#else
-    const bool layerStackNeedsBucketHook = false;
+    const bool layerStackNeedsBucketHook = eng::DrawBucketGetNextItem && eng::LayerStackPartDraw
+#ifdef _WIN32
+        && eng::DrawBucketGetFirstItem
 #endif
+        ;
     if (g_traceEnabled || oitNeedsBucketHook || drawOwnerNeedsBucketHook || layerStackNeedsBucketHook) {
         auto install_trace = [](subhook_t& slot, void* target, void* detour,
                                 const char* name) {
@@ -4150,11 +4150,9 @@ static void shadowmap_init() {
         // turn on the shadow trace, targets, replay, or shader diagnostics.
         install_trace(g_hookTraceBucket, (void*)eng::SceneRenderDrawBucket,
                       (void*)SceneRenderDrawBucket_trace_detour, "Scene::RenderDrawBucket");
-#ifndef _WIN32
         if (layerStackNeedsBucketHook)
             install_trace(layer_stack::part_draw_hook, (void*)eng::LayerStackPartDraw,
                           (void*)layer_stack::part_draw_detour, "PartTriMesh::Draw layer stack scope");
-#endif
         if (drawOwnerNeedsBucketHook || layerStackNeedsBucketHook) {
 #ifdef _WIN32
             install_trace(g_hookDrawBucketFirst, (void*)eng::DrawBucketGetFirstItem,

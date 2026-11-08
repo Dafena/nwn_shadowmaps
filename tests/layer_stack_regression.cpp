@@ -1,9 +1,28 @@
+#include <cstdint>
 #include "nwn_layer_stack_plan.h"
 #include <cassert>
 #include <iostream>
 #include <tuple>
 
 int main() {
+    nwn_layer_stack::Registry registry;
+    registry.begin(reinterpret_cast<void*>(1), 1);
+    for (uintptr_t i = 1; i <= 5000; ++i)
+        registry.remember(reinterpret_cast<void*>(i), 2);
+    assert(registry.size() == 5000);
+    registry.begin(reinterpret_cast<void*>(2), 2);
+    assert(registry.size() == 0);
+    registry.remember(reinterpret_cast<void*>(1), 3);
+    registry.begin(reinterpret_cast<void*>(2), 3);
+    assert(registry.priority(reinterpret_cast<void*>(1)) == 3);
+    registry.begin(reinterpret_cast<void*>(2), 4);
+    assert(registry.priority(reinterpret_cast<void*>(1)) == -1);
+    registry.remember(reinterpret_cast<void*>(1), 5);
+    registry.remember(reinterpret_cast<void*>(1), -1);
+    assert(!nwn_layer_stack::submit_cached_pass(registry.priority(reinterpret_cast<void*>(1)), 2));
+    assert(nwn_layer_stack::submit_cached_pass(-1, 1));
+    assert(nwn_layer_stack::submit_cached_pass(-1, 0));
+
     int base, overlay, high, solid, native;
     // Exact failure: native base core, overlay core, base fade, overlay fade.
     // Required: finish the whole lower hint before starting the higher hint.
