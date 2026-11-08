@@ -89,6 +89,10 @@ namespace eng {
 #endif
     DrawBucketGetItem_t     DrawBucketGetNextItem = nullptr;
     PartGetAurObject_t      PartGetAurObject = nullptr;
+#ifndef _WIN32
+    using LayerStackPartDraw_t = void (*)(void*);
+    LayerStackPartDraw_t LayerStackPartDraw = nullptr;
+#endif
     GobGetExternalData_t    GobGetExternalData = nullptr;
     GobGetExternalDataType_t GobGetExternalDataType = nullptr;
     SceneRenderShadows_t    SceneRenderShadows    = nullptr;
@@ -250,6 +254,9 @@ static const struct { const char* mangled; void** slot; bool required; } kBindin
     {"_ZN17DrawBucketManager11GetNextItemEii",
                               (void**)&eng::DrawBucketGetNextItem, false},
     {"_ZN4Part12GetAurObjectEv", (void**)&eng::PartGetAurObject, false},
+#ifndef _WIN32
+    {"_ZN11PartTriMesh4DrawEv", (void**)&eng::LayerStackPartDraw, false},
+#endif
     {"_ZN3Gob15GetExternalDataEv", (void**)&eng::GobGetExternalData, false},
     {"_ZN3Gob19GetExternalDataTypeEv",
                               (void**)&eng::GobGetExternalDataType, false},

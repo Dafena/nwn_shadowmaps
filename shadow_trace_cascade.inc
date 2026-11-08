@@ -785,9 +785,11 @@ extern "C" const void* DrawBucketGetNextItem_detour(void* self, int bucket,
         if (items) item = items + static_cast<ptrdiff_t>(cursor) * 8;
     }
 #else
-    const void* item = call_draw_bucket_item_original(
-        g_hookDrawBucketNext, eng::DrawBucketGetNextItem,
-        self, bucket, ordering);
+    const void* item = nullptr;
+    if (!layer_stack::iterator(self, bucket, ordering, &item))
+        item = call_draw_bucket_item_original(
+            g_hookDrawBucketNext, eng::DrawBucketGetNextItem,
+            self, bucket, ordering);
 #endif
     classify_current_draw_item(item);
     return item;
@@ -912,7 +914,10 @@ extern "C" void SceneRenderDrawBucket_trace_detour(void* self, int bucket) {
     if (self == g_areaScene) nwn_oit_bucket_begin(self, bucket);
     g_currentDrawOwnerKind = DrawOwnerKind::Unknown;
     g_currentDrawOwner = nullptr;
-    CALL_ORIGINAL(g_hookTraceBucket, eng::SceneRenderDrawBucket, self, bucket);
+    {
+        layer_stack::BucketScope layerScope(self, bucket);
+        CALL_ORIGINAL(g_hookTraceBucket, eng::SceneRenderDrawBucket, self, bucket);
+    }
     g_currentDrawOwnerKind = DrawOwnerKind::Unknown;
     g_currentDrawOwner = nullptr;
     nwn_core::g_currentBucket = priorBucket;
@@ -1068,7 +1073,7 @@ extern "C" void* LightGetShadowLights_trace_detour(void* self, int mode) {
         uint32_t count = 0;
         std::memcpy(&data, result, sizeof(data));
         std::memcpy(&count, (const char*)result + sizeof(void*), sizeof(count));
-        const bool plausible = count <= 64 && data != nullptr;
+        const bool plausible = count <= 64 && (count == 0 || data != nullptr);
         const bool shouldLog = plausible &&
             (result != g_localLightLastList || count != g_localLightLastCount ||
              mode != g_localLightLastMode || g_localLightReports < 2);

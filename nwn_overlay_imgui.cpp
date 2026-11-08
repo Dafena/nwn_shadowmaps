@@ -926,13 +926,25 @@ void nwn_overlay_render(int viewportW, int viewportH, const NwnOverlayState& st)
                     "3 - solid magenta before any sampling",
                     "4 - local compare: red=occluded, green/blue=operands",
                     "5 - yellow local-shadow cutoff ring",
+                    "6 - raw sun: red=world, green=near, blue=moving",
+                    "7 - A/B: old duplicate A2C sun on creatures",
+                    "8 - sun receivers: green=creature, red=other, blue=unknown",
                 };
                 int mode = *st.receiverDebug;
-                if (mode < 0 || mode > 5) mode = 0;
-                if (ImGui::Combo("Receiver debug", &mode, modes, 6))
+                if (mode < 0 || mode > 8) mode = 0;
+                if (ImGui::Combo("Receiver debug", &mode, modes, 9))
                     *st.receiverDebug = mode;
                 ImGui::TextDisabled("3 proves the pass reaches the screen; 1/2 sit after\n"
                                     "the background discard and cannot show that.");
+                if (mode == 6)
+                    ImGui::TextDisabled("Raw sun maps before lighting/fog; mixed colours\n"
+                                        "mean more than one map shadows the same pixel.");
+                if (mode == 7)
+                    ImGui::TextDisabled("Normal scene, but creature A2C also receives sun\n"
+                                        "in its material shader. Compare with mode 0.");
+                if (mode == 8)
+                    ImGui::TextDisabled("Green: creature; yellow: native highlight;\n"
+                                        "red: other receiver; blue: no matching tag.");
             }
         }
 #endif   // !NWN_SHIP -- Diagnostics

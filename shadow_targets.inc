@@ -15,6 +15,15 @@ static GLuint g_staticWorldTex = 0;
 static GLuint g_staticWorldFbo = 0;
 static GLuint g_cascadeStaticTex = 0;
 static GLuint g_cascadeDynamicTex = 0;
+static GLuint g_sunObjectTex = 0;
+static GLuint g_sunObjectFbo = 0;
+static bool g_sunObjectCaptureActive = false;
+static unsigned g_sunObjectFrame[kCascadeCount] = {};
+static unsigned g_sunObjectDraws[kCascadeCount] = {};
+static GLuint g_sunTagTex = 0, g_sunTagDummy2D = 0, g_sunTagDummyMS = 0;
+static int g_sunTagWidth = 0, g_sunTagHeight = 0, g_sunTagSamples = -1;
+static unsigned g_sunTagFrame = 0;
+static GLuint g_sunTagSourceFbo = 0;
 static GLuint g_cascadeStaticFbo = 0;
 static GLuint g_cascadeDynamicFbo = 0;
 static bool   g_cascadeTargetsUsable = false;
@@ -91,6 +100,10 @@ struct LocalJoinFade {
 };
 static LocalJoinFade g_localJoin[kLocalSlotsMax];
 static double        g_localJoinLast = 0.0;
+static float local_slot_fade(float value) {
+    return value >= 0.0f && value <= 1.0f ? value : 1.0f;
+}
+
 // Level for each published slot this capture, in slot order.
 static float         g_localJoinLevel[kLocalSlotsMax] = {};
 
@@ -245,6 +258,8 @@ static void reset_engine_shadow_light_anchor() {
     g_engineShadowLightKey = nullptr;
     g_haveEngineShadowLight = false;
     g_engineShadowLightCount = 0;
+    for (auto& j : g_localJoin) j = LocalJoinFade{};
+    g_localJoinLast = 0.0;
 }
 static float  g_localLightView[16] = {};
 static float  g_localLightProj[16] = {};
@@ -340,6 +355,9 @@ static double injector_target_mib() {
     constexpr double depth24 = 3.0;
     if (g_cascadeStaticTex)  bytes += (double)g_size * g_size * kCascadeCount * depth24;
     if (g_cascadeDynamicTex) bytes += (double)g_size * g_size * kCascadeCount * depth24;
+    if (g_sunObjectTex) bytes += (double)g_size * g_size * kCascadeCount * depth24;
+    if (g_sunTagTex) bytes += (double)g_sunTagWidth * g_sunTagHeight *
+        std::max(g_sunTagSamples, 1) * 8.0;
     if (g_staticWorldTex)    bytes += (double)g_staticWorldSize * g_staticWorldSize * depth24;
     if (g_sceneDepthTex)     bytes += (double)g_sceneDepthW * g_sceneDepthH * depth24;
     if (g_preDynamicDepthTex) bytes += (double)g_preDynamicDepthW * g_preDynamicDepthH * depth24;
@@ -428,6 +446,7 @@ static void create_cascade_targets() {
     };
     make_array(g_cascadeStaticTex);
     make_array(g_cascadeDynamicTex);
+    make_array(g_sunObjectTex);
 
     auto make_fbo = [&](GLuint& fbo, GLuint tex, const char* label) -> bool {
         gl::GenFramebuffers(1, &fbo);
@@ -452,7 +471,8 @@ static void create_cascade_targets() {
     };
     const bool staticOK = make_fbo(g_cascadeStaticFbo, g_cascadeStaticTex, "static");
     const bool dynamicOK = make_fbo(g_cascadeDynamicFbo, g_cascadeDynamicTex, "dynamic");
-    g_cascadeTargetsUsable = staticOK && dynamicOK && gl::GetError() == GL_NO_ERROR;
+    const bool objectOK = make_fbo(g_sunObjectFbo, g_sunObjectTex, "non-creature dynamic");
+    g_cascadeTargetsUsable = staticOK && dynamicOK && objectOK && gl::GetError() == GL_NO_ERROR;
 
     gl::BindFramebuffer(GL_FRAMEBUFFER, (GLuint)prevFBO);
     gl::BindTexture(GL_TEXTURE_2D_ARRAY, (GLuint)prevTexArray);

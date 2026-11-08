@@ -29,6 +29,8 @@ The accepted implementation currently includes:
 - an accepted automatic cross-platform clear/rain/snow surface-weather system
   with cached top-down precipitation occlusion and height-aware snow trails;
 - Linux `LD_PRELOAD` and Windows `version.dll` platform paths.
+- Linux opt-in continuous-alpha layer stacks with complete mesh-priority groups;
+  see [layer module](docs/LAYER_STACK.md).
 
 The code is experimental. Do not describe it as a complete replacement for
 NWN's lighting or shadow system.
@@ -214,6 +216,7 @@ Other known limitations:
 | `shadow_math.{h,cpp}` | Pure math helpers |
 | `nwn_platform.{h,cpp}` | Platform-specific mechanics |
 | `nwn_oit.cpp` | Transparency census and experimental A2C/OIT mechanics |
+| `nwn_layer_stack.inc` / `nwn_layer_stack_plan.h` | Explicit continuous-alpha priority scheduling and depth policy (Linux) |
 
 Useful narrow searches:
 
@@ -244,3 +247,20 @@ shipping-behavior comparison.
 Runtime verification is required for renderer changes. Record the exact
 launcher, platform, game build, GPU/driver, video settings, and relevant
 environment overrides. Keep diagnostic changes opt-in and reversible.
+
+## Agent skills
+
+### Issue tracker
+
+Issues are tracked in GitHub Issues for `Dafena/nwn_shadowmaps`. See
+`docs/agents/issue-tracker.md`.
+
+### Triage labels
+
+The repository uses the five standard triage labels. See
+`docs/agents/triage-labels.md`.
+
+### Domain docs
+
+This is a single-context repository with a root glossary and system-wide ADR
+directory. See `docs/agents/domain.md`.

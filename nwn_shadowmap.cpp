@@ -1690,6 +1690,30 @@ static bool current_draw_is_creature() {
     return g_currentDrawOwnerKind == DrawOwnerKind::Creature;
 }
 
+static bool current_draw_is_highlighted() {
+#ifdef _WIN32
+    // This measured native Linux Scene layout is not a Windows layout claim.
+    return false;
+#else
+    if (!g_areaScene || !g_currentDrawOwner || !eng::GobGetExternalData)
+        return false;
+    // Verified in AddHighlightGob, RemoveHighlightGob and DoHighlightGob:
+    // Scene+0x80 is the engine's CExoArrayList<Gob*>; +0x88 is its count.
+    // Inherited external data links a root to rigid/skinned body parts.
+    const void* const* objects = nullptr;
+    int count = 0;
+    const auto* scene = static_cast<const unsigned char*>(g_areaScene);
+    std::memcpy(&objects, scene + 0x80, sizeof(objects));
+    std::memcpy(&count, scene + 0x88, sizeof(count));
+    if (!objects || count <= 0 || count > 4096) return false;
+    for (int i = 0; i < count; ++i) {
+        if (objects[i] && eng::GobGetExternalData(const_cast<void*>(objects[i])) == g_currentDrawOwner)
+            return true;
+    }
+    return false;
+#endif
+}
+
 static int material_hook_stage() {
 #ifdef _WIN32
     // The four MSVC detours were introduced one checkpoint at a time after the
@@ -2188,7 +2212,14 @@ static bool set_light_view_direct(const Vec3f& eye, const float dir[3]) {
 }
 
 #include "weather_runtime.inc"
+#include "shadow_receiver_tags.inc"
+namespace layer_stack {
+static bool iterator(void*, int, int, const void**);
+static void before_draw();
+static void after_draw();
+}
 #include "shadow_shader_interposition.inc"
+#include "nwn_layer_stack.inc"
 #include "shadow_fullscreen_receiver.inc"
 #include "godrays_runtime.inc"
 #include "shadow_overlay_runtime.inc"
@@ -2348,7 +2379,25 @@ bool nwn_shadow_begin_a2c_receiver(unsigned int rawProgram) {
     if (l->dynamicLayers >= 0)
         gl::Uniform1i(l->dynamicLayers,
                       g_cascadeCsmDynamicReceiver ? g_cascadeDynamicLayers : 0);
-    gl::Uniform1f(l->strength, effective_area_sun_strength());
+    // Creature A2C (including rigid/part-based heads) is present in completed
+    // scene depth and receives the fullscreen sun composite with its body.
+    // Multiplying sun visibility here too makes hair/head darker than the
+    // adjoining opaque body under the same building shadow. Keep A2C coverage
+    // and its local-light path; give its directional term one receiver owner.
+    const bool nativeHighlight = current_draw_is_highlighted();
+    const bool creatureComposite = nativeHighlight ||
+        (current_draw_is_creature() && g_receiverDebug != 7);
+    gl::Uniform1f(l->strength, creatureComposite ? 0.0f : effective_area_sun_strength());
+    if (current_draw_is_creature()) {
+        static int reportedCreatureMode = -1;
+        const int mode = creatureComposite ? 1 : 0;
+        if (mode != reportedCreatureMode) {
+            reportedCreatureMode = mode;
+            fprintf(stderr, "[a2c][sun-receiver] creature reception=%s program=%u\n",
+                    creatureComposite ? "fullscreen only" : "inline + fullscreen (debug A/B)",
+                    program);
+        }
+    }
     if (l->bias >= 0)  gl::Uniform1f(l->bias, g_cascadeReceiverBias);
     if (l->blend >= 0) gl::Uniform1f(l->blend, g_cascadeBlendWidth);
     if (l->pcf >= 0)   gl::Uniform1f(l->pcf, g_cascadePcfRadius);
@@ -2422,9 +2471,7 @@ bool nwn_shadow_begin_a2c_receiver(unsigned int rawProgram) {
         localPos[i*4+2] = g_localLightSlotPos[i][2];
         localPos[i*4+3] = 1.0f;
         localRadius[i] = g_localLightSlotRadius[i];
-        localFade[i] = (g_localLightSlotFade[i] > 0.0f &&
-                        g_localLightSlotFade[i] <= 1.0f)
-                     ? g_localLightSlotFade[i] : 1.0f;
+        localFade[i] = local_slot_fade(g_localLightSlotFade[i]);
     }
     if (l->localPos >= 0 && gl::Uniform4fv)
         gl::Uniform4fv(l->localPos, kLocalLightFaces, localPos);
@@ -2435,7 +2482,7 @@ bool nwn_shadow_begin_a2c_receiver(unsigned int rawProgram) {
     if (l->localSlots >= 0)
         gl::Uniform1i(l->localSlots, localReady ? (GLint)g_localLightSlotCount : 0);
     if (l->localStrength >= 0)
-        gl::Uniform1f(l->localStrength, localReady
+        gl::Uniform1f(l->localStrength, localReady && !nativeHighlight
             ? g_localLightStrength * g_engineFadeLevel * g_localDeselectFadeShown : 0.0f);
     if (l->localBias >= 0) gl::Uniform1f(l->localBias, g_localLightBias);
     if (l->localEdgeFade >= 0) gl::Uniform1f(l->localEdgeFade, g_localLightEdgeFade);
@@ -2524,7 +2571,10 @@ static void update_engine_shadow_fade() {
     if (ratio < g_engineFadeLevel) g_engineFadeLevel = ratio;   // monotone
 }
 
+#include "shadow_aabb_guard.inc"
+
 extern "C" void SceneRender_detour(void* self) {
+    ensure_aabb_debug_capacity();
     ++g_frames;
     // Armed BEFORE the engine renders, because the cascade replay happens
     // inside its Scene::RenderDrawBucket calls -- deciding after the fact
@@ -2993,12 +3043,15 @@ static void shadowmap_init() {
     }
     if (const char* s = shadow_getenv("NWN_SHADOWMAP_RECEIVER_DEBUG")) {
         int v = atoi(s);
-        if (v >= 0 && v <= 5) g_receiverDebug = v;
+        if (v >= 0 && v <= 8) g_receiverDebug = v;
         else fprintf(stderr,"[shadowmap][static] ignoring NWN_SHADOWMAP_RECEIVER_DEBUG=%s\n", s);
         if (g_receiverDebug)
             fprintf(stderr,"[shadowmap][static] RECEIVER DEBUG %d active: %s\n", g_receiverDebug,
                     g_receiverDebug==1 ? "solid green over all scene pixels (after the background test)"
                   : g_receiverDebug==2 ? "red=sun shade, green=local shade (after the background test)"
+                  : g_receiverDebug==6 ? "raw sun maps: red=world, green=near static, blue=moving"
+                  : g_receiverDebug==7 ? "normal scene with the old duplicate creature A2C sun receiver"
+                  : g_receiverDebug==8 ? "sun receiver tags: green=creature, red=other, blue=unknown"
                                        : "solid magenta BEFORE any sampling/discard (does this pass reach the screen at all?)");
     }
     g_overlayLegacy = shadow_getenv("NWN_SHADOWMAP_OVERLAY_LEGACY") != nullptr;
@@ -3984,7 +4037,12 @@ static void shadowmap_init() {
         eng::DrawBucketGetFirstItem &&
 #endif
         eng::PartGetAurObject && eng::GobGetExternalDataType;
-    if (g_traceEnabled || oitNeedsBucketHook || drawOwnerNeedsBucketHook) {
+#ifndef _WIN32
+    const bool layerStackNeedsBucketHook = eng::DrawBucketGetNextItem && eng::LayerStackPartDraw;
+#else
+    const bool layerStackNeedsBucketHook = false;
+#endif
+    if (g_traceEnabled || oitNeedsBucketHook || drawOwnerNeedsBucketHook || layerStackNeedsBucketHook) {
         auto install_trace = [](subhook_t& slot, void* target, void* detour,
                                 const char* name) {
             if (!target) {
@@ -4042,7 +4100,12 @@ static void shadowmap_init() {
         // turn on the shadow trace, targets, replay, or shader diagnostics.
         install_trace(g_hookTraceBucket, (void*)eng::SceneRenderDrawBucket,
                       (void*)SceneRenderDrawBucket_trace_detour, "Scene::RenderDrawBucket");
-        if (drawOwnerNeedsBucketHook) {
+#ifndef _WIN32
+        if (layerStackNeedsBucketHook)
+            install_trace(layer_stack::part_draw_hook, (void*)eng::LayerStackPartDraw,
+                          (void*)layer_stack::part_draw_detour, "PartTriMesh::Draw layer stack scope");
+#endif
+        if (drawOwnerNeedsBucketHook || layerStackNeedsBucketHook) {
 #ifdef _WIN32
             install_trace(g_hookDrawBucketFirst, (void*)eng::DrawBucketGetFirstItem,
                           (void*)DrawBucketGetFirstItem_detour,

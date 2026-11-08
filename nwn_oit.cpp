@@ -67,6 +67,9 @@
 #include <cstdint>
 #include <cstdlib>
 #include <cstring>
+#if defined(NWN_A2C_ORDERED_DEPTH_TRIAL) && !defined(_WIN32)
+#include <chrono>
+#endif
 
 #include "nwn_platform.h"   // must precede the POSIX headers it shims
 #ifndef _WIN32
@@ -1887,6 +1890,10 @@ static bool production_material_routing_only() {
            !g_foliageA2c && !g_foliageVisible;
 }
 
+#if defined(NWN_A2C_ORDERED_DEPTH_TRIAL) && !defined(_WIN32)
+#include "nwn_a2c_layer_depth_trial.inc"
+#endif
+
 void census_observe_draw() {
     // Every duplicate is consumed immediately after its native draw. Clear the
     // one-shot flags first so an early return can never replay stale geometry.
@@ -2395,13 +2402,21 @@ void census_observe_draw() {
                 g.DepthFunc(GL_LESS);
                 g.ColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
                 g.Disable(GL_BLEND);
-                g.Disable(GL_CULL_FACE);
+                // Keep NWN's per-material culling decision. Some alpha meshes
+                // contain explicit backface geometry and arrive with culling
+                // enabled; forcing them two-sided makes the coincident faces
+                // fight once A2C enables depth writes. Authored two-sided
+                // materials already arrive with culling disabled.
                 g.Enable(GL_SAMPLE_ALPHA_TO_COVERAGE);
                 g_originalDepthOverride = true;
             }
             g.Uniform1i(foliageProgram->a2cPassLoc, 1);
             nwn_shadow_begin_a2c_receiver((unsigned int)prog);
             g_originalA2cLoc = foliageProgram->a2cPassLoc;
+#if defined(NWN_A2C_ORDERED_DEPTH_TRIAL) && !defined(_WIN32)
+            if (strictA2cDraw && materialRoute)
+                ordered_a2c_trial::begin(materialRoute->name, samples);
+#endif
             if (strictA2cDraw && g_a2cTransmittanceCensus &&
                 g_immediatePrepared) {
                 g_immediateProgram = foliageProgram;
@@ -2560,6 +2575,9 @@ void restore_original_draw_state() {
 }
 
 void census_observe_draw_after() {
+#if defined(NWN_A2C_ORDERED_DEPTH_TRIAL) && !defined(_WIN32)
+    ordered_a2c_trial::end();
+#endif
     nwn_shadow_end_a2c_receiver();
     restore_original_draw_state();
     g_immediateProgram = nullptr;
@@ -2676,6 +2694,15 @@ bool private_foliage_replay(void* scene, const SavedState& st) {
 }
 
 }   // anonymous namespace
+
+#if defined(NWN_A2C_ORDERED_DEPTH_TRIAL) && !defined(_WIN32)
+extern "C" int nwn_a2c_trial_test_begin(const char* name, int samples) {
+    if (!g_glBound) g_glBound = bind_gl();
+    return g_glBound && ordered_a2c_trial::begin(name, samples);
+}
+extern "C" void nwn_a2c_trial_test_end() { ordered_a2c_trial::end(); }
+#endif
+
 
 // ---------------------------------------------------------------------------
 //  Entry points (declared in nwn_hooks_core.h)
@@ -3787,6 +3814,9 @@ static void report_private_emitter_classifier() {
 }
 
 void nwn_oit_frame(void* scene) {
+#if defined(NWN_A2C_ORDERED_DEPTH_TRIAL) && !defined(_WIN32)
+    ordered_a2c_trial::bench_frame();
+#endif
     nwn_oit_prepare();
     if (g_mode3OrderCapture && !g_mode3OrderComplete && g_glBound) {
         GLint fbo = -1, viewport[4] = {};

@@ -233,6 +233,7 @@ extern "C" GLuint my_create_program() {
 }
 
 extern "C" void my_delete_program(GLuint program) {
+    sun_tag_forget_program(program);
     if (g_realDeleteProgram) g_realDeleteProgram(program);
     g_programsWithPatchedRuntimeShaders.erase(program);
 }
@@ -946,10 +947,11 @@ extern "C" void my_shader_source(GLuint shader, GLsizei count,
                                   g_cascadeStaticAlphaReceiver;
     const bool oitFoliageProbe = nwn_oit_needs_shader_sources();
     const bool weatherShaderProbe = weather_needs_shader_sources();
+    const bool sunReceiverProbe = g_cascadeCsmStaticReceiver;
     if (!g_realShaderSource || !runtime_shader_sources_allowed() ||
         (!g_injectTest && !dumpVertex && !dumpFragment &&
                                 !staticAlphaProbe && !oitFoliageProbe &&
-                                !weatherShaderProbe) ||
+                                !weatherShaderProbe && !sunReceiverProbe) ||
         count <= 0 || !string) {
         g_patchedRuntimeShaders.erase(shader);
         if (g_realShaderSource) g_realShaderSource(shader, count, string, length);
@@ -1057,9 +1059,16 @@ extern "C" void my_shader_source(GLuint shader, GLsizei count,
             }
         }
     }
+    bool sunTagInjected = false;
+    if (sunReceiverProbe) {
+        auto getShader = (GetShaderiv_t)glew_or_dlsym(eng::GlewGetShaderiv, "glGetShaderiv");
+        GLint stage = 0;
+        if (getShader) getShader(shader, 0x8B4F /* GL_SHADER_TYPE */, &stage);
+        if (stage == GL_FRAGMENT_SHADER) sunTagInjected = inject_sun_receiver_tag(combined);
+    }
     const bool markerInjected = inject_marker(combined);
     if (!weatherInjected && !materialModeInjected && !oitFoliageInjected &&
-        !a2cEmitterInjected && !markerInjected) {
+        !a2cEmitterInjected && !markerInjected && !sunTagInjected) {
         g_patchedRuntimeShaders.erase(shader);
         g_realShaderSource(shader, count, string, length);
         return;
@@ -2214,6 +2223,7 @@ static void trace_normal_geometry_draw(GLsizei count, bool indexed) {
         }
     }
     weather_observe_draw(g_curProgram, count);
+    layer_stack::before_draw();
     if (!g_inOurPass && !g_cascadeReplayActive &&
         nwn_core::g_currentBucket == 2 && weather_tracks_dynamic_creatures()) {
         float weatherActorPosition[3] = {};
@@ -2286,6 +2296,7 @@ static void trace_normal_geometry_draw(GLsizei count, bool indexed) {
     if (nwn_core::g_drawObserver &&
         (!nwn_core::g_ownedPass || nwn_oit_observes_owned_draws()) && !g_inOurPass)
         nwn_core::g_drawObserver();
+    begin_sun_receiver_tag();
     if (!g_cascadeGeometryTrace || !g_traceGeometryActive ||
         !g_traceFrameActive || g_traceGeometryBuckets >= g_traceGeometryMaxBuckets ||
         count <= 0 || !gl::GetIntegerv) return;
@@ -2327,6 +2338,8 @@ static void trace_normal_geometry_draw(GLsizei count, bool indexed) {
 }
 
 static inline void finish_observed_engine_draw() {
+    layer_stack::after_draw();
+    end_sun_receiver_tag();
     if (nwn_core::g_drawObserverAfter &&
         (!nwn_core::g_ownedPass || nwn_oit_observes_owned_draws()) && !g_inOurPass)
         nwn_core::g_drawObserverAfter();
@@ -2550,6 +2563,12 @@ static bool local_cube_visible_dynamic_draw() {
 // creatures. Placeables and unknown/world geometry remain eligible casters.
 #define DUPLICATE_SELECTIVE_LOCAL_DEPTH(drawCall, drawCount)                 \
     do {                                                                      \
+        if (g_sunObjectCaptureActive && !current_draw_is_creature()) {         \
+            gl::BindFramebuffer(GL_FRAMEBUFFER, g_sunObjectFbo);              \
+            drawCall;                                                         \
+            ++g_sunObjectDraws[g_cascadeReplayLayer];                          \
+            gl::BindFramebuffer(GL_FRAMEBUFFER, g_cascadeDynamicFbo);         \
+        }                                                                     \
         if (g_localObjectCaptureActive && !current_draw_is_creature() &&      \
             g_localObjectTargetUsable && g_localObjectFbo &&                  \
             g_localObjectWriteDepthTex) {                                     \

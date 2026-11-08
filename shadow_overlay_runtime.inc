@@ -620,7 +620,7 @@ static void draw_static_receiver(void* scene, bool localOnly = false) {
     else if (!localOnly && g_cascadeMath.sourceFrame != g_shadowFrameContext.serial) blocked = "mathFrameStale";
     else if (!g_cascadeStaticTex)                                  blocked = "noStaticTex";
     else if (!localOnly && g_cascadeDynamicReceiver && !g_cascadeDynamicTex) blocked = "noDynamicTex";
-    else if (!localOnly && g_staticWorldEnabled && !g_staticWorldValid) blocked = "worldMapInvalid";
+    else if (!localOnly && g_staticCastersEnabled && g_staticWorldEnabled && !g_staticWorldValid) blocked = "worldMapInvalid";
     if (blocked) { if (!localOnly) recv_block(blocked); return; }
     if (!localOnly && g_cascadeCsmStaticReceiver) {
         const int activeLayers = (g_cascadeActiveCount < 1) ? 1
@@ -753,7 +753,8 @@ static void draw_static_receiver(void* scene, bool localOnly = false) {
         fprintf(stderr, "[shadowmap][static] shadow-sampler placeholder tex=%u created\n",
                 g_shadowSamplerDummyTex);
     }
-    constexpr int kPreDynamicUnit = 25, kColorUnit = 26, kWorldUnit = 27,
+    constexpr int kSunTagUnit = 22, kSunTagMSUnit = 23, kSunObjectUnit = 24,
+                  kPreDynamicUnit = 25, kColorUnit = 26, kWorldUnit = 27,
                   kLocalUnit = 28, kDynamicUnit = 29, kStaticUnit = 30, kSceneUnit = 31;
     GLint maxUnits=0; gl::GetIntegerv(GL_MAX_TEXTURE_IMAGE_UNITS,&maxUnits);
     if (maxUnits <= kSceneUnit) { recv_block("tooFewTextureUnits", maxUnits); return; }
@@ -866,13 +867,21 @@ static void draw_static_receiver(void* scene, bool localOnly = false) {
         if (probes < 3) {
             ++probes;
             const GLenum copyErr = gl::GetError();
+            GLint probeActive = GL_TEXTURE0, probeTex = 0;
+            gl::GetIntegerv(GL_ACTIVE_TEXTURE, &probeActive);
+            gl::ActiveTexture(GL_TEXTURE0+kSceneUnit);
+            gl::GetIntegerv(GL_TEXTURE_BINDING_2D, &probeTex);
+            gl::BindTexture(GL_TEXTURE_2D, receiverDepthTex);
             std::vector<uint32_t> px((size_t)vp[2]*(size_t)vp[3]);
             gl::GetTexImage(GL_TEXTURE_2D,0,GL_DEPTH_COMPONENT,GL_UNSIGNED_INT,px.data());
+            const GLenum readErr = gl::GetError();
+            gl::BindTexture(GL_TEXTURE_2D, (GLuint)probeTex);
+            gl::ActiveTexture((GLenum)probeActive);
             uint32_t lo=0xFFFFFFFFu, hi=0; size_t nearer=0;
             for (uint32_t v : px) { if(v<lo)lo=v; if(v>hi)hi=v; if(v!=0xFFFFFFFFu)++nearer; }
             fprintf(stderr,"[shadowmap][static] scene-depth copy probe %u: %dx%d "
-                           "range=%u..%u non-far=%zu/%zu copyErr=0x%x\n",
-                    probes, vp[2], vp[3], lo, hi, nearer, px.size(), copyErr);
+                           "range=%u..%u non-far=%zu/%zu copyErr=0x%x readErr=0x%x\n",
+                    probes, vp[2], vp[3], lo, hi, nearer, px.size(), copyErr, readErr);
         }
     }
     gl::ActiveTexture(GL_TEXTURE0+kStaticUnit);
@@ -914,6 +923,30 @@ static void draw_static_receiver(void* scene, bool localOnly = false) {
     gl::GetIntegerv(GL_TEXTURE_BINDING_2D,&oldPreDynamicTex);
     gl::BindTexture(GL_TEXTURE_2D, g_preDynamicDepthTex
                                    ? g_preDynamicDepthTex : receiverDepthTex);
+    // Both integer sampler types always need valid, distinct bindings even
+    // when a frame has no usable native receiver tags.
+    if (!g_sunTagDummy2D || !g_sunTagDummyMS)
+        ensure_sun_tag_textures(vp[2], vp[3], 0);
+    const bool sunTagsReady = !localOnly &&
+        g_sunTagFrame == g_shadowFrameContext.serial &&
+        g_sunTagWidth == vp[2] && g_sunTagHeight == vp[3];
+    GLint oldSunTagTex = 0, oldSunTagMSTex = 0, oldSunObjectTex = 0;
+    gl::ActiveTexture(GL_TEXTURE0+kSunTagUnit);
+    gl::GetIntegerv(GL_TEXTURE_BINDING_2D, &oldSunTagTex);
+    gl::BindTexture(GL_TEXTURE_2D, sunTagsReady && g_sunTagSamples == 0
+        ? g_sunTagTex : g_sunTagDummy2D);
+    gl::ActiveTexture(GL_TEXTURE0+kSunTagMSUnit);
+    gl::GetIntegerv(GL_TEXTURE_BINDING_2D_MULTISAMPLE, &oldSunTagMSTex);
+    gl::BindTexture(GL_TEXTURE_2D_MULTISAMPLE, sunTagsReady && g_sunTagSamples > 0
+        ? g_sunTagTex : g_sunTagDummyMS);
+    gl::ActiveTexture(GL_TEXTURE0+kSunObjectUnit);
+    gl::GetIntegerv(GL_TEXTURE_BINDING_2D_ARRAY, &oldSunObjectTex);
+    gl::BindTexture(GL_TEXTURE_2D_ARRAY, g_sunObjectTex ? g_sunObjectTex : g_cascadeDynamicTex);
+    bool sunObjectsReady = g_sunObjectTex != 0;
+    const int sunObjectLayers = std::min(g_cascadeActiveCount, g_cascadeDynamicLayers);
+    for (int layer = 0; layer < sunObjectLayers; ++layer)
+        sunObjectsReady = sunObjectsReady &&
+            g_sunObjectFrame[layer] == g_shadowFrameContext.serial;
     // This was the last silent gate: when it was false the whole draw block --
     // uniforms, glDrawArrays, the draw counter -- was skipped with no log at
     // all, which is why the gate report kept saying "receiver-not-drawn" while
@@ -933,6 +966,18 @@ static void draw_static_receiver(void* scene, bool localOnly = false) {
         if (oldScissor) gl::Disable(GL_SCISSOR_TEST);
         gl::DepthMask(GL_FALSE); gl::ColorMask(GL_TRUE,GL_TRUE,GL_TRUE,GL_TRUE);
         useProgram(g_staticReceiverProgram);
+        const GLint sot = gl::GetUniformLocation(g_staticReceiverProgram,"nwnSunObjectDepth");
+        const GLint sor = gl::GetUniformLocation(g_staticReceiverProgram,"nwnSunObjectReady");
+        const GLint srt = gl::GetUniformLocation(g_staticReceiverProgram,"nwnSunReceiverTags");
+        const GLint srm = gl::GetUniformLocation(g_staticReceiverProgram,"nwnSunReceiverTagsMS");
+        const GLint srs = gl::GetUniformLocation(g_staticReceiverProgram,"nwnSunTagSamples");
+        const GLint srr = gl::GetUniformLocation(g_staticReceiverProgram,"nwnSunTagsReady");
+        if (sot>=0) gl::Uniform1i(sot,kSunObjectUnit);
+        if (sor>=0) gl::Uniform1i(sor,sunObjectsReady ? 1 : 0);
+        if (srt>=0) gl::Uniform1i(srt,kSunTagUnit);
+        if (srm>=0) gl::Uniform1i(srm,kSunTagMSUnit);
+        if (srs>=0) gl::Uniform1i(srs,std::max(g_sunTagSamples,0));
+        if (srr>=0) gl::Uniform1i(srr,sunTagsReady ? 1 : 0);
         const GLint a=gl::GetUniformLocation(g_staticReceiverProgram,"nwnStaticSceneDepth");
         const GLint b=gl::GetUniformLocation(g_staticReceiverProgram,"nwnStaticLightDepth");
         const GLint c=gl::GetUniformLocation(g_staticReceiverProgram,"nwnDynamicLightDepth");
@@ -1018,7 +1063,7 @@ static void draw_static_receiver(void* scene, bool localOnly = false) {
             const GLint wc=gl::GetUniformLocation(g_staticReceiverProgram,"nwnStaticWorldEnabled");
             if(wa>=0) gl::Uniform1i(wa,kWorldUnit);
             if(wb>=0) gl::UniformMatrix4fv(wb,1,GL_FALSE,g_staticWorldVP);
-            if(wc>=0) gl::Uniform1i(wc,(!localOnly && g_staticWorldEnabled && g_staticWorldValid) ? 1 : 0);
+            if(wc>=0) gl::Uniform1i(wc,(!localOnly && g_staticCastersEnabled && g_staticWorldEnabled && g_staticWorldValid) ? 1 : 0);
         }
         {   // Phase 6d local-light term.
             const GLint la=gl::GetUniformLocation(g_staticReceiverProgram,"nwnLocalLightDepth");
@@ -1049,9 +1094,7 @@ static void draw_static_receiver(void* scene, bool localOnly = false) {
                     rad[i]      = g_localLightSlotRadius[i];
                     // Default 1.0: a slot that never received a fade behaves
                     // exactly as it did before this existed.
-                    fade[i]     = (g_localLightSlotFade[i] > 0.0f &&
-                                   g_localLightSlotFade[i] <= 1.0f)
-                                ? g_localLightSlotFade[i] : 1.0f;
+                    fade[i]     = local_slot_fade(g_localLightSlotFade[i]);
                     // No join multiply here: the slot's fade already carries
                     // NWN's per-light fade TIMES our level, applied where the
                     // slot list is built. Multiplying again would square it.
@@ -1242,7 +1285,7 @@ static void draw_static_receiver(void* scene, bool localOnly = false) {
             // no colour capture cannot then darken wrongly.
             if(sig>=0) gl::Uniform1f(sig,(!localOnly && colorOk) ? g_liftThreshold : 1.0f);
             const GLint lh=gl::GetUniformLocation(g_staticReceiverProgram,"nwnReceiverDebug");
-            if(lh>=0) gl::Uniform1i(lh,localOnly ? 0 : g_receiverDebug);
+            if(lh>=0) gl::Uniform1i(lh,(localOnly || g_receiverDebug == 7) ? 0 : g_receiverDebug);
         }
         if (!g_nextDrawArrays)
             g_nextDrawArrays=(void(*)(GLenum,GLint,GLsizei))dlsym(RTLD_NEXT,"glDrawArrays");
@@ -1335,6 +1378,12 @@ static void draw_static_receiver(void* scene, bool localOnly = false) {
     gl::BindTexture(GL_TEXTURE_2D,(GLuint)oldSceneTex);
     gl::ActiveTexture(GL_TEXTURE0+kPreDynamicUnit);
     gl::BindTexture(GL_TEXTURE_2D,(GLuint)oldPreDynamicTex);
+    gl::ActiveTexture(GL_TEXTURE0+kSunTagUnit);
+    gl::BindTexture(GL_TEXTURE_2D,(GLuint)oldSunTagTex);
+    gl::ActiveTexture(GL_TEXTURE0+kSunTagMSUnit);
+    gl::BindTexture(GL_TEXTURE_2D_MULTISAMPLE,(GLuint)oldSunTagMSTex);
+    gl::ActiveTexture(GL_TEXTURE0+kSunObjectUnit);
+    gl::BindTexture(GL_TEXTURE_2D_ARRAY,(GLuint)oldSunObjectTex);
     gl::ActiveTexture((GLenum)oldActive);
     if(oldDepth) gl::Enable(GL_DEPTH_TEST); else gl::Disable(GL_DEPTH_TEST);
     if(oldBlend) gl::Enable(GL_BLEND); else gl::Disable(GL_BLEND);

@@ -526,6 +526,11 @@ static void apply_resolution_change() {
         if (g_cascadeDynamicFbo) gl::DeleteFramebuffers(1, &g_cascadeDynamicFbo);
         if (g_cascadeStaticTex)  gl::DeleteTextures(1, &g_cascadeStaticTex);
         if (g_cascadeDynamicTex) gl::DeleteTextures(1, &g_cascadeDynamicTex);
+        if (g_sunObjectTex) gl::DeleteTextures(1, &g_sunObjectTex);
+        if (g_sunObjectFbo) gl::DeleteFramebuffers(1, &g_sunObjectFbo);
+        g_sunObjectTex = g_sunObjectFbo = 0;
+        std::fill_n(g_sunObjectFrame, kCascadeCount, 0u);
+        std::fill_n(g_sunObjectDraws, kCascadeCount, 0u);
         g_cascadeStaticFbo = g_cascadeDynamicFbo = 0;
         g_cascadeStaticTex = g_cascadeDynamicTex = 0;
         g_cascadeTargetsUsable = false;
@@ -964,7 +969,11 @@ static void replay_bucket_into_cascade_layers(void* scene, int bucket, bool stat
         g_cascadeMath.sourceFrame != g_shadowFrameContext.serial)
         return;
 
-    if (g_staticWorldEnabled && staticTarget) {
+    const bool castersEnabled = staticTarget ? g_staticCastersEnabled
+                                             : g_dynamicCastersEnabled;
+    if (!staticTarget && g_cascadeDynamicLayers <= 0) return;
+
+    if (g_staticWorldEnabled && staticTarget && castersEnabled) {
         render_static_world_map(scene, bucket);
         // HYBRID: fall through to populate the NEAR cascade layers too, using
         // the engine's normal camera-culled set (near casters are on screen, so
@@ -1023,25 +1032,36 @@ static void replay_bucket_into_cascade_layers(void* scene, int bucket, bool stat
         // the static cache has almost nothing to cache and this is the only
         // lever left. Costs the shadows of anything that moves, characters
         // included -- it is a real trade, not a free win.
-        if (!g_dynamicCastersEnabled) return;
         // Dynamic casters only populate the nearest layers (see
         // g_cascadeDynamicLayers). 0 means they cast nothing at all.
         const int dyn = g_cascadeDynamicLayers < 0 ? 0 : g_cascadeDynamicLayers;
-        if (dyn == 0) return;
         if (dyn < activeLayers) activeLayers = dyn;
     } else {
         // "Fixed casters" off. Together with "Moving casters" off this takes
         // the replay to nothing at all, which is the clean A/B: if the frame
         // rate does not move with ZERO replay draws, the replay was never the
         // cost and the search belongs somewhere else entirely.
-        if (!g_staticCastersEnabled) return;
-        if (g_staticWorldEnabled) {
+        if (g_staticWorldEnabled && castersEnabled) {
             // Hybrid: only the near layers get camera-fitted static casters; the
             // world map covers everything beyond them.
             if (g_staticNearCascades < activeLayers) activeLayers = g_staticNearCascades;
         }
     }
     for (int layer = 0; layer < activeLayers; ++layer) {
+        // Parallel caster set for creature receivers. Clear it even when it
+        // receives no eligible draws; an empty map is a complete generation.
+        if (!staticTarget && g_sunObjectTex && g_sunObjectFbo) {
+            gl::BindFramebuffer(GL_FRAMEBUFFER, g_sunObjectFbo);
+            gl::FramebufferTextureLayer(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT,
+                                        g_sunObjectTex, 0, layer);
+            if (g_sunObjectFrame[layer] != g_shadowFrameContext.serial) {
+                gl::ClearDepth(1.0);
+                gl::Clear(GL_DEPTH_BUFFER_BIT);
+                g_sunObjectFrame[layer] = g_shadowFrameContext.serial;
+                g_sunObjectDraws[layer] = 0;
+            }
+            gl::BindFramebuffer(GL_FRAMEBUFFER, fbo);
+        }
         gl::FramebufferTextureLayer(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, tex, 0, layer);
 
         // This cascade's light view/projection, straight into the stack.
@@ -1065,7 +1085,7 @@ static void replay_bucket_into_cascade_layers(void* scene, int bucket, bool stat
         // current cascade fit, and static casters cannot have moved. Re-stamp
         // it as fresh and skip the entire replay -- this is where the draw
         // calls are actually saved. Dynamic layers always re-render.
-        if (g_cascadeStaticCache && staticTarget &&
+        if (castersEnabled && g_cascadeStaticCache && staticTarget &&
             bucket >= 0 && bucket < 16 &&
             g_cascadeStaticGeneration[bucket][layer] == g_cascadeMathGeneration &&
             g_cascadeMathGeneration != 0 && targetDraws > 0) {
@@ -1083,9 +1103,19 @@ static void replay_bucket_into_cascade_layers(void* scene, int bucket, bool stat
             gl::Clear(GL_DEPTH_BUFFER_BIT);
         }
 
+        // Disabled caster groups still publish fresh, empty layers. Otherwise
+        // the receiver rejects the whole sun pass as stale, and returning after
+        // binding this FBO also leaks the shadow target into NWN's next draw.
+        if (!castersEnabled) {
+            if (staticTarget && bucket >= 0 && bucket < 16)
+                g_cascadeStaticGeneration[bucket][layer] = 0;
+            continue;
+        }
+
         g_cascadeReplayDrawCount = 0;
         g_cascadeReplayActive = true;
         g_cascadeReplayLayer  = layer;
+        g_sunObjectCaptureActive = !staticTarget && g_sunObjectTex && g_sunObjectFbo;
         ++g_cascadeLightCaptureAttempts;
         // How MANY replays a frame runs, and how many engine draws they issue.
         // `replay` is a sum over an unknown number of calls, so a platform
@@ -1096,6 +1126,7 @@ static void replay_bucket_into_cascade_layers(void* scene, int bucket, bool stat
         g_cascadeReplayBucket = bucket;
         const double tReplay0 = now_seconds();
         guarded_render_bucket(scene, bucket);
+        g_sunObjectCaptureActive = false;
         if (g_costFinishThisFrame && gl::Finish) gl::Finish();
         g_msReplay += (now_seconds() - tReplay0) * 1000.0;
         g_cascadeReplayActive = false;
@@ -1125,12 +1156,7 @@ static void replay_bucket_into_cascade_layers(void* scene, int bucket, bool stat
     if (eng::FlagDirty)     eng::FlagDirty();
     if (eng::SetMatrixMode) eng::SetMatrixMode(oldMode);
 
-    if (!outer.depthTest) gl::Disable(GL_DEPTH_TEST);
-    if (!outer.depthMask) gl::DepthMask(GL_FALSE);
-    if (outer.scissor)    gl::Enable(GL_SCISSOR_TEST);
-    gl::ColorMask(outer.colorMask[0], outer.colorMask[1], outer.colorMask[2], outer.colorMask[3]);
-    gl::Viewport(outer.vp[0], outer.vp[1], outer.vp[2], outer.vp[3]);
-    gl::BindFramebuffer(GL_FRAMEBUFFER, (GLuint)outer.fbo);
+    restore_state(outer);
 }
 
 static void dump_cascade_camera_capture_once() {

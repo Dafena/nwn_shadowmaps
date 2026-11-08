@@ -62,10 +62,10 @@ $(DEPLOY_DIR)/%.o: %.cpp | $(DEPLOY_DIR)
 # otherwise `make deploy` can silently reuse a stale object after an .inc-only
 # fix (as happened with the startup settings reconciliation).
 $(DEPLOY_DIR)/nwn_shadowmap.o: nwn_shadowmap.cpp \
-	shadow_gl_api.inc shadow_engine_bindings.inc weather_runtime.inc \
-	shadow_targets.inc shadow_diagnostics_settings.inc shadow_replay.inc \
+	shadow_gl_api.inc shadow_engine_bindings.inc nwn_layer_stack.inc nwn_layer_stack_plan.h weather_runtime.inc \
+	shadow_targets.inc shadow_diagnostics_settings.inc shadow_replay.inc shadow_receiver_tags.inc \
 	shadow_shader_interposition.inc shadow_fullscreen_receiver.inc godrays_runtime.inc \
-	shadow_overlay_runtime.inc shadow_trace_cascade.inc shadow_local_lights.inc \
+	shadow_overlay_runtime.inc shadow_trace_cascade.inc shadow_aabb_guard.inc shadow_local_lights.inc \
 	nwn_overlay.h nwn_hooks_core.h nwn_platform.h shadow_config.h shadow_math.h \
 	| $(DEPLOY_DIR)
 	$(CXX) $(CXXFLAGS) -DNWN_SHADOWMAP_SHIPPING -c $< -o $@
@@ -100,10 +100,10 @@ $(TARGET): $(OBJS)
 	$(CXX) -shared $^ -o $@ -ldl
 
 nwn_shadowmap.o: nwn_shadowmap.cpp \
-	shadow_gl_api.inc shadow_engine_bindings.inc weather_runtime.inc \
-	shadow_targets.inc shadow_diagnostics_settings.inc shadow_replay.inc \
+	shadow_gl_api.inc shadow_engine_bindings.inc nwn_layer_stack.inc nwn_layer_stack_plan.h weather_runtime.inc \
+	shadow_targets.inc shadow_diagnostics_settings.inc shadow_replay.inc shadow_receiver_tags.inc \
 	shadow_shader_interposition.inc shadow_fullscreen_receiver.inc godrays_runtime.inc \
-	shadow_overlay_runtime.inc shadow_trace_cascade.inc shadow_local_lights.inc \
+	shadow_overlay_runtime.inc shadow_trace_cascade.inc shadow_aabb_guard.inc shadow_local_lights.inc \
 	nwn_overlay.h nwn_hooks_core.h nwn_platform.h shadow_config.h shadow_math.h
 	$(CXX) $(CXXFLAGS) -c $< -o $@
 
