@@ -15,6 +15,7 @@ static subhook_t part_draw_hook = nullptr;
 #endif
 #ifdef _WIN32
 static eng::LayerStackPartDraw_t windows_part_draw = nullptr;
+static void** windows_part_slot = nullptr;
 static bool install_windows_part_draw();
 #endif
 static GLint alpha_location = -1;
@@ -117,9 +118,31 @@ static bool install_windows_part_draw() {
         return false;
     }
     fprintf(stderr, "[shadowmap][layer-stack] Windows virtual Draw slot active at %p; native code unchanged\n", slot);
+    windows_part_slot = slot;
     return true;
 }
 #endif
+static void shutdown() {
+#ifdef _WIN32
+    if (windows_part_slot && windows_part_draw) {
+        DWORD previous = 0, ignored = 0;
+        if (VirtualProtect(windows_part_slot, sizeof(*windows_part_slot), PAGE_READWRITE, &previous)) {
+            // Do not overwrite a later hook installed by somebody else.
+            InterlockedCompareExchangePointer(
+                reinterpret_cast<void* volatile*>(windows_part_slot),
+                reinterpret_cast<void*>(windows_part_draw),
+                reinterpret_cast<void*>(part_draw_detour));
+            VirtualProtect(windows_part_slot, sizeof(*windows_part_slot), previous, &ignored);
+        }
+    }
+    windows_part_slot = nullptr; windows_part_draw = nullptr;
+#else
+    if (part_draw_hook) {
+        subhook_remove(part_draw_hook); subhook_free(part_draw_hook);
+        part_draw_hook = nullptr;
+    }
+#endif
+}
 static bool iterator(void* self, int bucket, int ordering, const void** item, bool first) {
     submission_pass = 0;
     if (!self || bucket != 1 || ordering < 0 || ordering > 1 || !visible_context()) return false;

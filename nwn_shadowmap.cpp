@@ -4316,6 +4316,7 @@ static void shadowmap_init() {
 
 __attribute__((destructor))
 static void shadowmap_fini() {
+    layer_stack::shutdown();
     // Deliberately not deleting the GL objects: at destructor time the context
     // may already be gone, and a bad GL call on the way out would turn a clean
     // exit into a crash report. The process is ending; the driver reclaims it.

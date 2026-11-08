@@ -1,0 +1,41 @@
+name: Renderer checks
+on:
+  pull_request:
+  push:
+    branches: [main]
+permissions:
+  contents: read
+jobs:
+  linux:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - name: Install build and software GL tools
+        run: sudo apt-get update && sudo apt-get install -y g++ make glslang-tools libegl1-mesa-dev libgl1-mesa-dev
+      - name: Build development and shipping libraries
+        run: make -j2 && make -j2 deploy
+      - name: Shader, weather and rendering regressions
+        run: |
+          python3 check_shaders.py
+          make test-weather
+          for test in tests/run-*-regression.sh; do bash "$test"; done
+      - uses: actions/upload-artifact@v4
+        with:
+          name: linux-shipping
+          path: libnwn_shadowmap_deploy.so
+  windows-cross-build:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - name: Install cross compiler
+        run: sudo apt-get update && sudo apt-get install -y g++-mingw-w64-x86-64-posix
+      - name: Build and verify proxy exports
+        run: make -C win -j2 verify CXX=x86_64-w64-mingw32-g++-posix CC=x86_64-w64-mingw32-gcc-posix
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows-proxy-native-validation-pending
+          path: win/version.dll
