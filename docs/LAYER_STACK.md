@@ -8,7 +8,7 @@ After one discovery frame, the module visits complete priority groups0 through9.
 
 Depth still matters: a priority is not an instruction to draw through a depth-writing surface. This is not A2C, OIT, a depth-copy workaround, or duplicated export geometry.
 
-`nwn_layer_stack.inc` is part of the main translation unit. `nwn_layer_stack_plan.h` contains the shared scheduling policy. `bash tests/run-layer-stack-regression.sh` verifies complete ascending groups, equal ties and native fallbacks. Linux iterator offsets are bounded and match the accepted measured trial. Windows has a separate first-item adapter and requires safe first/next/Part draw hooks before scheduling. Native Windows runtime validation is pending.
+`nwn_layer_stack.inc` is part of the main translation unit. `nwn_layer_stack_plan.h` contains the shared scheduling policy. `bash tests/run-layer-stack-regression.sh` verifies complete ascending groups, equal ties and native fallbacks. Linux iterator offsets are bounded and match the accepted measured trial. Windows has a separate first-item adapter and requires safe first/next hooks and a verified virtual Part Draw adapter before scheduling. Native Windows runtime validation is pending.
 
 Development-only `NWN_LAYER_STACK_TRACE=/absolute/directory` records one frame when `request.txt` receives a new alphanumeric label. Each label's JSONL includes actual priority/pass/depth state and native light inputs. No framebuffer readback or render policy depends on these records. Shipping builds exclude this diagnostic.
 
@@ -20,8 +20,9 @@ artifact byte-for-byte. Both normal development and shipping builds pass.
 A full-Shadowmap native test with a held inventory torch confirms floor lighting
 response with identical camera/projection matrices, 56 ordered layer draws and
 correct depth masks. WorldMaker v6 shaders request per-fragment lighting so a
-small light is not missed between distant vertices. Shipping runtime and Windows
-parity still need their own validation; build success is not that validation.
+small light is not missed between distant vertices. The audit also exercised shipping Linux weather transitions and the final Windows
+DLL layer/torch path through Proton. Native Windows parity remains pending; see
+[release audit](RELEASE_AUDIT.md) for exact coverage and performance limits.
 
 ## Approved integration — 2026-11-07
 
@@ -59,3 +60,7 @@ virtual Draw pointer in the executable's read-only data, restoring page protecti
 immediately and retaining the original function. It does not rewrite executable
 instructions. Ambiguous/missing slots leave layering native. Proton confirmed the
 slot at RVA0xd883d0 and actual layer activation; native Windows remains pending.
+
+Both platform Draw adapters are removed during plugin shutdown. On Windows the
+original virtual pointer is restored only if the slot still points to this
+module; the original page protection is restored after each pointer change.

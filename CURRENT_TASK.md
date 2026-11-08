@@ -27,8 +27,8 @@ The rejected A2C depth-copy trial is removed from active source. Its rationale
 and accepted alternative are recorded in docs/LAYER_STACK.md; the original
 experiment is recoverable from the pre-audit checkpoint commit.
 
-Layer scheduling now has a Windows-specific first-item adapter and exported
-Part draw hook, gated on complete safe hook installation. Linux scheduling is
+Layer scheduling now has a Windows-specific first-item adapter and a verified
+virtual Part draw-slot adapter, gated on complete safe installation. Linux scheduling is
 the behavioral reference. Scene-local visit generations and bounded scene
 recycling prevent GUI renders or repeated area changes from losing discovery.
 
@@ -40,8 +40,12 @@ recycling prevent GUI renders or repeated area changes from losing discovery.
   Proton checks are valuable Windows-path smoke/visual checks, not native-driver
   certification. Do not present earlier Windows weather acceptance as proof of
   the new layer behavior.
-- Actual Linux/Proton matched views and frame-time checks are in progress.
-  Timing-overlay-injected startup failures are excluded from comparisons.
+- Linux matched layer/torch views and shipping clear/rain/snow/interior
+  transitions passed. Final Windows DLL layer/torch checks passed under Proton.
+  Proton rain/snow startup fixtures stayed clear and did not exercise those
+  conditions; integrated Windows weather acceptance is still pending.
+- Type-0 frame-time comparisons were presentation-capped near60Hz; they do not
+  establish uncapped throughput. Timing-overlay startup failures are excluded.
 - Final crowded multiplayer15actor snow-trail acceptance and high-budget rain
   acceptance remain separate limitations; see WEATHER_PARTICLES.md and
   WINDOWS_IMPLEMENTATION_PLAN.md.

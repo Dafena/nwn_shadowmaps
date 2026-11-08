@@ -149,3 +149,16 @@ compare both toggles in game, with camera motion, transitions and spell VFX.
 - Lightning remains native. Shader bolts/flashes need a separately verified
   authoritative lightning-event adapter; no random timer replaces it.
 - Native rain is available as the comparison toggle and automatic fallback.
+
+## Integration audit — 2026-11-08
+
+PR #4 is incorporated on the release integration branch. Private rain and native
+rain hiding both default off. Linux shipping tests exercised real engine
+clear → rain → snow → interior → clear transitions: the private rain pass became
+ready, native rain remained enabled, and entering the interior cleared surface
+accumulation immediately. The Windows DLL layer/torch path passed under Proton,
+but separate rain/snow startup fixtures stayed in native clear weather; those
+runs do not establish Windows precipitation or native-rain suppression parity.
+Earlier user-confirmed preview results do not replace this combined-version
+acceptance. High-budget, shelter/VFX, native Windows and crowded multiplayer
+checks above remain open; see docs/RELEASE_AUDIT.md.
