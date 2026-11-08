@@ -28,8 +28,9 @@ The accepted implementation currently includes:
 - persisted ImGui settings and development diagnostics;
 - an accepted automatic cross-platform clear/rain/snow surface-weather system
   with cached top-down precipitation occlusion and height-aware snow trails;
-- Linux `LD_PRELOAD` and Windows `version.dll` platform paths.
-- Linux opt-in continuous-alpha layer stacks with complete mesh-priority groups;
+- Linux `LD_PRELOAD` and Windows `version.dll` platform paths;
+- Opt-in continuous-alpha layer stacks with complete mesh-priority groups
+  (Linux reference; Windows implementation awaits native runtime validation);
   see [layer module](docs/LAYER_STACK.md).
 
 The code is experimental. Do not describe it as a complete replacement for
@@ -217,7 +218,7 @@ Other known limitations:
 | `shadow_math.{h,cpp}` | Pure math helpers |
 | `nwn_platform.{h,cpp}` | Platform-specific mechanics |
 | `nwn_oit.cpp` | Transparency census and experimental A2C/OIT mechanics |
-| `nwn_layer_stack.inc` / `nwn_layer_stack_plan.h` | Explicit continuous-alpha priority scheduling and depth policy (Linux) |
+| `nwn_layer_stack.inc` / `nwn_layer_stack_plan.h` | Explicit continuous-alpha priority scheduling and platform adapters |
 
 Useful narrow searches:
 

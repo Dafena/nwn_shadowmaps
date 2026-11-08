@@ -33,8 +33,8 @@ namespace eng {
 static void* GlewCreateShader=nullptr; static void* GlewCompileShader=nullptr;
 static void* GlewGetShaderiv=nullptr; static void* GlewCreateProgram=nullptr;
 static void* GlewAttachShader=nullptr; static void* GlewLinkProgram=nullptr;
-static void* GlewGetProgramiv=nullptr; static void* GlewShaderSource=nullptr;
-static void* GlewUseProgram=nullptr;
+static void* GlewGetProgramiv=nullptr;
+
 static float ambient[3]={0.5f,0.5f,0.5f};
 static float* SunAmbient=ambient; static float* SunDiffuse=nullptr;
 }
@@ -51,7 +51,7 @@ static auto DepthFunc=&glDepthFunc; static auto DepthMask=&glDepthMask;
 static auto ColorMask=&glColorMask;
 }
 static bool g_shaderRainEnabled=false;
-static bool g_shaderRainHideNative=true;
+static bool g_shaderRainHideNative=false;
 static int g_shaderRainBudget=256;
 static float g_shaderRainRadius=8,g_shaderRainWindX=0,g_shaderRainWindY=0,g_shaderRainSplashes=1;
 static bool g_haveEngineFog=false;
@@ -205,6 +205,8 @@ int main() {
     glActiveTexture(GL_TEXTURE0+5);
     weather_particles::note_material_texture("FXPA_RAIN01");
     Snapshot rainBefore;
+    require(!weather_particles::suppress_native_draw(true),"native rain retained by default");
+    g_shaderRainHideNative=true;
     require(weather_particles::suppress_native_draw(true),"exact native rain hidden after private draw");
     Snapshot rainAfter;
     require(rainBefore.same(rainAfter),"suppression check preserves GL state");

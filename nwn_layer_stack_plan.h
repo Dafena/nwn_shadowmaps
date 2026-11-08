@@ -6,33 +6,48 @@
 namespace nwn_layer_stack {
 struct Item { void* part; int priority; }; // negative: unmarked native item
 struct Draw { void* part; int pass; int priority; };
-// Discovery belongs to the currently rendered scene, not the process lifetime.
-// Parts not seen in the preceding frame are discarded before pointer reuse.
+// Each scene advances only when its own native bucket is visited. GUI/skybox
+// renders cannot age the area's discoveries. Keep a bounded LRU of scenes.
 class Registry {
-    struct Entry { int priority; unsigned long frame; };
-    void* scene_ = nullptr;
-    unsigned long frame_ = 0;
-    std::unordered_map<void*, Entry> entries_;
+    struct Entry { int priority; unsigned long generation; };
+    struct SceneEntries {
+        unsigned long generation = 0, visited = 0;
+        std::unordered_map<void*, Entry> parts;
+    };
+    unsigned long visit_ = 0;
+    std::unordered_map<void*, SceneEntries> scenes_;
 public:
-    void begin(void* scene, unsigned long frame) {
-        if (scene != scene_ || frame < frame_) {
-            entries_.clear(); scene_ = scene;
-        } else if (frame != frame_) {
-            for (auto it = entries_.begin(); it != entries_.end(); )
-                if (frame > it->second.frame + 1) it = entries_.erase(it);
-                else ++it;
+    void begin(void* scene) {
+        if (!scenes_.count(scene) && scenes_.size() >= 32) {
+            auto oldest = scenes_.begin();
+            for (auto it = scenes_.begin(); it != scenes_.end(); ++it)
+                if (it->second.visited < oldest->second.visited) oldest = it;
+            scenes_.erase(oldest);
         }
-        frame_ = frame;
+        auto& state = scenes_[scene];
+        state.visited = ++visit_;
+        ++state.generation;
+        for (auto it = state.parts.begin(); it != state.parts.end(); )
+            if (state.generation > it->second.generation + 1) it = state.parts.erase(it);
+            else ++it;
     }
-    int priority(void* part) const {
-        auto it = entries_.find(part);
-        return it == entries_.end() ? -1 : it->second.priority;
+    int priority(void* scene, void* part) const {
+        auto state = scenes_.find(scene);
+        if (state == scenes_.end()) return -1;
+        auto it = state->second.parts.find(part);
+        return it == state->second.parts.end() ? -1 : it->second.priority;
     }
-    void remember(void* part, int priority) {
-        if (priority < 0 || priority > 9) entries_.erase(part);
-        else entries_[part] = {priority, frame_};
+    void remember(void* scene, void* part, int priority) {
+        auto state = scenes_.find(scene);
+        if (state == scenes_.end()) return;
+        if (priority < 0 || priority > 9) state->second.parts.erase(part);
+        else state->second.parts[part] = {priority, state->second.generation};
     }
-    std::size_t size() const { return entries_.size(); }
+    std::size_t size(void* scene) const {
+        auto state = scenes_.find(scene);
+        return state == scenes_.end() ? 0 : state->second.parts.size();
+    }
+    std::size_t scene_count() const { return scenes_.size(); }
 };
 inline bool submit_cached_pass(int priority, int pass) {
     // A shader which lost its opt-in during the first submission must not be

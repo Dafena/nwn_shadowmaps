@@ -6,22 +6,29 @@
 
 int main() {
     nwn_layer_stack::Registry registry;
-    registry.begin(reinterpret_cast<void*>(1), 1);
+    void* area = reinterpret_cast<void*>(1);
+    void* gui = reinterpret_cast<void*>(2);
+    void* part = reinterpret_cast<void*>(3);
+    registry.begin(area);
     for (uintptr_t i = 1; i <= 5000; ++i)
-        registry.remember(reinterpret_cast<void*>(i), 2);
-    assert(registry.size() == 5000);
-    registry.begin(reinterpret_cast<void*>(2), 2);
-    assert(registry.size() == 0);
-    registry.remember(reinterpret_cast<void*>(1), 3);
-    registry.begin(reinterpret_cast<void*>(2), 3);
-    assert(registry.priority(reinterpret_cast<void*>(1)) == 3);
-    registry.begin(reinterpret_cast<void*>(2), 4);
-    assert(registry.priority(reinterpret_cast<void*>(1)) == -1);
-    registry.remember(reinterpret_cast<void*>(1), 5);
-    registry.remember(reinterpret_cast<void*>(1), -1);
-    assert(!nwn_layer_stack::submit_cached_pass(registry.priority(reinterpret_cast<void*>(1)), 2));
+        registry.remember(area, reinterpret_cast<void*>(i), 2);
+    assert(registry.size(area) == 5000);
+    // Multiple unrelated scene renders must not expire the area between visits.
+    for (int i = 0; i < 20; ++i) registry.begin(gui);
+    registry.begin(area);
+    assert(registry.priority(area, part) == 2);
+    registry.remember(area, part, 3);
+    registry.begin(gui);
+    registry.begin(area);
+    assert(registry.size(area) == 1); // unseen area Parts are now retired
+    assert(registry.priority(area, part) == 3);
+    registry.remember(area, part, -1);
+    assert(!nwn_layer_stack::submit_cached_pass(registry.priority(area, part), 2));
     assert(nwn_layer_stack::submit_cached_pass(-1, 1));
     assert(nwn_layer_stack::submit_cached_pass(-1, 0));
+    for (uintptr_t i = 100; i < 200; ++i) registry.begin(reinterpret_cast<void*>(i));
+    assert(registry.scene_count() == 32);
+    assert(registry.size(area) == 0); // inactive scenes are evicted, not accumulated
 
     int base, overlay, high, solid, native;
     // Exact failure: native base core, overlay core, base fade, overlay fade.

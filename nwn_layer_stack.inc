@@ -10,7 +10,13 @@ static int draw_pass = 0;
 static void* active_scene = nullptr;
 static int active_bucket = -1;
 static nwn_layer_stack::Registry registry;
+#ifndef _WIN32
 static subhook_t part_draw_hook = nullptr;
+#endif
+#ifdef _WIN32
+static eng::LayerStackPartDraw_t windows_part_draw = nullptr;
+static bool install_windows_part_draw();
+#endif
 static GLint alpha_location = -1;
 static GLuint alpha_program = 0;
 static GLfloat saved_alpha = 0;
@@ -24,7 +30,7 @@ struct BucketScope {
         current_part = nullptr; submission_pass = 0;
         if (next_bucket == 1 && !g_inOurPass && !g_cascadeReplayActive &&
             !g_localLightPassActive && !nwn_core::g_ownedPass)
-            registry.begin(next_scene, static_cast<unsigned long>(g_frames));
+            registry.begin(next_scene);
     }
     ~BucketScope() {
         active_scene = scene; active_bucket = bucket;
@@ -36,7 +42,7 @@ static bool visible_context() {
 #ifdef _WIN32
     // GetFirstItem consumes an item on Windows. Do not enable scheduling with
     // only half the required adapter installed.
-    if (!part_draw_hook || !g_hookDrawBucketFirst || !g_hookDrawBucketNext)
+    if (!windows_part_draw || !g_hookDrawBucketFirst || !g_hookDrawBucketNext)
         return false;
 #endif
     // The native bucket call is authoritative even when optional shadow trace
@@ -47,7 +53,7 @@ static bool visible_context() {
         !g_localLightPassActive && !nwn_core::g_ownedPass;
 }
 static int priority(void* part) {
-    return registry.priority(part);
+    return registry.priority(active_scene, part);
 }
 static void part_draw_detour(void* part) {
     if (visible_context() && !nwn_layer_stack::submit_cached_pass(priority(part), submission_pass))
@@ -55,17 +61,65 @@ static void part_draw_detour(void* part) {
     void* previous_part = current_part;
     const int previous_pass = draw_pass;
     current_part = part; draw_pass = submission_pass;
+#ifdef _WIN32
+    if (windows_part_draw) windows_part_draw(part);
+#else
     if (void* trampoline = subhook_get_trampoline(part_draw_hook))
         reinterpret_cast<eng::LayerStackPartDraw_t>(trampoline)(part);
     else {
-#ifndef _WIN32
         subhook_remove(part_draw_hook);
         eng::LayerStackPartDraw(part);
         subhook_install(part_draw_hook);
-#endif
     }
+#endif
     current_part = previous_part; draw_pass = previous_pass;
 }
+#ifdef _WIN32
+static bool install_windows_part_draw() {
+    // The exported Draw prologue cannot be safely relocated by Subhook.
+    // v89.8193.37-17 has exactly one pointer to this export in .rdata: the
+    // PartTriMesh virtual Draw slot (RVA0xd883d0 in the verified executable).
+    // Discover that unique slot rather than changing code or assuming an RVA.
+    auto* base = reinterpret_cast<unsigned char*>(GetModuleHandleW(nullptr));
+    if (!base || !eng::LayerStackPartDraw) return false;
+    auto* dos = reinterpret_cast<IMAGE_DOS_HEADER*>(base);
+    if (dos->e_magic != IMAGE_DOS_SIGNATURE) return false;
+    auto* nt = reinterpret_cast<IMAGE_NT_HEADERS64*>(base + dos->e_lfanew);
+    if (nt->Signature != IMAGE_NT_SIGNATURE ||
+        nt->OptionalHeader.Magic != IMAGE_NT_OPTIONAL_HDR64_MAGIC) return false;
+    auto* sections = IMAGE_FIRST_SECTION(nt);
+    void** slot = nullptr;
+    const void* target = reinterpret_cast<void*>(eng::LayerStackPartDraw);
+    for (unsigned i = 0; i < nt->FileHeader.NumberOfSections; ++i) {
+        const auto& section = sections[i];
+        if (std::memcmp(section.Name, ".rdata", 6) ||
+            section.VirtualAddress >= nt->OptionalHeader.SizeOfImage ||
+            section.Misc.VirtualSize > nt->OptionalHeader.SizeOfImage - section.VirtualAddress)
+            continue;
+        auto* data = base + section.VirtualAddress;
+        for (size_t at = sizeof(void*); at + 2*sizeof(void*) <= section.Misc.VirtualSize; at += sizeof(void*)) {
+            void* value = nullptr; std::memcpy(&value, data + at, sizeof(value));
+            if (value != target) continue;
+            if (slot) return false; // ambiguity is a native fallback
+            slot = reinterpret_cast<void**>(data + at);
+        }
+    }
+    if (!slot) return false;
+    DWORD previous = 0, ignored = 0;
+    if (!VirtualProtect(slot, sizeof(*slot), PAGE_READWRITE, &previous)) return false;
+    windows_part_draw = eng::LayerStackPartDraw;
+    InterlockedExchangePointer(reinterpret_cast<void* volatile*>(slot),
+                               reinterpret_cast<void*>(part_draw_detour));
+    if (!VirtualProtect(slot, sizeof(*slot), previous, &ignored)) {
+        InterlockedExchangePointer(reinterpret_cast<void* volatile*>(slot), const_cast<void*>(target));
+        VirtualProtect(slot, sizeof(*slot), previous, &ignored);
+        windows_part_draw = nullptr;
+        return false;
+    }
+    fprintf(stderr, "[shadowmap][layer-stack] Windows virtual Draw slot active at %p; native code unchanged\n", slot);
+    return true;
+}
+#endif
 static bool iterator(void* self, int bucket, int ordering, const void** item, bool first) {
     submission_pass = 0;
     if (!self || bucket != 1 || ordering < 0 || ordering > 1 || !visible_context()) return false;
@@ -184,7 +238,7 @@ static void before_draw() {
     GLboolean colour[4] = {};
     gl::GetBooleanv(GL_COLOR_WRITEMASK, colour);
     if (!colour[0] && !colour[1] && !colour[2]) return;
-    registry.remember(current_part, hint);
+    registry.remember(active_scene, current_part, hint);
     static bool reported = false;
     if (hint >= 0 && !reported) {
         reported = true;

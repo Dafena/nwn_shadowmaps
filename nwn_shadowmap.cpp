@@ -4150,9 +4150,15 @@ static void shadowmap_init() {
         // turn on the shadow trace, targets, replay, or shader diagnostics.
         install_trace(g_hookTraceBucket, (void*)eng::SceneRenderDrawBucket,
                       (void*)SceneRenderDrawBucket_trace_detour, "Scene::RenderDrawBucket");
-        if (layerStackNeedsBucketHook)
+        if (layerStackNeedsBucketHook) {
+#ifdef _WIN32
+            if (!layer_stack::install_windows_part_draw())
+                fprintf(stderr, "[shadowmap][layer-stack] Windows Draw slot unavailable; keeping native policy\n");
+#else
             install_trace(layer_stack::part_draw_hook, (void*)eng::LayerStackPartDraw,
                           (void*)layer_stack::part_draw_detour, "PartTriMesh::Draw layer stack scope");
+#endif
+        }
         if (drawOwnerNeedsBucketHook || layerStackNeedsBucketHook) {
 #ifdef _WIN32
             install_trace(g_hookDrawBucketFirst, (void*)eng::DrawBucketGetFirstItem,
