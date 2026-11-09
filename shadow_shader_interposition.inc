@@ -233,6 +233,7 @@ extern "C" GLuint my_create_program() {
 }
 
 extern "C" void my_delete_program(GLuint program) {
+    sun_tag_forget_program(program);
     if (g_realDeleteProgram) g_realDeleteProgram(program);
     g_programsWithPatchedRuntimeShaders.erase(program);
 }
@@ -946,10 +947,11 @@ extern "C" void my_shader_source(GLuint shader, GLsizei count,
                                   g_cascadeStaticAlphaReceiver;
     const bool oitFoliageProbe = nwn_oit_needs_shader_sources();
     const bool weatherShaderProbe = weather_needs_shader_sources();
+    const bool sunReceiverProbe = g_cascadeCsmStaticReceiver;
     if (!g_realShaderSource || !runtime_shader_sources_allowed() ||
         (!g_injectTest && !dumpVertex && !dumpFragment &&
                                 !staticAlphaProbe && !oitFoliageProbe &&
-                                !weatherShaderProbe) ||
+                                !weatherShaderProbe && !sunReceiverProbe) ||
         count <= 0 || !string) {
         g_patchedRuntimeShaders.erase(shader);
         if (g_realShaderSource) g_realShaderSource(shader, count, string, length);
@@ -1057,9 +1059,16 @@ extern "C" void my_shader_source(GLuint shader, GLsizei count,
             }
         }
     }
+    bool sunTagInjected = false;
+    if (sunReceiverProbe) {
+        auto getShader = (GetShaderiv_t)glew_or_dlsym(eng::GlewGetShaderiv, "glGetShaderiv");
+        GLint stage = 0;
+        if (getShader) getShader(shader, 0x8B4F /* GL_SHADER_TYPE */, &stage);
+        if (stage == GL_FRAGMENT_SHADER) sunTagInjected = inject_sun_receiver_tag(combined);
+    }
     const bool markerInjected = inject_marker(combined);
     if (!weatherInjected && !materialModeInjected && !oitFoliageInjected &&
-        !a2cEmitterInjected && !markerInjected) {
+        !a2cEmitterInjected && !markerInjected && !sunTagInjected) {
         g_patchedRuntimeShaders.erase(shader);
         g_realShaderSource(shader, count, string, length);
         return;
@@ -2214,6 +2223,7 @@ static void trace_normal_geometry_draw(GLsizei count, bool indexed) {
         }
     }
     weather_observe_draw(g_curProgram, count);
+    layer_stack::before_draw();
     if (!g_inOurPass && !g_cascadeReplayActive &&
         nwn_core::g_currentBucket == 2 && weather_tracks_dynamic_creatures()) {
         float weatherActorPosition[3] = {};
@@ -2286,6 +2296,7 @@ static void trace_normal_geometry_draw(GLsizei count, bool indexed) {
     if (nwn_core::g_drawObserver &&
         (!nwn_core::g_ownedPass || nwn_oit_observes_owned_draws()) && !g_inOurPass)
         nwn_core::g_drawObserver();
+    begin_sun_receiver_tag();
     if (!g_cascadeGeometryTrace || !g_traceGeometryActive ||
         !g_traceFrameActive || g_traceGeometryBuckets >= g_traceGeometryMaxBuckets ||
         count <= 0 || !gl::GetIntegerv) return;
@@ -2327,6 +2338,8 @@ static void trace_normal_geometry_draw(GLsizei count, bool indexed) {
 }
 
 static inline void finish_observed_engine_draw() {
+    layer_stack::after_draw();
+    end_sun_receiver_tag();
     if (nwn_core::g_drawObserverAfter &&
         (!nwn_core::g_ownedPass || nwn_oit_observes_owned_draws()) && !g_inOurPass)
         nwn_core::g_drawObserverAfter();
@@ -2424,6 +2437,12 @@ static bool static_alpha_program_current() {
     return false;
 }
 
+static bool suppress_native_rain_draw() {
+    return weather_particles::suppress_native_draw(
+        g_traceFrameActive && g_traceCurrentScene == g_areaScene &&
+        !g_inOurPass && !g_overlayPassActive && !g_inStencilShadow &&
+        !g_cascadeReplayActive && !g_localLightPassActive && !nwn_core::g_ownedPass);
+}
 static void (*g_nextDrawElements)(GLenum, GLsizei, GLenum, const void*) = nullptr;
 // The normal call is always issued before this macro.  It redirects only the
 // duplicate into our depth layer and restores the two original uniforms before
@@ -2550,6 +2569,12 @@ static bool local_cube_visible_dynamic_draw() {
 // creatures. Placeables and unknown/world geometry remain eligible casters.
 #define DUPLICATE_SELECTIVE_LOCAL_DEPTH(drawCall, drawCount)                 \
     do {                                                                      \
+        if (g_sunObjectCaptureActive && !current_draw_is_creature()) {         \
+            gl::BindFramebuffer(GL_FRAMEBUFFER, g_sunObjectFbo);              \
+            drawCall;                                                         \
+            ++g_sunObjectDraws[g_cascadeReplayLayer];                          \
+            gl::BindFramebuffer(GL_FRAMEBUFFER, g_cascadeDynamicFbo);         \
+        }                                                                     \
         if (g_localObjectCaptureActive && !current_draw_is_creature() &&      \
             g_localObjectTargetUsable && g_localObjectFbo &&                  \
             g_localObjectWriteDepthTex) {                                     \
@@ -2583,6 +2608,7 @@ extern "C" void NWN_GL_INTERPOSE(glDrawElements)(GLenum mode, GLsizei count, GLe
                              dlsym(RTLD_NEXT, "glDrawElements");
     shadow_before_draw();
     trace_normal_geometry_draw(count, true);
+    if (suppress_native_rain_draw()) { finish_observed_engine_draw(); return; }
     const bool suppressNative = nwn_oit_suppress_current_draw();
     if (g_nextDrawElements && !suppressNative)
         g_nextDrawElements(mode, count, type, indices);
@@ -2620,6 +2646,7 @@ extern "C" void NWN_GL_INTERPOSE(glDrawArrays)(GLenum mode, GLint first, GLsizei
                            dlsym(RTLD_NEXT, "glDrawArrays");
     shadow_before_draw();
     trace_normal_geometry_draw(count, false);
+    if (suppress_native_rain_draw()) { finish_observed_engine_draw(); return; }
     const bool suppressNative = nwn_oit_suppress_current_draw();
     if (g_nextDrawArrays && !suppressNative)
         g_nextDrawArrays(mode, first, count);
@@ -2687,6 +2714,7 @@ extern "C" void my_draw_range_elements(GLenum mode, GLuint start, GLuint end,
                                         GLsizei count, GLenum type,
                                         const void* indices) {
     trace_normal_geometry_draw(count, true);
+    if (suppress_native_rain_draw()) { finish_observed_engine_draw(); return; }
     const bool suppressNative = nwn_oit_suppress_current_draw();
     if (g_realDrawRangeElements && !suppressNative)
         g_realDrawRangeElements(mode, start, end, count, type, indices);
@@ -2725,6 +2753,7 @@ extern "C" void my_multi_draw_arrays(GLenum mode, const GLint* first,
                                      const GLsizei* count, GLsizei drawcount) {
     if (count) for (GLsizei i = 0; i < drawcount; ++i)
         trace_normal_geometry_draw(count[i], false);
+    if (suppress_native_rain_draw()) { finish_observed_engine_draw(); return; }
     const bool suppressNative = nwn_oit_suppress_current_draw();
     if (g_realMultiDrawArrays && !suppressNative)
         g_realMultiDrawArrays(mode, first, count, drawcount);
@@ -2762,6 +2791,7 @@ extern "C" void my_multi_draw_elements(GLenum mode, const GLsizei* count,
                                        GLsizei drawcount) {
     if (count) for (GLsizei i = 0; i < drawcount; ++i)
         trace_normal_geometry_draw(count[i], true);
+    if (suppress_native_rain_draw()) { finish_observed_engine_draw(); return; }
     const bool suppressNative = nwn_oit_suppress_current_draw();
     if (g_realMultiDrawElements && !suppressNative)
         g_realMultiDrawElements(mode, count, type, indices, drawcount);
@@ -2800,6 +2830,7 @@ extern "C" void my_draw_elements_base_vertex(GLenum mode, GLsizei count,
                                                GLenum type, const void* indices,
                                                GLint basevertex) {
     trace_normal_geometry_draw(count, true);
+    if (suppress_native_rain_draw()) { finish_observed_engine_draw(); return; }
     const bool suppressNative = nwn_oit_suppress_current_draw();
     if (g_realDrawElementsBaseVertex && !suppressNative)
         g_realDrawElementsBaseVertex(mode, count, type, indices, basevertex);
@@ -2840,6 +2871,7 @@ extern "C" void my_draw_range_elements_base_vertex(GLenum mode, GLuint start,
                                                      GLenum type, const void* indices,
                                                      GLint basevertex) {
     trace_normal_geometry_draw(count, true);
+    if (suppress_native_rain_draw()) { finish_observed_engine_draw(); return; }
     const bool suppressNative = nwn_oit_suppress_current_draw();
     if (g_realDrawRangeElementsBaseVertex && !suppressNative)
         g_realDrawRangeElementsBaseVertex(mode, start, end, count, type,
@@ -2883,6 +2915,7 @@ extern "C" void my_draw_elements_instanced(GLenum mode, GLsizei count,
                                             GLenum type, const void* indices,
                                             GLsizei instances) {
     for (GLsizei i = 0; i < instances; ++i) trace_normal_geometry_draw(count, true);
+    if (suppress_native_rain_draw()) { finish_observed_engine_draw(); return; }
     const bool suppressNative = nwn_oit_suppress_current_draw();
     if (g_realDrawElementsInstanced && !suppressNative)
         g_realDrawElementsInstanced(mode, count, type, indices, instances);
@@ -2922,6 +2955,7 @@ extern "C" void my_draw_elements_instanced_base_vertex(GLenum mode, GLsizei coun
                                                         GLenum type, const void* indices,
                                                         GLsizei instances, GLint basevertex) {
     for (GLsizei i = 0; i < instances; ++i) trace_normal_geometry_draw(count, true);
+    if (suppress_native_rain_draw()) { finish_observed_engine_draw(); return; }
     const bool suppressNative = nwn_oit_suppress_current_draw();
     if (g_realDrawElementsInstancedBaseVertex && !suppressNative)
         g_realDrawElementsInstancedBaseVertex(mode, count, type, indices,

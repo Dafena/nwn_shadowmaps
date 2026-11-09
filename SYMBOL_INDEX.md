@@ -53,6 +53,9 @@ field offset is verified.
 | Symbol | File | Purpose |
 | --- | --- | --- |
 | `draw_static_receiver` | `shadow_overlay_runtime.inc` | Main fullscreen composite and receiver gating |
+| `inject_sun_receiver_tag` / `begin_sun_receiver_tag` / `end_sun_receiver_tag` | `shadow_receiver_tags.inc` | Native-draw receiver classification with exact coverage, primitive depth span and reversible MRT attachment |
+| `current_draw_is_highlighted` | `nwn_shadowmap.cpp` | Reads the verified native Linux Scene highlight list and inherited owner identity; no Windows offset assumption |
+| `draw_weather_particles` | `weather_particles.inc` | Post-area rain/splash preview, gated by weather and completed shelter depth |
 | `build_static_receiver_program` | `shadow_fullscreen_receiver.inc` | Builds the current receiver GLSL |
 | `capture_scene_depth` / `capture_scene_color` | `shadow_fullscreen_receiver.inc` | Copies completed scene buffers for reconstruction/composite |
 | `nwnLayerLit` | receiver GLSL string | Directional cascade visibility test |
@@ -107,3 +110,12 @@ rg -n "nwn_oit_needs_|nwn_oit_bucket_|census_observe_draw" nwn_oit.cpp
 
 If a symbol moves, update this file's ownership table only; do not add brittle
 line numbers back.
+
+## Explicit continuous-alpha layers
+
+| Symbol | File | Purpose |
+| --- | --- | --- |
+| `layer_stack::BucketScope` / `iterator` | `nwn_layer_stack.inc` | Native bucket context and opted-in priority scheduling |
+| `layer_stack::part_draw_detour` | `nwn_layer_stack.inc` | Preserve actual Part identity and submitted alpha pass |
+| `layer_stack::before_draw` / `after_draw` | `nwn_layer_stack.inc` | Apply and restore alpha-pass uniform and depth-write mask |
+| `nwn_layer_stack::plan` | `nwn_layer_stack_plan.h` | Pure complete-hint scheduling; native equal ties |

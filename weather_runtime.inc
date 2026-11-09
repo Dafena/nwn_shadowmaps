@@ -1475,6 +1475,11 @@ static bool patch_fragment_shader(std::string& source) {
     if (outputPos == std::string::npos) return false;
 
     static const char* kDeclarations =
+        "#ifdef NWN_WORLDMAKER_WEATHER\n"
+        "#define nwnWeatherSurfaceClass ((nwnWeatherEligible > 1.5 && wmWeatherOpaque > 0.5) ? 1.0 : nwnWeatherEligible)\n"
+        "#else\n"
+        "#define nwnWeatherSurfaceClass nwnWeatherEligible\n"
+        "#endif\n"
         "uniform float nwnWeatherRainAmount;\n"
         "uniform float nwnWeatherSnowAmount;\n"
         "uniform float nwnWeatherEligible;\n"
@@ -1753,7 +1758,7 @@ static bool patch_fragment_shader(std::string& source) {
     static const char* kBody =
         "// injector-owned procedural rain puddles\n"
         "#if POSITION_VIEW == 1 && VERTEX_NORMAL == 1\n"
-        "if (nwnWeatherEligible > 0.5 && nwnWeatherRainAmount > 0.001 &&\n"
+        "if (nwnWeatherSurfaceClass > 0.5 && nwnWeatherRainAmount > 0.001 &&\n"
         "    (areaFlags & 1) == 0) {\n"
         "    vec3 nwnRainWorld = (m_view_inv * vec4(vPosView, 1.0)).xyz;\n"
         "    float nwnRainExposure = nwnWeatherPrecipitationExposure(nwnRainWorld);\n"
@@ -1764,7 +1769,7 @@ static bool patch_fragment_shader(std::string& source) {
         "    vec3 nwnRainDy = dFdy(nwnRainWorld);\n"
         "    vec3 nwnRainGeomNormal = normalize(cross(nwnRainDx, nwnRainDy));\n"
         "    float nwnRainGeomUp = abs(nwnRainGeomNormal.z);\n"
-        "    float nwnRainStaticAlpha = step(1.5, nwnWeatherEligible);\n"
+        "    float nwnRainStaticAlpha = step(1.5, nwnWeatherSurfaceClass);\n"
         // Geometry derivatives remain the hard cliff rejection. Interpolated
         // stock surface normals provide the smooth flatness transition across
         // neighboring terrain triangles, eliminating tile/triangle outlines.
@@ -1957,7 +1962,7 @@ static bool patch_fragment_shader(std::string& source) {
         "    FragmentColor.rgb = mix(FragmentColor.rgb, nwnRainWetColor,\n"
         "                            clamp(nwnRainMask * 0.86, 0.0, 0.86));\n"
         "}\n"
-        "if (nwnWeatherEligible > 0.5 && nwnWeatherEligible < 1.5 &&\n"
+        "if (nwnWeatherSurfaceClass > 0.5 && nwnWeatherSurfaceClass < 1.5 &&\n"
         "    nwnWeatherSnowAmount > 0.001 && (areaFlags & 1) == 0) {\n"
         "    vec3 nwnSnowWorld = (m_view_inv * vec4(vPosView, 1.0)).xyz;\n"
         "    float nwnSnowExposure = nwnWeatherPrecipitationExposure(nwnSnowWorld);\n"

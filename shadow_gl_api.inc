@@ -68,6 +68,12 @@ typedef void          GLvoid;
 #define GL_TEXTURE_COMPARE_MODE        0x884C
 #define GL_TEXTURE_COMPARE_FUNC        0x884D
 #define GL_R32UI                        0x8236
+#define GL_RG32UI                       0x823C
+#define GL_RG_INTEGER                   0x8228
+#define GL_TEXTURE_2D_MULTISAMPLE        0x9100
+#define GL_TEXTURE_BINDING_2D_MULTISAMPLE 0x9104
+#define GL_DRAW_BUFFER0                 0x8825
+#define GL_COLOR                        0x1800
 #define GL_RED_INTEGER                  0x8D94
 #define GL_CLAMP_TO_EDGE                0x812F
 #define GL_FRAMEBUFFER                 0x8D40
@@ -120,6 +126,7 @@ typedef void          GLvoid;
 
 namespace gl {
     void     (*GetIntegerv)(GLenum, GLint*)                                = nullptr;
+    void     (*GetBooleani_v)(GLenum, GLuint, GLboolean*) = nullptr;
     void     (*GetBooleanv)(GLenum, GLboolean*)                            = nullptr;
     void     (*GetFloatv)(GLenum, GLfloat*)                                = nullptr;
     GLboolean(*IsEnabled)(GLenum)                                          = nullptr;
@@ -135,6 +142,7 @@ namespace gl {
     void     (*Clear)(GLbitfield)                                          = nullptr;
     void     (*ClearColor)(GLfloat, GLfloat, GLfloat, GLfloat)             = nullptr;
     void     (*ClearDepth)(GLclampd)                                       = nullptr;
+    void     (*ColorMaski)(GLuint, GLboolean, GLboolean, GLboolean, GLboolean) = nullptr;
     void     (*ColorMask)(GLboolean, GLboolean, GLboolean, GLboolean)      = nullptr;
     void     (*DepthMask)(GLboolean)                                       = nullptr;
     void     (*DepthFunc)(GLenum)                                          = nullptr;
@@ -155,6 +163,9 @@ namespace gl {
     void     (*TexParameteri)(GLenum, GLenum, GLint)                       = nullptr;
     void     (*TexParameterfv)(GLenum, GLenum, const GLfloat*)             = nullptr;
     void     (*GetTexImage)(GLenum, GLint, GLenum, GLenum, GLvoid*)        = nullptr;
+    void     (*TexImage2DMultisample)(GLenum, GLsizei, GLenum, GLsizei, GLsizei, GLboolean) = nullptr;
+    void     (*DrawBuffers)(GLsizei, const GLenum*) = nullptr;
+    void     (*ClearBufferuiv)(GLenum, GLint, const GLuint*) = nullptr;
     void     (*DrawBuffer)(GLenum)                                         = nullptr;
     void     (*ReadBuffer)(GLenum)                                         = nullptr;
     void     (*GenFramebuffers)(GLsizei, GLuint*)                          = nullptr;
@@ -252,7 +263,7 @@ static void refresh_gl_identity() {
 
 static bool bind_gl() {
     bool ok = true;
-    GLBIND(GetIntegerv);  GLBIND(GetBooleanv);   GLBIND(IsEnabled);  GLBIND(GetFloatv);
+    GLBIND(GetIntegerv); GLBIND(GetBooleani_v); GLBIND(ColorMaski); GLBIND(GetBooleanv);   GLBIND(IsEnabled);  GLBIND(GetFloatv);
     GLBIND(IsProgram); GLBIND(BlitFramebuffer);
     GLBIND(GetError);     GLBIND(GetString);
     GLBIND(Enable);       GLBIND(Disable);       GLBIND(PolygonOffset); GLBIND(CullFace);       GLBIND(BlendFuncSeparate); GLBIND(BlendEquationSeparate); GLBIND(Viewport);
@@ -261,6 +272,7 @@ static bool bind_gl() {
     GLBIND(GenTextures);  GLBIND(DeleteTextures);GLBIND(BindTexture);
     GLBIND(TexImage2D);   GLBIND(TexImage3D);    GLBIND(TexSubImage2D); GLBIND(CopyTexSubImage2D); GLBIND(CopyTexSubImage3D); GLBIND(TexParameteri); GLBIND(TexParameterfv);
     GLBIND(GetTexImage);  GLBIND(DrawBuffer);    GLBIND(ReadBuffer);
+    GLBIND(TexImage2DMultisample); GLBIND(DrawBuffers); GLBIND(ClearBufferuiv);
     GLBIND(GenFramebuffers); GLBIND(DeleteFramebuffers);
     GLBIND(BindFramebuffer); GLBIND(FramebufferTexture2D); GLBIND(FramebufferTextureLayer);
     GLBIND(CheckFramebufferStatus);

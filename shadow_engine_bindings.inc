@@ -89,6 +89,8 @@ namespace eng {
 #endif
     DrawBucketGetItem_t     DrawBucketGetNextItem = nullptr;
     PartGetAurObject_t      PartGetAurObject = nullptr;
+    using LayerStackPartDraw_t = void (*)(void*);
+    LayerStackPartDraw_t LayerStackPartDraw = nullptr;
     GobGetExternalData_t    GobGetExternalData = nullptr;
     GobGetExternalDataType_t GobGetExternalDataType = nullptr;
     SceneRenderShadows_t    SceneRenderShadows    = nullptr;
@@ -134,6 +136,9 @@ namespace eng {
     AurTextureBindInUnit_t  AurTextureBindInUnit  = nullptr;
     AurTextureGetName_t     AurTextureGetName     = nullptr;
     MaterialBindAllStandardTextures_t MaterialBindAllStandardTextures = nullptr;
+#ifdef _WIN32
+    MaterialBindAllStandardTextures_t SharedMaterialBindAllStandardTextures = nullptr;
+#endif
     MaterialGetTexture_t    MaterialGetTexture    = nullptr;
     MaterialInitSharedMaterial_t MaterialInitSharedMaterial = nullptr;
     SharedMaterialInit_t SharedMaterialInit = nullptr;
@@ -250,6 +255,7 @@ static const struct { const char* mangled; void** slot; bool required; } kBindin
     {"_ZN17DrawBucketManager11GetNextItemEii",
                               (void**)&eng::DrawBucketGetNextItem, false},
     {"_ZN4Part12GetAurObjectEv", (void**)&eng::PartGetAurObject, false},
+    {"_ZN11PartTriMesh4DrawEv", (void**)&eng::LayerStackPartDraw, false},
     {"_ZN3Gob15GetExternalDataEv", (void**)&eng::GobGetExternalData, false},
     {"_ZN3Gob19GetExternalDataTypeEv",
                               (void**)&eng::GobGetExternalDataType, false},
@@ -273,6 +279,10 @@ static const struct { const char* mangled; void** slot; bool required; } kBindin
     {"_ZN8Material23BindAllStandardTexturesEv",
                               (void**)&eng::MaterialBindAllStandardTextures, false},
     {"_ZN8Material10GetTextureEi",      (void**)&eng::MaterialGetTexture, false},
+#ifdef _WIN32
+    {"_ZN14SharedMaterial23BindAllStandardTexturesEv",
+                              (void**)&eng::SharedMaterialBindAllStandardTextures, false},
+#endif
     {"_ZN8Material18InitSharedMaterialEPKc",
                               (void**)&eng::MaterialInitSharedMaterial, false},
     {"_ZN14SharedMaterial4InitEPKc",

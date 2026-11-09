@@ -202,6 +202,25 @@ void nwn_overlay_render(int viewportW, int viewportH, const NwnOverlayState& st)
         }
 
 #endif   // !NWN_SHIP -- Sun shadows
+        if (st.shaderRain && ImGui::CollapsingHeader("Shader rain (preview)")) {
+            ImGui::Checkbox("Private rain and splashes", st.shaderRain);
+            if (st.shaderRainHideNative) ImGui::Checkbox("Hide native rain (preview only)", st.shaderRainHideNative);
+            ImGui::TextWrapped("Only native rain is hidden when the private pass is ready. Lightning and snow remain native.");
+            ImGui::Text("Pass: %s", st.shaderRainStatus);
+            if (st.shaderRainBudget) {
+                ImGui::SliderInt("Drop budget", st.shaderRainBudget,
+                    kNwnShaderRainMinBudget, kNwnShaderRainMaxBudget, "%d", ImGuiSliderFlags_Logarithmic);
+                ImGui::InputInt("Exact drop budget", st.shaderRainBudget, 1024, 8192);
+                if (*st.shaderRainBudget < kNwnShaderRainMinBudget) *st.shaderRainBudget = kNwnShaderRainMinBudget;
+                if (*st.shaderRainBudget > kNwnShaderRainMaxBudget) *st.shaderRainBudget = kNwnShaderRainMaxBudget;
+                if (*st.shaderRainBudget > 32768)
+                    ImGui::TextWrapped("Extreme rain: high budgets can substantially reduce FPS, especially with many lights.");
+            }
+            if (st.shaderRainRadius) ImGui::SliderFloat("Rain radius", st.shaderRainRadius, 8.0f, 64.0f, "%.1f m");
+            if (st.shaderRainWindX) ImGui::SliderFloat("Wind X (manual)", st.shaderRainWindX, -8.0f, 8.0f, "%.1f m/s");
+            if (st.shaderRainWindY) ImGui::SliderFloat("Wind Y (manual)", st.shaderRainWindY, -8.0f, 8.0f, "%.1f m/s");
+            if (st.shaderRainSplashes) ImGui::SliderFloat("Splash strength", st.shaderRainSplashes, 0.0f, 2.0f);
+        }
         if (st.godraysAvailable && ImGui::CollapsingHeader("Volumetric fog")) {
             if (st.godraysEnabled) {
                 bool enabled = *st.godraysEnabled;
@@ -926,13 +945,25 @@ void nwn_overlay_render(int viewportW, int viewportH, const NwnOverlayState& st)
                     "3 - solid magenta before any sampling",
                     "4 - local compare: red=occluded, green/blue=operands",
                     "5 - yellow local-shadow cutoff ring",
+                    "6 - raw sun: red=world, green=near, blue=moving",
+                    "7 - A/B: old duplicate A2C sun on creatures",
+                    "8 - sun receivers: green=creature, red=other, blue=unknown",
                 };
                 int mode = *st.receiverDebug;
-                if (mode < 0 || mode > 5) mode = 0;
-                if (ImGui::Combo("Receiver debug", &mode, modes, 6))
+                if (mode < 0 || mode > 8) mode = 0;
+                if (ImGui::Combo("Receiver debug", &mode, modes, 9))
                     *st.receiverDebug = mode;
                 ImGui::TextDisabled("3 proves the pass reaches the screen; 1/2 sit after\n"
                                     "the background discard and cannot show that.");
+                if (mode == 6)
+                    ImGui::TextDisabled("Raw sun maps before lighting/fog; mixed colours\n"
+                                        "mean more than one map shadows the same pixel.");
+                if (mode == 7)
+                    ImGui::TextDisabled("Normal scene, but creature A2C also receives sun\n"
+                                        "in its material shader. Compare with mode 0.");
+                if (mode == 8)
+                    ImGui::TextDisabled("Green: creature; yellow: native highlight;\n"
+                                        "red: other receiver; blue: no matching tag.");
             }
         }
 #endif   // !NWN_SHIP -- Diagnostics
