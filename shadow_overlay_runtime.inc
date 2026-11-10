@@ -1380,6 +1380,13 @@ extern "C" int nwn_sdl_poll_event(void* event) {
 
         uint32_t type = 0;
         std::memcpy(&type, event, sizeof(type));
+        if(type==kSdlMouseMotion || type==kSdlMouseButtonDown || type==kSdlMouseButtonUp) {
+            int32_t x=0,y=0;
+            std::memcpy(&x,static_cast<const char*>(event)+20,sizeof(x));
+            std::memcpy(&y,static_cast<const char*>(event)+24,sizeof(y));
+            nwn_drawing_probe_input(type==kSdlMouseMotion?0:type==kSdlMouseButtonDown?1:2,
+                                   static_cast<float>(x),static_cast<float>(y));
+        }
 
         // Proves the game actually pumps events through THIS entry point --
         // it could have used SDL_PeepEvents/SDL_WaitEvent instead, in which

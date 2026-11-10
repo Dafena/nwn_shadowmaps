@@ -2578,6 +2578,7 @@ static bool local_cube_visible_dynamic_draw() {
 
 extern "C" void NWN_GL_INTERPOSE(glDrawElements)(GLenum mode, GLsizei count, GLenum type,
                                 const void* indices) {
+    nwn_drawing_probe_draw(mode,count,type,indices); // exact tagged native NUI image, read-only
     if (!g_nextDrawElements)
         g_nextDrawElements = (void(*)(GLenum, GLsizei, GLenum, const void*))
                              dlsym(RTLD_NEXT, "glDrawElements");

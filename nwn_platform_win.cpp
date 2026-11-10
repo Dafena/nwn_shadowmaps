@@ -198,6 +198,7 @@ void nwn_win_install_gl_hooks() {
 // Mouse POSITION still comes from polling SDL_GetMouseState (unchanged) -- this
 // only blocks delivery, it does not feed ImGui.
 #include "nwn_overlay.h"
+#include "drawing_probe.h"
 
 static WNDPROC  g_origWndProc = nullptr;
 
@@ -208,6 +209,10 @@ static WNDPROC  g_origWndProc = nullptr;
 static LRESULT CALLBACK nwn_win_wndproc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     auto clientX = [&]{ return (float)(short)LOWORD(lp); };
     auto clientY = [&]{ return (float)(short)HIWORD(lp); };
+    if(msg==WM_MOUSEMOVE)nwn_drawing_probe_input(0,clientX(),clientY());
+    if(msg==WM_LBUTTONDOWN)nwn_drawing_probe_input(1,clientX(),clientY());
+    if(msg==WM_LBUTTONUP)nwn_drawing_probe_input(2,clientX(),clientY());
+    if(msg==WM_KILLFOCUS || msg==WM_CANCELMODE)nwn_drawing_probe_input(3,0,0);
     switch (msg) {
         case WM_MOUSEMOVE:
             nwn_overlay_add_mouse_pos(clientX(), clientY());
@@ -268,7 +273,7 @@ static BOOL CALLBACK nwn_win_find_window(HWND hwnd, LPARAM param) {
 
 void nwn_win_install_input_capture() {
     if (g_origWndProc) return;                      // already subclassed
-    if (!nwn_overlay_ready()) return;               // nothing to capture for yet
+    if (!nwn_overlay_ready() && !nwn_drawing_probe_active()) return;
     HWND hwnd = nullptr;
     EnumWindows(nwn_win_find_window, (LPARAM)&hwnd);
     if (!hwnd) return;                              // retry next frame

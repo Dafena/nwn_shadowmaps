@@ -1,0 +1,209 @@
+{
+  "sessions": [
+    {
+      "native_events": {
+        "O": 1,
+        "G": 2,
+        "D": 5,
+        "U": 5,
+        "C": 1
+      },
+      "raw_events": {
+        "1": 6,
+        "0": 103,
+        "2": 5,
+        "3": 1
+      },
+      "pairs": [
+        {
+          "raw": [
+            196.0,
+            172.0
+          ],
+          "local": [
+            108.0,
+            9.5
+          ],
+          "root": [
+            80.0,
+            80.0,
+            440.0,
+            450.0
+          ],
+          "lag_ms": 17.544,
+          "gui_scale": 1.5
+        },
+        {
+          "raw": [
+            303.0,
+            293.0
+          ],
+          "local": [
+            215.0,
+            124.5
+          ],
+          "root": [
+            80.0,
+            80.0,
+            440.0,
+            450.0
+          ],
+          "lag_ms": 16.684,
+          "gui_scale": 1.5
+        },
+        {
+          "raw": [
+            411.0,
+            245.0
+          ],
+          "local": [
+            323.0,
+            75.5
+          ],
+          "root": [
+            80.0,
+            80.0,
+            440.0,
+            450.0
+          ],
+          "lag_ms": 16.744,
+          "gui_scale": 1.5
+        },
+        {
+          "raw": [
+            518.0,
+            271.0
+          ],
+          "local": [
+            427.0,
+            116.5
+          ],
+          "root": [
+            80.0,
+            80.0,
+            440.0,
+            450.0
+          ],
+          "lag_ms": 16.835,
+          "gui_scale": 1.5
+        },
+        {
+          "raw": [
+            528.0,
+            388.0
+          ],
+          "local": [
+            440.0,
+            216.5
+          ],
+          "root": [
+            80.0,
+            80.0,
+            440.0,
+            450.0
+          ],
+          "lag_ms": 16.824,
+          "gui_scale": 1.5
+        }
+      ],
+      "unmatched_downs": 0,
+      "ambiguous_downs": 0,
+      "scale_observations": [
+        1.5
+      ],
+      "movement_limit_reported": false,
+      "image_quad_measurements": [
+        {
+          "rectangle": [
+            372.0,
+            378.0,
+            36.0,
+            36.0
+          ],
+          "bottom_up": false
+        },
+        {
+          "rectangle": [
+            90.0,
+            171.0,
+            600.0,
+            450.0
+          ],
+          "bottom_up": false
+        },
+        {
+          "rectangle": [
+            10.0,
+            91.0,
+            600.0,
+            450.0
+          ],
+          "bottom_up": false
+        },
+        {
+          "rectangle": [
+            90.0,
+            171.0,
+            600.0,
+            450.0
+          ],
+          "bottom_up": false
+        }
+      ],
+      "local_preview": {
+        "strokes": 5,
+        "aligned": true,
+        "full": false,
+        "rejected": 0
+      },
+      "peak_uploaded_strokes": 5,
+      "world_base_verified": true,
+      "world_uploaded_strokes": 5,
+      "peak_world_strokes": 5,
+      "sequence_errors": 0,
+      "fits_by_gui_scale": [
+        {
+          "gui_scale": 1.5,
+          "matched_downs": 5,
+          "fit": {
+            "scale": 1.011107966879613,
+            "inset_pixels": [
+              4.350091871860002,
+              83.20614824319296
+            ],
+            "rms_pixels": 4.304277504559709,
+            "max_pixels": 10.88886373503692
+          }
+        }
+      ],
+      "correlation_fit": {
+        "scale": 1.011107966879613,
+        "inset_pixels": [
+          4.350091871860002,
+          83.20614824319296
+        ],
+        "rms_pixels": 4.304277504559709,
+        "max_pixels": 10.88886373503692
+      },
+      "matched_downs": 5,
+      "raw_sample_limit_reached": false
+    }
+  ],
+  "gates_complete": false,
+  "limitations": [
+    "Correlation is affected by movement during network/event latency.",
+    "A fit does not prove clipping, occlusion, GUI scaling or authentication.",
+    "Only native NUI down events establish canvas hits; raw downs alone do not."
+  ],
+  "artifact": {
+    "platform": "Windows",
+    "game_build": "89.8193.37-17",
+    "renderer_sha256": "db389b39027fe043d74ae975a701f76c865c8ad50beef6991f05120d10e23dcb"
+  },
+  "manual_visual_confirmation": {
+    "world_artwork_readable": true,
+    "handwritten_hello_readable": true,
+    "nui_closed_while_world_ink_remains_visible": true,
+    "scope": "Single Windows client; native room test on 2026-11-04. Not a multiplayer or persistence certification."
+  }
+}

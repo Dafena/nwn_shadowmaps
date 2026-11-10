@@ -1513,6 +1513,7 @@ static bool resolve_symbols() {
 #endif
 
 #include "shadow_targets.inc"
+#include "shadow_drawing_probe.inc"
 #include "shadow_diagnostics_settings.inc"
 static void restore_engine_program(GLuint program);
 #include "shadow_replay.inc"
@@ -1837,6 +1838,7 @@ extern "C" void MaterialBindAllStandardTextures_detour(void* material) {
     // This per-material hot-path hook is installed only when subhook produced
     // a real trampoline. Never remove/call/reinstall it around every draw.
     if (g_materialBindTrampoline) g_materialBindTrampoline(material);
+    drawing_probe_note_world_material(material); // explicit local-test texture5 only
 #ifdef _WIN32
     if (report) fprintf(stderr, "[oit][win-material] BindAll original returned\n");
 #endif
@@ -2525,6 +2527,7 @@ static void update_engine_shadow_fade() {
 }
 
 extern "C" void SceneRender_detour(void* self) {
+    nwn_drawing_probe_frame();
     ++g_frames;
     // Armed BEFORE the engine renders, because the cascade replay happens
     // inside its Scene::RenderDrawBucket calls -- deciding after the fact
@@ -2551,6 +2554,8 @@ extern "C" void SceneRender_detour(void* self) {
             return;
         }
     }
+
+    drawing_probe_upload_preview(); // dedicated opt-in NUI texture, GL state restored
 
     // OIT's read-only census must be armed before NWN submits this scene's
     // geometry. This is a no-op unless an OIT/census environment switch is on.
@@ -3750,6 +3755,7 @@ static void shadowmap_init() {
         return;
     }
     install_weather_engine_hooks();
+    install_drawing_probe();
 
     g_hook = subhook_new(reinterpret_cast<void*>(eng::SceneRender),
                          reinterpret_cast<void*>(SceneRender_detour),

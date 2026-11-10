@@ -3,6 +3,11 @@
 //  patches instead of pinning build offsets).
 // ===========================================================================
 namespace eng {
+    void* DrawingSetCustomToken = nullptr;
+    using DrawingGuiScale_t = float (*)();
+    DrawingGuiScale_t DrawingGuiScale = nullptr;
+    using DrawingTextureId_t = unsigned (*)(void*);
+    DrawingTextureId_t DrawingTextureId = nullptr;
     using SceneRender_t          = void (*)(void* self);
     using ManageSceneBSP_t       = void (*)(void* self);
     using BSPTraverseAll_t       = void (*)(void* root,
@@ -228,6 +233,9 @@ namespace eng {
 }
 
 static const struct { const char* mangled; void** slot; bool required; } kBindings[] = {
+    {"_ZN9CTlkTable14SetCustomTokenEiRK10CExoString", &eng::DrawingSetCustomToken, false},
+    {"_ZN7CAurora11GetGUIScaleEv", (void**)&eng::DrawingGuiScale, false},
+    {"_Z16AurTextureGetTIDP11CAurTexture", (void**)&eng::DrawingTextureId, false},
     // Scene::Render()                                             >>> VERIFY
     {"_ZN5Scene6RenderEv",             (void**)&eng::SceneRender,           true },
     {"_Z14ManageSceneBSPP5Scene",      (void**)&eng::ManageSceneBSP,        false},

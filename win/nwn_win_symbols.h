@@ -21,6 +21,9 @@ struct NwnWinSymbol {
 };
 
 static const NwnWinSymbol kNwnWinSymbols[] = {
+    {"_ZN9CTlkTable14SetCustomTokenEiRK10CExoString", "?SetCustomToken@CTlkTable@@QEAAXHAEBVCExoString@@@Z", false},
+    {"_ZN7CAurora11GetGUIScaleEv", "?GetGUIScale@CAurora@@SAMXZ", false},
+    {"_Z16AurTextureGetTIDP11CAurTexture", "?AurTextureGetTID@@YAIPEAVCAurTexture@@@Z", false},
     // --- scene / render entry points -------------------------------------
     {"_ZN5Scene6RenderEv",                     "?Render@Scene@@UEAAXXZ",                        true },
     {"_Z14ManageSceneBSPP5Scene",              "?ManageSceneBSP@@YAXPEAVScene@@@Z",             false},

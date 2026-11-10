@@ -28,9 +28,12 @@ IMGUI_FLAGS = -O2 -std=c++17 -fPIC -fvisibility=hidden -fvisibility-inlines-hidd
 TARGET = libnwn_shadowmap.so
 
 IMGUI_OBJS = imgui.o imgui_draw.o imgui_tables.o imgui_widgets.o imgui_impl_opengl3.o
-OBJS = nwn_shadowmap.o shadow_config.o shadow_math.o nwn_oit.o nwn_overlay_imgui.o subhook.o $(IMGUI_OBJS)
+OBJS = nwn_shadowmap.o shadow_config.o shadow_math.o nwn_oit.o nwn_overlay_imgui.o drawing_texture_probe.o subhook.o $(IMGUI_OBJS)
 
 all: $(TARGET)
+
+drawing_texture_probe.o: drawing_texture_probe.cpp drawing_pad_marker.h drawing_canvas_quad.h drawing_probe.h nwn_platform.h
+
 
 # ---------------------------------------------------------------------------
 #  make deploy -- the build you hand to a tester
@@ -44,6 +47,8 @@ all: $(TARGET)
 DEPLOY_TARGET = libnwn_shadowmap_deploy.so
 DEPLOY_DIR    = build-deploy
 DEPLOY_OBJS   = $(addprefix $(DEPLOY_DIR)/,$(OBJS))
+
+$(DEPLOY_DIR)/drawing_texture_probe.o: drawing_texture_probe.cpp drawing_pad_marker.h drawing_canvas_quad.h drawing_probe.h nwn_platform.h
 
 deploy: $(DEPLOY_TARGET)
 
@@ -61,7 +66,7 @@ $(DEPLOY_DIR)/%.o: %.cpp | $(DEPLOY_DIR)
 # shipping object on the same dependency graph as the development object;
 # otherwise `make deploy` can silently reuse a stale object after an .inc-only
 # fix (as happened with the startup settings reconciliation).
-$(DEPLOY_DIR)/nwn_shadowmap.o: nwn_shadowmap.cpp \
+$(DEPLOY_DIR)/nwn_shadowmap.o: nwn_shadowmap.cpp shadow_drawing_probe.inc drawing_probe.h drawing_input_journal.h drawing_preview.h drawing_texture_upload.h drawing_canvas_quad.h drawing_world_canvas.h \
 	shadow_gl_api.inc shadow_engine_bindings.inc weather_runtime.inc \
 	shadow_targets.inc shadow_diagnostics_settings.inc shadow_replay.inc \
 	shadow_shader_interposition.inc shadow_fullscreen_receiver.inc godrays_runtime.inc \
@@ -99,7 +104,7 @@ $(DEPLOY_DIR)/imgui_impl_opengl3.o: $(IMGUI_DIR)/backends/imgui_impl_opengl3.cpp
 $(TARGET): $(OBJS)
 	$(CXX) -shared $^ -o $@ -ldl
 
-nwn_shadowmap.o: nwn_shadowmap.cpp \
+nwn_shadowmap.o: nwn_shadowmap.cpp shadow_drawing_probe.inc drawing_probe.h drawing_input_journal.h drawing_preview.h drawing_texture_upload.h drawing_canvas_quad.h drawing_world_canvas.h \
 	shadow_gl_api.inc shadow_engine_bindings.inc weather_runtime.inc \
 	shadow_targets.inc shadow_diagnostics_settings.inc shadow_replay.inc \
 	shadow_shader_interposition.inc shadow_fullscreen_receiver.inc godrays_runtime.inc \

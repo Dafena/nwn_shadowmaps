@@ -1,0 +1,310 @@
+{
+  "sessions": [
+    {
+      "native_events": {
+        "O": 1,
+        "G": 3,
+        "D": 8,
+        "U": 9
+      },
+      "raw_events": {
+        "1": 11,
+        "0": 404,
+        "2": 11,
+        "3": 2
+      },
+      "pairs": [
+        {
+          "raw": [
+            1727.0,
+            712.0
+          ],
+          "local": [
+            264.0,
+            169.5
+          ],
+          "root": [
+            80.0,
+            80.0,
+            440.0,
+            450.0
+          ],
+          "lag_ms": 16.717,
+          "gui_scale": 1.5
+        },
+        {
+          "raw": [
+            1949.0,
+            657.0
+          ],
+          "local": [
+            479.0,
+            116.5
+          ],
+          "root": [
+            1455.0,
+            453.0,
+            440.0,
+            450.0
+          ],
+          "lag_ms": 27.768,
+          "gui_scale": 1.5
+        },
+        {
+          "raw": [
+            1671.0,
+            546.0
+          ],
+          "local": [
+            208.0,
+            5.5
+          ],
+          "root": [
+            1455.0,
+            453.0,
+            440.0,
+            450.0
+          ],
+          "lag_ms": 20.218,
+          "gui_scale": 1.5
+        },
+        {
+          "raw": [
+            1707.0,
+            601.0
+          ],
+          "local": [
+            244.0,
+            58.5
+          ],
+          "root": [
+            1455.0,
+            453.0,
+            440.0,
+            450.0
+          ],
+          "lag_ms": 19.013,
+          "gui_scale": 1.5
+        },
+        {
+          "raw": [
+            1698.0,
+            871.0
+          ],
+          "local": [
+            236.0,
+            328.5
+          ],
+          "root": [
+            1455.0,
+            453.0,
+            440.0,
+            450.0
+          ],
+          "lag_ms": 17.587,
+          "gui_scale": 1.5
+        },
+        {
+          "raw": [
+            2004.0,
+            633.0
+          ],
+          "local": [
+            541.0,
+            90.5
+          ],
+          "root": [
+            1455.0,
+            453.0,
+            440.0,
+            450.0
+          ],
+          "lag_ms": 38.837,
+          "gui_scale": 1.5
+        },
+        {
+          "raw": [
+            1620.0,
+            803.0
+          ],
+          "local": [
+            157.0,
+            256.5
+          ],
+          "root": [
+            1455.0,
+            453.0,
+            440.0,
+            450.0
+          ],
+          "lag_ms": 27.318,
+          "gui_scale": 1.5
+        },
+        {
+          "raw": [
+            1783.0,
+            640.0
+          ],
+          "local": [
+            286.0,
+            97.5
+          ],
+          "root": [
+            1455.0,
+            453.0,
+            440.0,
+            450.0
+          ],
+          "lag_ms": 89.894,
+          "gui_scale": 1.5
+        }
+      ],
+      "unmatched_downs": 0,
+      "ambiguous_downs": 0,
+      "scale_observations": [
+        1.5
+      ],
+      "movement_limit_reported": false,
+      "sequence_errors": 0,
+      "fits_by_gui_scale": [
+        {
+          "gui_scale": 1.5,
+          "matched_downs": 8,
+          "fit": {
+            "scale": 0.12435594162683572,
+            "inset_pixels": [
+              1572.7708325214653,
+              614.8833889155276
+            ],
+            "rms_pixels": 105.89699935494164,
+            "max_pixels": 183.01470799137064
+          }
+        }
+      ],
+      "correlation_fit": {
+        "scale": 0.12435594162683572,
+        "inset_pixels": [
+          1572.7708325214653,
+          614.8833889155276
+        ],
+        "rms_pixels": 105.89699935494164,
+        "max_pixels": 183.01470799137064
+      },
+      "matched_downs": 8,
+      "raw_sample_limit_reached": false
+    },
+    {
+      "native_events": {
+        "O": 1,
+        "G": 1,
+        "D": 3,
+        "U": 3
+      },
+      "raw_events": {
+        "3": 3,
+        "1": 3,
+        "2": 3
+      },
+      "pairs": [
+        {
+          "raw": [
+            1619.0,
+            618.0
+          ],
+          "local": [
+            156.0,
+            75.5
+          ],
+          "root": [
+            1455.0,
+            453.0,
+            440.0,
+            450.0
+          ],
+          "lag_ms": 21.684,
+          "gui_scale": 1.5
+        },
+        {
+          "raw": [
+            1950.0,
+            859.0
+          ],
+          "local": [
+            487.0,
+            316.5
+          ],
+          "root": [
+            1455.0,
+            453.0,
+            440.0,
+            450.0
+          ],
+          "lag_ms": 18.104,
+          "gui_scale": 1.5
+        },
+        {
+          "raw": [
+            1874.0,
+            648.0
+          ],
+          "local": [
+            411.0,
+            105.5
+          ],
+          "root": [
+            1455.0,
+            453.0,
+            440.0,
+            450.0
+          ],
+          "lag_ms": 19.449,
+          "gui_scale": 1.5
+        }
+      ],
+      "unmatched_downs": 0,
+      "ambiguous_downs": 0,
+      "scale_observations": [
+        1.5
+      ],
+      "movement_limit_reported": false,
+      "sequence_errors": 0,
+      "fits_by_gui_scale": [
+        {
+          "gui_scale": 1.5,
+          "matched_downs": 3,
+          "fit": {
+            "scale": 1.0,
+            "inset_pixels": [
+              8.0,
+              89.5
+            ],
+            "rms_pixels": 0.0,
+            "max_pixels": 0.0
+          }
+        }
+      ],
+      "correlation_fit": {
+        "scale": 1.0,
+        "inset_pixels": [
+          8.0,
+          89.5
+        ],
+        "rms_pixels": 0.0,
+        "max_pixels": 0.0
+      },
+      "matched_downs": 3,
+      "raw_sample_limit_reached": false
+    }
+  ],
+  "gates_complete": false,
+  "limitations": [
+    "Correlation is affected by movement during network/event latency.",
+    "A fit does not prove clipping, occlusion, GUI scaling or authentication.",
+    "Only native NUI down events establish canvas hits; raw downs alone do not."
+  ],
+  "artifact": {
+    "platform": "Windows",
+    "game_build": "89.8193.37-17",
+    "renderer_sha256": "1134e0dd46d5eddbbe654cd257c66c438d23c007decca7141f7cccdb333f2eaa"
+  }
+}

@@ -4,6 +4,7 @@
 *.dll
 build-deploy/
 win/*.o
+tests/*.exe
 
 # Runtime files the injector writes next to the game
 *.log

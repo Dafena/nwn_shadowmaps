@@ -32,9 +32,15 @@ LDFLAGS = -shared -static -static-libgcc -static-libstdc++ \
 TARGET = version.dll
 OBJS = nwn_win_proxy.o nwn_shadowmap.o shadow_config.o shadow_math.o \
        nwn_platform_win.o nwn_overlay_imgui.o \
-       nwn_oit.o subhook.o imgui.o imgui_draw.o imgui_tables.o imgui_widgets.o imgui_impl_opengl3.o
+       nwn_oit.o drawing_win_probe.o drawing_texture_probe.o subhook.o imgui.o imgui_draw.o imgui_tables.o imgui_widgets.o imgui_impl_opengl3.o
 
 all: $(TARGET)
+
+drawing_win_probe.o: $(ROOT)/drawing_win_probe.cpp $(ROOT)/drawing_probe.h
+	$(CXX) $(CXXFLAGS) -c $< -o $@
+
+drawing_texture_probe.o: $(ROOT)/drawing_texture_probe.cpp $(ROOT)/drawing_pad_marker.h $(ROOT)/drawing_canvas_quad.h $(ROOT)/drawing_probe.h $(ROOT)/nwn_platform.h
+	$(CXX) $(CXXFLAGS) -c $< -o $@
 
 verify: $(TARGET)
 	./check_artifact.sh "$(TARGET)" "$(NWN_WIN_EXE)"
@@ -52,7 +58,7 @@ nwn_win_proxy.o: nwn_win_proxy.cpp
 # stale before.
 INC_MODULES = $(wildcard $(ROOT)/shadow_*.inc) $(ROOT)/weather_runtime.inc $(ROOT)/godrays_runtime.inc
 
-nwn_shadowmap.o: $(ROOT)/nwn_shadowmap.cpp $(ROOT)/nwn_platform.h $(ROOT)/nwn_hooks_core.h \
+nwn_shadowmap.o: $(ROOT)/nwn_shadowmap.cpp $(ROOT)/drawing_probe.h $(ROOT)/drawing_input_journal.h $(ROOT)/drawing_preview.h $(ROOT)/drawing_texture_upload.h $(ROOT)/drawing_canvas_quad.h $(ROOT)/drawing_world_canvas.h $(ROOT)/nwn_platform.h $(ROOT)/nwn_hooks_core.h \
                  $(ROOT)/shadow_config.h $(ROOT)/shadow_math.h $(INC_MODULES) nwn_win_symbols.h
 	$(CXX) $(CXXFLAGS) -c $< -o $@
 # Shares nwn_oit.cpp with the .so exactly as nwn_shadowmap.cpp is shared: the
@@ -72,7 +78,9 @@ shadow_math.o: $(ROOT)/shadow_math.cpp $(ROOT)/shadow_math.h
 # last time this one file changed, not the build, and a tester's log reports a
 # stale build date. That happened on 2026-08-15 and sent us reading a log
 # against the wrong source.
-nwn_platform_win.o: $(ROOT)/nwn_platform_win.cpp $(ROOT)/nwn_platform.h \
+nwn_platform_win.o: $(ROOT)/nwn_platform_win.cpp $(ROOT)/drawing_probe.h $(ROOT)/nwn_platform.h \
+                    $(ROOT)/drawing_texture_probe.cpp $(ROOT)/drawing_pad_marker.h \
+                    $(ROOT)/drawing_preview.h $(ROOT)/drawing_canvas_quad.h $(ROOT)/drawing_texture_upload.h $(ROOT)/drawing_world_canvas.h \
                     $(ROOT)/nwn_shadowmap.cpp $(INC_MODULES) \
                     $(ROOT)/nwn_overlay_imgui.cpp $(ROOT)/shadow_config.cpp \
                     $(ROOT)/shadow_math.cpp nwn_win_symbols.h

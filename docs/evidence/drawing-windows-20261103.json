@@ -1,0 +1,23 @@
+{
+  "platform": "Windows",
+  "game_build": "89.8193.37-17",
+  "renderer_sha256": "a04576296f4da54b1aee2b05a96839a50f212856fc889912afae80b209f24150",
+  "token_observer_installed": true,
+  "native_events": 56,
+  "event_counts": {
+    "O": 1,
+    "D": 22,
+    "U": 21,
+    "G": 12,
+    "C": 0
+  },
+  "raw_pointer_samples": 0,
+  "findings": [
+    "Native NUI events successfully transported server-to-owning-client token observer.",
+    "Window move and resize updates reached the client.",
+    "One client only; cross-player isolation is not yet runtime-tested.",
+    "Pointer listener remained tied to settings-panel initialization; fixed in next staged build.",
+    "Probe button default width did not match drawn X extent; next staged probe explicitly sets 400 logical units."
+  ],
+  "gates_complete": false
+}
