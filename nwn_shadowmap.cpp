@@ -999,6 +999,18 @@ static float    g_areaShadowFadeSeconds   = 0.75f;
 // gate is checked by the renderer and the panel; settings and environment
 // parsing are also kept behind it so stale configuration cannot revive it.
 static constexpr bool kGodraysFeatureAvailable = false;
+// Private precipitation preview; optional exact-resource native-rain hiding.
+static bool     g_shaderRainEnabled = false;
+static bool     g_shaderRainHideNative = false;
+namespace weather_particles {
+static void note_material_texture(const char* name);
+static bool suppress_native_draw(bool nativeAreaDraw);
+}
+static int      g_shaderRainBudget = 2048;
+static float    g_shaderRainRadius = 28.0f;
+static float    g_shaderRainWindX = 0.0f;
+static float    g_shaderRainWindY = 0.0f;
+static float    g_shaderRainSplashes = 1.0f;
 static bool     g_godraysEnabled           = false;
 static float    g_godraysStrength          = 0.55f;
 static int      g_godraysSamples           = 24;
@@ -1660,6 +1672,8 @@ static subhook_t g_hookMaterialBind         = nullptr;
 static subhook_t g_hookMaterialInit         = nullptr;
 #ifdef _WIN32
 static subhook_t g_hookSharedMaterialInit   = nullptr;
+static subhook_t g_hookSharedMaterialBindRain = nullptr;
+static eng::MaterialBindAllStandardTextures_t g_sharedMaterialBindRainTrampoline = nullptr;
 #endif
 #ifndef _WIN32
 static subhook_t g_hookMaterialDestroy      = nullptr;
@@ -1689,6 +1703,30 @@ static uint64_t g_drawOwnerUnknownItems = 0;
 
 static bool current_draw_is_creature() {
     return g_currentDrawOwnerKind == DrawOwnerKind::Creature;
+}
+
+static bool current_draw_is_highlighted() {
+#ifdef _WIN32
+    // This measured native Linux Scene layout is not a Windows layout claim.
+    return false;
+#else
+    if (!g_areaScene || !g_currentDrawOwner || !eng::GobGetExternalData)
+        return false;
+    // Verified in AddHighlightGob, RemoveHighlightGob and DoHighlightGob:
+    // Scene+0x80 is the engine's CExoArrayList<Gob*>; +0x88 is its count.
+    // Inherited external data links a root to rigid/skinned body parts.
+    const void* const* objects = nullptr;
+    int count = 0;
+    const auto* scene = static_cast<const unsigned char*>(g_areaScene);
+    std::memcpy(&objects, scene + 0x80, sizeof(objects));
+    std::memcpy(&count, scene + 0x88, sizeof(count));
+    if (!objects || count <= 0 || count > 4096) return false;
+    for (int i = 0; i < count; ++i) {
+        if (objects[i] && eng::GobGetExternalData(const_cast<void*>(objects[i])) == g_currentDrawOwner)
+            return true;
+    }
+    return false;
+#endif
 }
 
 static int material_hook_stage() {
@@ -1800,6 +1838,20 @@ extern "C" void* MaterialInitSharedMaterial_detour(void* material,
     return sharedMaterial;
 }
 
+#ifdef _WIN32
+extern "C" void SharedMaterialBindRain_detour(void* sharedMaterial) {
+    if (g_sharedMaterialBindRainTrampoline) g_sharedMaterialBindRainTrampoline(sharedMaterial);
+    // NWN 89.8193.37-17: PartEmitter::RenderEmitter RVA 0x62900 calls
+    // SharedMaterial::BindAllStandardTextures RVA 0x82630. The latter loads
+    // its base CAurTexture* from +0x50 at 0x8263e and binds it to unit zero.
+    // Do not use Material::GetTexture on a SharedMaterial or guess Linux offsets.
+    void* texture = nullptr;
+    if (sharedMaterial) std::memcpy(&texture,
+        static_cast<const unsigned char*>(sharedMaterial) + 0x50, sizeof(texture));
+    weather_particles::note_material_texture(
+        texture && eng::AurTextureGetName ? eng::AurTextureGetName(texture) : nullptr);
+}
+#endif
 extern "C" void MaterialBindAllStandardTextures_detour(void* material) {
 #ifdef _WIN32
     static unsigned reports = 0;
@@ -1839,6 +1891,7 @@ extern "C" void MaterialBindAllStandardTextures_detour(void* material) {
     // a real trampoline. Never remove/call/reinstall it around every draw.
     if (g_materialBindTrampoline) g_materialBindTrampoline(material);
     drawing_probe_note_world_material(material); // explicit local-test texture5 only
+    weather_particles::note_material_texture(texture0Name);
 #ifdef _WIN32
     if (report) fprintf(stderr, "[oit][win-material] BindAll original returned\n");
 #endif
@@ -2190,9 +2243,17 @@ static bool set_light_view_direct(const Vec3f& eye, const float dir[3]) {
 }
 
 #include "weather_runtime.inc"
+#include "shadow_receiver_tags.inc"
+namespace layer_stack {
+static bool iterator(void*, int, int, const void**, bool first = false);
+static void before_draw();
+static void after_draw();
+}
 #include "shadow_shader_interposition.inc"
+#include "nwn_layer_stack.inc"
 #include "shadow_fullscreen_receiver.inc"
 #include "godrays_runtime.inc"
+#include "weather_particles.inc"
 #include "shadow_overlay_runtime.inc"
 #include "shadow_trace_cascade.inc"
 #include "shadow_local_lights.inc"
@@ -2350,7 +2411,25 @@ bool nwn_shadow_begin_a2c_receiver(unsigned int rawProgram) {
     if (l->dynamicLayers >= 0)
         gl::Uniform1i(l->dynamicLayers,
                       g_cascadeCsmDynamicReceiver ? g_cascadeDynamicLayers : 0);
-    gl::Uniform1f(l->strength, effective_area_sun_strength());
+    // Creature A2C (including rigid/part-based heads) is present in completed
+    // scene depth and receives the fullscreen sun composite with its body.
+    // Multiplying sun visibility here too makes hair/head darker than the
+    // adjoining opaque body under the same building shadow. Keep A2C coverage
+    // and its local-light path; give its directional term one receiver owner.
+    const bool nativeHighlight = current_draw_is_highlighted();
+    const bool creatureComposite = nativeHighlight ||
+        (current_draw_is_creature() && g_receiverDebug != 7);
+    gl::Uniform1f(l->strength, creatureComposite ? 0.0f : effective_area_sun_strength());
+    if (current_draw_is_creature()) {
+        static int reportedCreatureMode = -1;
+        const int mode = creatureComposite ? 1 : 0;
+        if (mode != reportedCreatureMode) {
+            reportedCreatureMode = mode;
+            fprintf(stderr, "[a2c][sun-receiver] creature reception=%s program=%u\n",
+                    creatureComposite ? "fullscreen only" : "inline + fullscreen (debug A/B)",
+                    program);
+        }
+    }
     if (l->bias >= 0)  gl::Uniform1f(l->bias, g_cascadeReceiverBias);
     if (l->blend >= 0) gl::Uniform1f(l->blend, g_cascadeBlendWidth);
     if (l->pcf >= 0)   gl::Uniform1f(l->pcf, g_cascadePcfRadius);
@@ -2424,9 +2503,7 @@ bool nwn_shadow_begin_a2c_receiver(unsigned int rawProgram) {
         localPos[i*4+2] = g_localLightSlotPos[i][2];
         localPos[i*4+3] = 1.0f;
         localRadius[i] = g_localLightSlotRadius[i];
-        localFade[i] = (g_localLightSlotFade[i] > 0.0f &&
-                        g_localLightSlotFade[i] <= 1.0f)
-                     ? g_localLightSlotFade[i] : 1.0f;
+        localFade[i] = local_slot_fade(g_localLightSlotFade[i]);
     }
     if (l->localPos >= 0 && gl::Uniform4fv)
         gl::Uniform4fv(l->localPos, kLocalLightFaces, localPos);
@@ -2437,7 +2514,7 @@ bool nwn_shadow_begin_a2c_receiver(unsigned int rawProgram) {
     if (l->localSlots >= 0)
         gl::Uniform1i(l->localSlots, localReady ? (GLint)g_localLightSlotCount : 0);
     if (l->localStrength >= 0)
-        gl::Uniform1f(l->localStrength, localReady
+        gl::Uniform1f(l->localStrength, localReady && !nativeHighlight
             ? g_localLightStrength * g_engineFadeLevel * g_localDeselectFadeShown : 0.0f);
     if (l->localBias >= 0) gl::Uniform1f(l->localBias, g_localLightBias);
     if (l->localEdgeFade >= 0) gl::Uniform1f(l->localEdgeFade, g_localLightEdgeFade);
@@ -2526,8 +2603,11 @@ static void update_engine_shadow_fade() {
     if (ratio < g_engineFadeLevel) g_engineFadeLevel = ratio;   // monotone
 }
 
+#include "shadow_aabb_guard.inc"
+
 extern "C" void SceneRender_detour(void* self) {
     nwn_drawing_probe_frame();
+    ensure_aabb_debug_capacity();
     ++g_frames;
     // Armed BEFORE the engine renders, because the cascade replay happens
     // inside its Scene::RenderDrawBucket calls -- deciding after the fact
@@ -2758,6 +2838,7 @@ extern "C" void SceneRender_detour(void* self) {
         // to 1-0.65^5 = 0.88 -- and it ran over the Load Game menu, where there
         // is no area at all. Same gate as the receiver and the overlay.
         if (self == g_areaScene) nwn_oit_frame(self);
+        draw_weather_particles(self);
         // The overlay is intentionally later than the receiver so it is never
         // copied into the scene-depth texture or interpreted as a shadow
         // receiver.  It shares the same selected-area/FBO gate.
@@ -2998,12 +3079,15 @@ static void shadowmap_init() {
     }
     if (const char* s = shadow_getenv("NWN_SHADOWMAP_RECEIVER_DEBUG")) {
         int v = atoi(s);
-        if (v >= 0 && v <= 5) g_receiverDebug = v;
+        if (v >= 0 && v <= 8) g_receiverDebug = v;
         else fprintf(stderr,"[shadowmap][static] ignoring NWN_SHADOWMAP_RECEIVER_DEBUG=%s\n", s);
         if (g_receiverDebug)
             fprintf(stderr,"[shadowmap][static] RECEIVER DEBUG %d active: %s\n", g_receiverDebug,
                     g_receiverDebug==1 ? "solid green over all scene pixels (after the background test)"
                   : g_receiverDebug==2 ? "red=sun shade, green=local shade (after the background test)"
+                  : g_receiverDebug==6 ? "raw sun maps: red=world, green=near static, blue=moving"
+                  : g_receiverDebug==7 ? "normal scene with the old duplicate creature A2C sun receiver"
+                  : g_receiverDebug==8 ? "sun receiver tags: green=creature, red=other, blue=unknown"
                                        : "solid magenta BEFORE any sampling/discard (does this pass reach the screen at all?)");
     }
     g_overlayLegacy = shadow_getenv("NWN_SHADOWMAP_OVERLAY_LEGACY") != nullptr;
@@ -3932,6 +4016,25 @@ static void shadowmap_init() {
     }
 #endif
 
+#ifdef _WIN32
+    // Install independently of the preview's saved state so its live toggle
+    // works without restarting. Only a relocatable trampoline is acceptable.
+    if (eng::SharedMaterialBindAllStandardTextures && eng::AurTextureGetName) {
+        g_hookSharedMaterialBindRain = subhook_new(
+            (void*)eng::SharedMaterialBindAllStandardTextures,
+            (void*)SharedMaterialBindRain_detour, SUBHOOK_64BIT_OFFSET);
+        if (g_hookSharedMaterialBindRain && subhook_install(g_hookSharedMaterialBindRain) == 0)
+            g_sharedMaterialBindRainTrampoline = (eng::MaterialBindAllStandardTextures_t)
+                subhook_get_trampoline(g_hookSharedMaterialBindRain);
+        if (!g_sharedMaterialBindRainTrampoline && g_hookSharedMaterialBindRain) {
+            subhook_remove(g_hookSharedMaterialBindRain);
+            subhook_free(g_hookSharedMaterialBindRain);
+            g_hookSharedMaterialBindRain = nullptr;
+        }
+        fprintf(stderr, "[shadowmap][rain-particles] native-rain identity hook %s\n",
+            g_sharedMaterialBindRainTrampoline ? "ready" : "unavailable; native retained");
+    }
+#endif
     if (g_areaShadowFlagsEnabled && eng::AreaUpdateShadowingLights) {
         g_hookAreaShadowFlags = subhook_new((void*)eng::AreaUpdateShadowingLights,
                                             (void*)AreaUpdateShadowingLights_detour,
@@ -3990,7 +4093,12 @@ static void shadowmap_init() {
         eng::DrawBucketGetFirstItem &&
 #endif
         eng::PartGetAurObject && eng::GobGetExternalDataType;
-    if (g_traceEnabled || oitNeedsBucketHook || drawOwnerNeedsBucketHook) {
+    const bool layerStackNeedsBucketHook = eng::DrawBucketGetNextItem && eng::LayerStackPartDraw
+#ifdef _WIN32
+        && eng::DrawBucketGetFirstItem
+#endif
+        ;
+    if (g_traceEnabled || oitNeedsBucketHook || drawOwnerNeedsBucketHook || layerStackNeedsBucketHook) {
         auto install_trace = [](subhook_t& slot, void* target, void* detour,
                                 const char* name) {
             if (!target) {
@@ -4048,7 +4156,16 @@ static void shadowmap_init() {
         // turn on the shadow trace, targets, replay, or shader diagnostics.
         install_trace(g_hookTraceBucket, (void*)eng::SceneRenderDrawBucket,
                       (void*)SceneRenderDrawBucket_trace_detour, "Scene::RenderDrawBucket");
-        if (drawOwnerNeedsBucketHook) {
+        if (layerStackNeedsBucketHook) {
+#ifdef _WIN32
+            if (!layer_stack::install_windows_part_draw())
+                fprintf(stderr, "[shadowmap][layer-stack] Windows Draw slot unavailable; keeping native policy\n");
+#else
+            install_trace(layer_stack::part_draw_hook, (void*)eng::LayerStackPartDraw,
+                          (void*)layer_stack::part_draw_detour, "PartTriMesh::Draw layer stack scope");
+#endif
+        }
+        if (drawOwnerNeedsBucketHook || layerStackNeedsBucketHook) {
 #ifdef _WIN32
             install_trace(g_hookDrawBucketFirst, (void*)eng::DrawBucketGetFirstItem,
                           (void*)DrawBucketGetFirstItem_detour,
@@ -4176,6 +4293,7 @@ static void shadowmap_init() {
         now_seconds() + double(g_localLightDumpAt < 0 ? 0 : g_localLightDumpAt);
     // AFTER the environment, so the panel's saved choices win over the
     // launcher's defaults -- see load_settings().
+    weather_particles::load_environment();
     load_settings();
     fprintf(stderr, "[shadowmap] active. Scene::Render detoured, target %dx%d.\n",
             g_size, g_size);
@@ -4204,6 +4322,7 @@ static void shadowmap_init() {
 
 __attribute__((destructor))
 static void shadowmap_fini() {
+    layer_stack::shutdown();
     // Deliberately not deleting the GL objects: at destructor time the context
     // may already be gone, and a bad GL call on the way out would turn a clean
     // exit into a crash report. The process is ending; the driver reclaims it.
@@ -4249,6 +4368,14 @@ static void shadowmap_fini() {
         g_hookMaterialInit = nullptr;
         g_materialInitTrampoline = nullptr;
     }
+#ifdef _WIN32
+    if (g_hookSharedMaterialBindRain) {
+        subhook_remove(g_hookSharedMaterialBindRain);
+        subhook_free(g_hookSharedMaterialBindRain);
+        g_hookSharedMaterialBindRain = nullptr;
+        g_sharedMaterialBindRainTrampoline = nullptr;
+    }
+#endif
     if (g_hookMaterialBind) {
         subhook_remove(g_hookMaterialBind);
         subhook_free(g_hookMaterialBind);

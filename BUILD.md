@@ -51,6 +51,12 @@ be validated offline. See [TRANSPARENCY_MODES.md](TRANSPARENCY_MODES.md).
 
 ## Installing
 
+The opt-in rain checkpoint and headless GL test are documented in
+[WEATHER_PARTICLES.md](WEATHER_PARTICLES.md). The test needs Mesa/EGL headers;
+tests/Dockerfile.weather supplies an isolated Debian 11 compiler environment.
+Windows preview testing can hide native rain with the saved Hide native rain
+toggle; turning the preview off or losing its prerequisites restores native draws.
+
 **Linux:** put `libnwn_shadowmap_deploy.so` next to `nwmain-linux` and
 `LD_PRELOAD` it, or use `nwn-shadows.sh`.
 

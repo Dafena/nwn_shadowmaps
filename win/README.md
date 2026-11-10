@@ -163,3 +163,12 @@ If the DLL does not load:
 
 For renderer bugs, report the game build, native/Proton mode, GPU/driver,
 MSAA/video settings, log, and the exact artifact path used by the game.
+
+## Continuous-alpha layer module (2026-11-08)
+
+The build includes the explicit priority/core-fade module and its Windows
+first-item and Part draw adapters. It activates only for compatible shaders that
+publish wmStackPriority and wmLayerAlphaPass (legacy wmDiagAlphaPass is supported).
+Keep their MTR/SHD resources with the area. Unknown shaders remain native.
+A build/export check does not establish native Windows acceptance. Proton and
+native Windows results are tracked separately in docs/RELEASE_AUDIT.md.

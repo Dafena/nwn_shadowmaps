@@ -181,6 +181,46 @@ static unsigned g_localLightCaptureFrame = 0;
 static unsigned g_localLightCaptureDraws = 0;
 
 
+static void update_local_join_fades(const EngineShadowLightEntry* cand, unsigned candCount,
+                                unsigned slotBudget, double now) {
+    const double dt = (g_localJoinLast > 0.0) ? (now - g_localJoinLast) : 0.0;
+    g_localJoinLast = now;
+    const float step = (dt > 0.0) ? (float)(dt / kLocalRetireFadeSeconds) : 0.0f;
+
+    for (auto& j : g_localJoin) j.live = false;
+
+    // Consume NWN's authoritative shadow-light order.
+    unsigned live = 0;
+    for (unsigned i = 0; i < candCount && live < (unsigned)slotBudget; ++i) {
+        const EngineShadowLightEntry& e = cand[i];
+        if (e.info.radius <= 0.0f) continue;
+        LocalJoinFade* slot = nullptr;
+        bool joined = false;
+        for (auto& j : g_localJoin)
+            if (j.key == e.key) { slot = &j; break; }
+        if (!slot)
+            for (auto& j : g_localJoin)
+                if (!j.key) { slot = &j; slot->key = e.key; slot->level = 0.0f; joined = true; break; }
+        if (!slot) continue;                 // table full; skip rather than evict
+        slot->live = true;
+        slot->pos[0] = e.info.pos.x;
+        slot->pos[1] = e.info.pos.y;
+        slot->pos[2] = e.info.pos.z;
+        slot->radius = e.info.radius;
+        slot->engineFade = e.info.fade;
+        if (!joined) slot->level = std::min(1.0f, slot->level + step);
+        ++live;
+    }
+
+    // 2. Anything NWN dropped, still fading. Same slot machinery.
+    for (auto& j : g_localJoin) {
+        if (!j.key || j.live) continue;
+        j.level -= step;
+        if (j.level <= 0.0f) { j = LocalJoinFade{}; continue; }
+    }
+
+}
+
 static void capture_local_light_shadow(void* scene) {
     // Do NOT gate on g_usable here. That flag belongs to the legacy
     // single-map target created by create_target(), which is only ever called
@@ -273,7 +313,8 @@ static void capture_local_light_shadow(void* scene) {
     // The engine priority list is the only source-selection authority, for
     // every tier. The SetLightGL census is retained for the non-shadow sun-lift
     // term only.
-    if (!g_haveEngineShadowLight || g_engineShadowLightCount == 0) return;
+    // Empty authoritative lists still retire and recapture existing slots.
+    // Otherwise the freshness fallback fades a frozen silhouette.
     // ONLY during a live area render. The gate this replaced
     // (g_localLightSelectedFrame != g_traceAreaFrame) was keyed to the dead
     // GetShadowLights path, but it was also the only thing keeping the capture
@@ -419,10 +460,8 @@ static void capture_local_light_shadow(void* scene) {
     // restart. Whatever fixes it has to respect that the engine's list is the
     // live truth -- including when it changes because the player walked
     // through a door.
-    if (candCount == 0) return;
-
-    g_localLightSelected = (void*)cand[0].key;
-    g_localLightSelectedInfo = cand[0].info;
+    g_localLightSelected = candCount ? (void*)cand[0].key : nullptr;
+    if (candCount) g_localLightSelectedInfo = cand[0].info;
     const PartLightInfo& info = g_localLightSelectedInfo;
     // AIM DOWN, not at the camera. The first version pointed the cone from the
     // light at the frozen camera eye, reasoning that this guarantees overlap
@@ -498,42 +537,7 @@ static void capture_local_light_shadow(void* scene) {
         // filled and published in band, so there is no gap to survive.
         //
         // Cost is one extra capture for at most the fade duration.
-        const double now = now_seconds();
-        const double dt = (g_localJoinLast > 0.0) ? (now - g_localJoinLast) : 0.0;
-        g_localJoinLast = now;
-        const float step = (dt > 0.0) ? (float)(dt / kLocalRetireFadeSeconds) : 0.0f;
-
-        for (auto& j : g_localJoin) j.live = false;
-
-        // 1. Everything this tier currently selects, in its own order (NWN's
-        //    priority for Legacy/High, camera distance for Emitter).
-        unsigned live = 0;
-        for (unsigned i = 0; i < candCount && live < (unsigned)slotBudget; ++i) {
-            const EngineShadowLightEntry& e = cand[i];
-            if (e.info.radius <= 0.0f) continue;
-            LocalJoinFade* slot = nullptr;
-            for (auto& j : g_localJoin)
-                if (j.key == e.key) { slot = &j; break; }
-            if (!slot)
-                for (auto& j : g_localJoin)
-                    if (!j.key) { slot = &j; slot->key = e.key; slot->level = 0.0f; break; }
-            if (!slot) continue;                 // table full; skip rather than evict
-            slot->live = true;
-            slot->pos[0] = e.info.pos.x;
-            slot->pos[1] = e.info.pos.y;
-            slot->pos[2] = e.info.pos.z;
-            slot->radius = e.info.radius;
-            slot->engineFade = e.info.fade;
-            slot->level = std::min(1.0f, slot->level + step);
-            ++live;
-        }
-
-        // 2. Anything NWN dropped, still fading. Same slot machinery.
-        for (auto& j : g_localJoin) {
-            if (!j.key || j.live) continue;
-            j.level -= step;
-            if (j.level <= 0.0f) { j = LocalJoinFade{}; continue; }
-        }
+        update_local_join_fades(cand, candCount, (unsigned)slotBudget, now_seconds());
 
         // 3. Publish live first (NWN's order is authoritative), then fading.
         //

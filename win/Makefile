@@ -56,7 +56,7 @@ nwn_win_proxy.o: nwn_win_proxy.cpp
 # dependencies too. Without them a Linux-side change compiles into the .so and
 # silently does NOT reach the DLL -- the exact trap that left version.dll a day
 # stale before.
-INC_MODULES = $(wildcard $(ROOT)/shadow_*.inc) $(ROOT)/weather_runtime.inc $(ROOT)/godrays_runtime.inc
+INC_MODULES = $(wildcard $(ROOT)/shadow_*.inc) $(ROOT)/weather_runtime.inc $(ROOT)/weather_particles.inc $(ROOT)/godrays_runtime.inc $(ROOT)/nwn_layer_stack.inc $(ROOT)/nwn_layer_stack_plan.h
 
 nwn_shadowmap.o: $(ROOT)/nwn_shadowmap.cpp $(ROOT)/drawing_probe.h $(ROOT)/drawing_input_journal.h $(ROOT)/drawing_preview.h $(ROOT)/drawing_texture_upload.h $(ROOT)/drawing_canvas_quad.h $(ROOT)/drawing_world_canvas.h $(ROOT)/nwn_platform.h $(ROOT)/nwn_hooks_core.h \
                  $(ROOT)/shadow_config.h $(ROOT)/shadow_math.h $(INC_MODULES) nwn_win_symbols.h

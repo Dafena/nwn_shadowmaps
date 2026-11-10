@@ -1887,6 +1887,7 @@ static bool production_material_routing_only() {
            !g_foliageA2c && !g_foliageVisible;
 }
 
+
 void census_observe_draw() {
     // Every duplicate is consumed immediately after its native draw. Clear the
     // one-shot flags first so an early return can never replay stale geometry.
@@ -2395,7 +2396,11 @@ void census_observe_draw() {
                 g.DepthFunc(GL_LESS);
                 g.ColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
                 g.Disable(GL_BLEND);
-                g.Disable(GL_CULL_FACE);
+                // Keep NWN's per-material culling decision. Some alpha meshes
+                // contain explicit backface geometry and arrive with culling
+                // enabled; forcing them two-sided makes the coincident faces
+                // fight once A2C enables depth writes. Authored two-sided
+                // materials already arrive with culling disabled.
                 g.Enable(GL_SAMPLE_ALPHA_TO_COVERAGE);
                 g_originalDepthOverride = true;
             }
@@ -2676,6 +2681,8 @@ bool private_foliage_replay(void* scene, const SavedState& st) {
 }
 
 }   // anonymous namespace
+
+
 
 // ---------------------------------------------------------------------------
 //  Entry points (declared in nwn_hooks_core.h)
