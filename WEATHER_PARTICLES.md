@@ -13,6 +13,11 @@ retains engine weather authority, native lightning, snow and unrelated VFX.
 - Bounded height-field sweeps against the existing completed static precipitation
   map, then impact splashes at that collision point. Separate non-comparison
   samplers read height without changing the map's shadow comparison parameters.
+- Each impact is a droplet-impact sequence rather than a single puff (2026-11-10,
+  runtime verification pending): a surface-aligned contact flash and expanding
+  ring, plus an upright crown sheet, rebound jet and five ballistic secondary
+  droplets. Both quads are animated per fragment from the same simulated hit.
+  This adds one more vertex pass over the drop grid while splashes are enabled.
 - Sloped-surface splash orientation, discontinuity rejection, and no impacts
   over empty depth. Highest exposed static surfaces receive impacts, rather
   than the floor under a roof.

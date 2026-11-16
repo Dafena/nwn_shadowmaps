@@ -994,11 +994,12 @@ static double now_seconds();
 // Composite-only policy fade.  It never invalidates or blends depth maps, so
 // sunset/sunrise can be pleasant without reviving dynamic-area-light rebuilds.
 static float    g_areaShadowFadeSeconds   = 0.75f;
-// The godrays prototype stays compiled for shader/build coverage, but is
-// deliberately unavailable until its dedicated work resumes. This single
-// gate is checked by the renderer and the panel; settings and environment
-// parsing are also kept behind it so stale configuration cannot revive it.
-static constexpr bool kGodraysFeatureAvailable = false;
+// Volumetric fog / sun shafts. The feature is AVAILABLE but opt-in: it stays
+// off until the panel checkbox or NWN_SHADOWMAP_GODRAYS=1 enables it. This
+// single gate is still checked by the renderer, the panel, the settings table
+// and environment parsing, so setting it to false parks the whole feature
+// again in one place.
+static constexpr bool kGodraysFeatureAvailable = true;
 // Private precipitation preview; optional exact-resource native-rain hiding.
 static bool     g_shaderRainEnabled = false;
 static bool     g_shaderRainHideNative = false;
@@ -1012,13 +1013,34 @@ static float    g_shaderRainWindX = 0.0f;
 static float    g_shaderRainWindY = 0.0f;
 static float    g_shaderRainSplashes = 1.0f;
 static bool     g_godraysEnabled           = false;
-static float    g_godraysStrength          = 0.55f;
-static int      g_godraysSamples           = 24;
+static float    g_godraysStrength          = 1.5f;    // sun in-scattering
+static int      g_godraysSamples           = 32;
 static int      g_godraysResolution        = 0;
-static float    g_atmosphereDensity        = 0.32f;
+static float    g_atmosphereDensity        = 0.32f;   // 0..1 -> 0..0.04 / m
+static float    g_godraysAnisotropy        = 0.60f;   // Henyey-Greenstein g
+static float    g_godraysHeightFalloff     = 0.06f;   // 1/m above the base
+static float    g_godraysHeightBase        = 0.0f;    // world Z of full density
+static float    g_godraysAmbient           = 0.60f;   // fog-colour in-scatter
+static float    g_godraysLampGlow          = 1.0f;    // local-light in-scatter
+static int      g_godraysLampsDrawn        = 0;       // panel readout only
 // Development-only output ladder. Zero is the normal effect; non-zero modes
 // make an otherwise invisible early return or wrong sun vector diagnosable.
 static int      g_godraysDebug             = 0;
+// Panel status for the volumetric pass ("off", "drawing ...", or the reason
+// it is not drawing). Always a string literal.
+static const char* g_godraysStatus         = "off";
+// Heat haze (shadow_heat_haze.inc). Off unless the player or an area script
+// turns it on.
+static bool     g_heatEnabled              = false;
+static float    g_heatStrength             = 1.0f;    // ~4 px at 1080p
+static float    g_heatScale                = 1.0f;    // noise cell size
+static float    g_heatSpeed                = 1.0f;
+static float    g_heatStart                = 8.0f;    // metres before haze builds
+static float    g_heatBase                 = 0.0f;    // world Z of hottest air
+static float    g_heatFalloff              = 0.15f;   // 1/m above the base
+static float    g_heatFire                 = 1.0f;    // shimmer above warm lights
+static const char* g_heatStatus            = "off";
+static int      g_heatFiresDrawn           = 0;
 static float    g_areaShadowFadeFrom      = 1.0f;
 static float    g_areaShadowFadeTo        = 1.0f;
 static double   g_areaShadowFadeStart     = 0.0;
@@ -1525,6 +1547,7 @@ static bool resolve_symbols() {
 #endif
 
 #include "shadow_targets.inc"
+#include "shadow_script_env.inc"
 #include "shadow_drawing_probe.inc"
 #include "shadow_diagnostics_settings.inc"
 static void restore_engine_program(GLuint program);
@@ -2253,6 +2276,7 @@ static void after_draw();
 #include "nwn_layer_stack.inc"
 #include "shadow_fullscreen_receiver.inc"
 #include "godrays_runtime.inc"
+#include "shadow_heat_haze.inc"
 #include "weather_particles.inc"
 #include "shadow_overlay_runtime.inc"
 #include "shadow_trace_cascade.inc"
@@ -2704,6 +2728,8 @@ extern "C" void SceneRender_detour(void* self) {
         draw_static_receiver(self);
         if constexpr (kGodraysFeatureAvailable)
             draw_godrays(self);
+        // After the fog, so the fog shimmers with the scene behind it.
+        draw_heat_haze(self);
         // glFinish so the number is the GPU's cost, not just submission time --
         // otherwise a fill-rate bound pass measures as ~0 ms and misleads.
         if ((g_receiverDebug || reportFrame) && gl::Finish) gl::Finish();
@@ -3283,8 +3309,33 @@ static void shadowmap_init() {
             g_godraysEnabled = (atoi(s) != 0);
         if (const char* s = shadow_getenv("NWN_SHADOWMAP_GODRAYS_STRENGTH")) {
             const float v = strtof(s, nullptr);
-            if (std::isfinite(v) && v >= 0.0f && v <= 2.0f) g_godraysStrength = v;
-            else fprintf(stderr, "[shadowmap][godrays] ignoring NWN_SHADOWMAP_GODRAYS_STRENGTH=%s (expected 0..2)\n", s);
+            if (std::isfinite(v) && v >= 0.0f && v <= 4.0f) g_godraysStrength = v;
+            else fprintf(stderr, "[shadowmap][godrays] ignoring NWN_SHADOWMAP_GODRAYS_STRENGTH=%s (expected 0..4)\n", s);
+        }
+        if (const char* s = shadow_getenv("NWN_SHADOWMAP_GODRAYS_ANISOTROPY")) {
+            const float v = strtof(s, nullptr);
+            if (std::isfinite(v) && v >= 0.0f && v <= 0.9f) g_godraysAnisotropy = v;
+            else fprintf(stderr, "[shadowmap][godrays] ignoring NWN_SHADOWMAP_GODRAYS_ANISOTROPY=%s (expected 0..0.9)\n", s);
+        }
+        if (const char* s = shadow_getenv("NWN_SHADOWMAP_FOG_HEIGHT_FALLOFF")) {
+            const float v = strtof(s, nullptr);
+            if (std::isfinite(v) && v >= 0.0f && v <= 0.5f) g_godraysHeightFalloff = v;
+            else fprintf(stderr, "[shadowmap][godrays] ignoring NWN_SHADOWMAP_FOG_HEIGHT_FALLOFF=%s (expected 0..0.5 per metre)\n", s);
+        }
+        if (const char* s = shadow_getenv("NWN_SHADOWMAP_FOG_HEIGHT_BASE")) {
+            const float v = strtof(s, nullptr);
+            if (std::isfinite(v) && v >= -50.0f && v <= 100.0f) g_godraysHeightBase = v;
+            else fprintf(stderr, "[shadowmap][godrays] ignoring NWN_SHADOWMAP_FOG_HEIGHT_BASE=%s (expected -50..100 world Z)\n", s);
+        }
+        if (const char* s = shadow_getenv("NWN_SHADOWMAP_FOG_LAMP_GLOW")) {
+            const float v = strtof(s, nullptr);
+            if (std::isfinite(v) && v >= 0.0f && v <= 3.0f) g_godraysLampGlow = v;
+            else fprintf(stderr, "[shadowmap][godrays] ignoring NWN_SHADOWMAP_FOG_LAMP_GLOW=%s (expected 0..3)\n", s);
+        }
+        if (const char* s = shadow_getenv("NWN_SHADOWMAP_FOG_AMBIENT")) {
+            const float v = strtof(s, nullptr);
+            if (std::isfinite(v) && v >= 0.0f && v <= 1.5f) g_godraysAmbient = v;
+            else fprintf(stderr, "[shadowmap][godrays] ignoring NWN_SHADOWMAP_FOG_AMBIENT=%s (expected 0..1.5)\n", s);
         }
         if (const char* s = shadow_getenv("NWN_SHADOWMAP_GODRAYS_SAMPLES")) {
             const int v = atoi(s);
@@ -3310,6 +3361,25 @@ static void shadowmap_init() {
             if (v >= 0 && v <= 4) g_godraysDebug = v;
             else fprintf(stderr, "[shadowmap][godrays] ignoring NWN_SHADOWMAP_GODRAYS_DEBUG=%s (expected 0..4)\n", s);
         }
+    }
+    if (const char* s = shadow_getenv("NWN_SHADOWMAP_HEAT"))
+        g_heatEnabled = (atoi(s) != 0);
+    {
+        auto heatEnv = [](const char* key, float& out, float lo, float hi) {
+            if (const char* s = shadow_getenv(key)) {
+                const float v = strtof(s, nullptr);
+                if (std::isfinite(v) && v >= lo && v <= hi) out = v;
+                else fprintf(stderr, "[shadowmap][heat] ignoring %s=%s (expected %g..%g)\n",
+                             key, s, lo, hi);
+            }
+        };
+        heatEnv("NWN_SHADOWMAP_HEAT_STRENGTH", g_heatStrength, 0.0f, 2.0f);
+        heatEnv("NWN_SHADOWMAP_HEAT_SCALE",    g_heatScale,    0.25f, 4.0f);
+        heatEnv("NWN_SHADOWMAP_HEAT_SPEED",    g_heatSpeed,    0.0f, 3.0f);
+        heatEnv("NWN_SHADOWMAP_HEAT_START",    g_heatStart,    0.0f, 100.0f);
+        heatEnv("NWN_SHADOWMAP_HEAT_BASE",     g_heatBase,   -50.0f, 100.0f);
+        heatEnv("NWN_SHADOWMAP_HEAT_FALLOFF",  g_heatFalloff,  0.0f, 1.0f);
+        heatEnv("NWN_SHADOWMAP_HEAT_FIRE",     g_heatFire,     0.0f, 2.0f);
     }
     if (const char* s = shadow_getenv("NWN_SHADOWMAP_CSM_STRENGTH")) {
         const float v = strtof(s, nullptr);

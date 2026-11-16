@@ -8,6 +8,7 @@
 
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
 #include <cstdint>
 #include <ctime>
 #include "nwn_platform.h"
@@ -203,6 +204,9 @@ void nwn_overlay_render(int viewportW, int viewportH, const NwnOverlayState& st)
 
 #endif   // !NWN_SHIP -- Sun shadows
         if (st.shaderRain && ImGui::CollapsingHeader("Shader rain (preview)")) {
+            if (st.scriptOverrides && std::strcmp(st.scriptOverrides, "none") != 0)
+                ImGui::TextWrapped("Area script overrides (win over the controls below): %s",
+                                   st.scriptOverrides);
             ImGui::Checkbox("Private rain and splashes", st.shaderRain);
             if (st.shaderRainHideNative) ImGui::Checkbox("Hide native rain (preview only)", st.shaderRainHideNative);
             ImGui::TextWrapped("Only native rain is hidden when the private pass is ready. Lightning and snow remain native.");
@@ -221,11 +225,38 @@ void nwn_overlay_render(int viewportW, int viewportH, const NwnOverlayState& st)
             if (st.shaderRainWindY) ImGui::SliderFloat("Wind Y (manual)", st.shaderRainWindY, -8.0f, 8.0f, "%.1f m/s");
             if (st.shaderRainSplashes) ImGui::SliderFloat("Splash strength", st.shaderRainSplashes, 0.0f, 2.0f);
         }
+        if (st.heatEnabled && ImGui::CollapsingHeader("Heat haze")) {
+            if (st.scriptOverrides && std::strcmp(st.scriptOverrides, "none") != 0)
+                ImGui::TextWrapped("Area script overrides (win over the controls below): %s",
+                                   st.scriptOverrides);
+            ImGui::Checkbox("Heat shimmer", st.heatEnabled);
+            ImGui::Text("Pass: %s", st.heatStatus ? st.heatStatus : "off");
+            if (st.heatStrength) ImGui::SliderFloat("Shimmer strength", st.heatStrength, 0.0f, 2.0f, "%.2f");
+            if (st.heatScale) ImGui::SliderFloat("Shimmer size", st.heatScale, 0.25f, 4.0f, "%.2f");
+            if (st.heatSpeed) ImGui::SliderFloat("Shimmer speed", st.heatSpeed, 0.0f, 3.0f, "%.2f");
+            if (st.heatStart) ImGui::SliderFloat("Start distance", st.heatStart, 0.0f, 100.0f, "%.1f m");
+            if (st.heatBase) ImGui::SliderFloat("Hot air base height", st.heatBase, -50.0f, 100.0f, "%.1f m");
+            if (st.heatFalloff) ImGui::SliderFloat("Hot air falloff", st.heatFalloff, 0.0f, 1.0f, "%.3f /m");
+            if (st.heatFire) {
+                ImGui::SliderFloat("Fire shimmer", st.heatFire, 0.0f, 2.0f, "%.2f");
+                ImGui::Text("Fires shimmering: %d", st.heatFires);
+            }
+            help("Bends the view through hot air. Distant views over hot ground waver "
+                 "beyond Start distance, most strongly below Hot air base height "
+                 "(Hot air falloff 0 = at every height). Fire shimmer adds a column "
+                 "of rising haze above the nearest eight warm-coloured lights "
+                 "(torches, lava, braziers). Needs sun shadows on for scene depth. "
+                 "Area scripts can switch it on for volcanoes and deserts.");
+        }
         if (st.godraysAvailable && ImGui::CollapsingHeader("Volumetric fog")) {
+            if (st.scriptOverrides && std::strcmp(st.scriptOverrides, "none") != 0)
+                ImGui::TextWrapped("Area script overrides (win over the controls below): %s",
+                                   st.scriptOverrides);
             if (st.godraysEnabled) {
                 bool enabled = *st.godraysEnabled;
                 if (ImGui::Checkbox("Fog lighting and sun shafts", &enabled))
                     *st.godraysEnabled = enabled;
+                ImGui::Text("Pass: %s", st.godraysStatus ? st.godraysStatus : "off");
             }
             if (st.godraysResolution) {
                 const char* resolutions[] = {
@@ -239,10 +270,26 @@ void nwn_overlay_render(int viewportW, int viewportH, const NwnOverlayState& st)
                     *st.godraysResolution = resolution;
             }
             if (st.godraysStrength)
-                ImGui::SliderFloat("Sun scattering", st.godraysStrength, 0.0f, 2.0f, "%.2f");
+                ImGui::SliderFloat("Sun shaft intensity", st.godraysStrength, 0.0f, 4.0f, "%.2f");
+            if (st.godraysAnisotropy)
+                ImGui::SliderFloat("Scattering anisotropy", st.godraysAnisotropy,
+                                   0.0f, 0.9f, "%.2f");
             if (st.atmosphereDensity)
                 ImGui::SliderFloat("Atmospheric density", st.atmosphereDensity,
                                    0.0f, 1.0f, "%.2f");
+            if (st.godraysAmbient)
+                ImGui::SliderFloat("Fog brightness", st.godraysAmbient,
+                                   0.0f, 1.5f, "%.2f");
+            if (st.godraysLampGlow) {
+                ImGui::SliderFloat("Lamp glow", st.godraysLampGlow, 0.0f, 3.0f, "%.2f");
+                ImGui::Text("Lamps lighting the fog: %d", st.godraysLamps);
+            }
+            if (st.godraysHeightFalloff)
+                ImGui::SliderFloat("Height falloff", st.godraysHeightFalloff,
+                                   0.0f, 0.5f, "%.3f /m");
+            if (st.godraysHeightBase)
+                ImGui::SliderFloat("Fog base height", st.godraysHeightBase,
+                                   -50.0f, 100.0f, "%.1f m");
             if (st.godraysSamples)
                 ImGui::SliderInt("Volume samples", st.godraysSamples, 8, 64);
             if (st.fogFromEngine)
@@ -266,13 +313,19 @@ void nwn_overlay_render(int viewportW, int viewportH, const NwnOverlayState& st)
                     *st.godraysDebug = debug;
             }
 #endif
-            help("Adds a shadowed atmospheric medium in every area and combines it with "
-                 "NWN's authored fog when present. Atmospheric density controls shafts "
-                 "near the camera even when an area's fog starts far away. "
-                 "Quarter is fastest; Half and Full reduce visible stepping "
-                 "but increase fill-rate and filtering cost substantially. "
-                 "They use the completed scene-depth mask, so visible foliage and geometry block them. "
-                 "More samples make smoother shafts but cost more GPU time.");
+            help("Adds a shadowed height fog in every area and lights NWN's authored fog "
+                 "with the sun or moon when an area has one. Sun shaft intensity scales "
+                 "the light scattered toward the camera; Scattering anisotropy "
+                 "concentrates it around the sun (0 = even in all directions). "
+                 "Lamp glow lights the fog around the nearest eight torches and lamps; "
+                 "it needs some fog density to show and is not blocked by walls in the air. "
+                 "Atmospheric density thickens the fog and dims distant geometry; Fog "
+                 "brightness sets how much of the area's fog colour the fog itself "
+                 "shows. Height falloff thins the fog above the base height (0 = no "
+                 "height dependence). Quarter is fastest; Half and Full sharpen shaft "
+                 "edges at a substantial fill-rate cost. Visible foliage and geometry "
+                 "block the shafts. More samples resolve thinner shafts but cost more "
+                 "GPU time.");
         }
 #if !NWN_SHIP
         if (ImGui::CollapsingHeader("Local light")) {

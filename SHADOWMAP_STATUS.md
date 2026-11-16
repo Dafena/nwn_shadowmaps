@@ -150,7 +150,7 @@ controls include:
 | --- | --- |
 | Sun | strength, bias, cascade overlap, PCF, composite |
 | Area | day/night fade |
-| Godrays | parked and not exposed; source retained for compile coverage only |
+| Volumetric fog | opt-in enable, resolution, sun shaft intensity, scattering anisotropy, atmospheric density, fog brightness, height falloff, fog base height, samples (runtime verification pending) |
 | Local light | enable, strength, falloff, cone angle, lamp lift, edge fade, slope bias, normal bias, minimum separation, map size |
 | Performance | cascade count, local-shadow update (25 ms / 16 ms / every frame), moving/static caster policy, world-map size/extent, receiver and capture A/B controls |
 | Diagnostics | receiver debug modes, frame-cost and target status |

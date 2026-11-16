@@ -32,10 +32,19 @@ As of 2026-09-03:
   Local-light shadows remain independent of the area's sun/moon policy.
 - The Dear ImGui settings panel is live. Development builds expose diagnostics;
   shipping builds keep only user-facing controls.
-- The volumetric fog/godrays prototype is parked. Its source remains compiled
-  for build and shader coverage, but a hard feature gate disables rendering,
-  the panel does not expose it, and saved settings or environment variables
-  cannot enable it.
+- Volumetric fog and sun shafts are available but opt-in (off by default;
+  enable "Fog lighting and sun shafts" in the panel or set
+  `NWN_SHADOWMAP_GODRAYS=1`). The pass ray-marches a height fog plus the
+  area's authored fog against the directional cascade maps. It builds and its
+  shaders compile offline, but the 2026-11-10 rewrite has NOT yet been
+  verified in a running client. See `godrays_runtime.inc`.
+- Heat haze (opt-in, `shadow_heat_haze.inc`) bends the view through hot air:
+  distant views over hot ground and the air above warm lights (torches, lava)
+  shimmer. Runtime verification pending.
+- Area scripts can override the look of rain, fog and heat haze per player via
+  the NWNX per-player custom token 910010 (`shadow_script_env.inc`; message
+  format documented there, parser test in `tests/script_env_test.cpp`). Quality
+  settings stay the player's. `NWN_SHADOWMAP_SCRIPT_CONTROL=0` disables it.
 - Linux and Windows automatically observe NWN clear/rain/snow area weather
   through one shared weather-effects renderer. Rain applies gradual wetness,
   compact fog-aware reflective/refractive puddles, and normal-based impacts.
@@ -118,7 +127,7 @@ ABI:
 | `weather_runtime.inc` | Shared rain/snow rendering, platform weather authority, precipitation occlusion, and snow trails |
 | `shadow_shader_interposition.inc` | Shader interception and draw wrappers |
 | `shadow_fullscreen_receiver.inc` | Receiver shader construction and scene copies |
-| `godrays_runtime.inc` | Parked shadow-aware volumetric fog prototype (compile coverage only) |
+| `godrays_runtime.inc` | Opt-in shadow-aware volumetric fog and sun shafts (runtime verification pending) |
 | `shadow_overlay_runtime.inc` | Overlay runtime, input, and frame ordering |
 | `shadow_diagnostics_settings.inc` | Diagnostics and persisted settings |
 | `shadow_trace_cascade.inc` | Scene tracing, cascade setup, and hooks |
@@ -160,8 +169,8 @@ Run these from the repository directory:
 ```
 
 `run-dev.sh` enables the diagnostics-heavy development capture and delegates
-game-directory discovery to `run-shadowmap-trace.sh`. Godrays remain parked and
-off in this path. Set
+game-directory discovery to `run-shadowmap-trace.sh`. Volumetric fog stays
+off in this path unless `NWN_SHADOWMAP_GODRAYS=1` is set. Set
 `NWN_SHADOWMAP_GAME_DIR` when the game is not found by the launcher. Diagnostic
 logs and PGM output go to the repository by default; override the locations
 with `NWN_SHADOWMAP_LOG` and `NWN_SHADOWMAP_OUT_DIR`.

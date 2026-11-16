@@ -70,8 +70,8 @@ WINEDLLOVERRIDES=version=n,b
 ```
 
 The DLL carries shipping defaults, so no batch launcher is required. Environment
-variables still override active settings. Parked prototypes are exceptions:
-the godrays variables are deliberately ignored.
+variables still override active settings, including the opt-in volumetric
+fog (`NWN_SHADOWMAP_GODRAYS=1` and its tuning variables).
 
 Strict material routing is one of those Windows shipping defaults. Materials
 declaring `parameter int NWN_ALPHA_MODE 2` use A2C whenever the live framebuffer
@@ -93,9 +93,9 @@ build; their compiled defaults define shipping behaviour.
 
 ## Known Windows-specific status
 
-- Volumetric fog/godrays are parked behind the same hard feature gate as
-  Linux. The render call is compiled out, the panel is hidden, and old saved
-  values or environment variables cannot reactivate the prototype.
+- Volumetric fog/sun shafts share the Linux implementation and are opt-in
+  (off by default) from the "Volumetric fog" panel section. The 2026-11-10
+  rewrite builds for Windows but has not been verified in a native client.
 - Private client `StartWeather`/`StopWeather` calls and the active client-area
   lookup are resolved from the v89.8193.37-17 network decoder. At scene start,
   the injector reads the loaded client area's stored weather so a weather

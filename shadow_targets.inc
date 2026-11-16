@@ -39,6 +39,11 @@ static GLuint g_gpuMirrorFbo = 0;
 // receiver.  This is intentionally separate from the light depth target.
 static GLuint g_sceneDepthTex = 0;
 static int    g_sceneDepthW = 0, g_sceneDepthH = 0;
+// Frame serial of the last successful COMPLETE scene-depth copy. Later passes
+// that want to test against the copy (the private rain) must check this
+// first: the texture persists across frames in which the receiver was
+// disabled or blocked, and a stale copy would occlude against an old camera.
+static unsigned g_sceneDepthSerial = ~0u;
 // Depth immediately before the dynamic-character bucket. The two-stage local
 // receiver compares this with completed depth so its second pass touches only
 // pixels introduced by characters, leaving the ground contact pass undoubled.

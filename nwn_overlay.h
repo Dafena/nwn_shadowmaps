@@ -31,6 +31,19 @@ struct NwnOverlayState {
     float* shaderRainSplashes = nullptr;
     const char* shaderRainStatus = "off";
     bool   godraysAvailable = false;
+    const char* godraysStatus = "off";
+    // Area script overrides (shadow_script_env.inc), "none" when there are none.
+    const char* scriptOverrides = "none";
+    bool*  heatEnabled = nullptr;
+    float* heatStrength = nullptr;
+    float* heatScale = nullptr;
+    float* heatSpeed = nullptr;
+    float* heatStart = nullptr;
+    float* heatBase = nullptr;
+    float* heatFalloff = nullptr;
+    float* heatFire = nullptr;
+    const char* heatStatus = "off";
+    int    heatFires = 0;
     float* csmStrength   = nullptr;
     float* csmBias       = nullptr;
     float* csmBlend      = nullptr;
@@ -41,6 +54,12 @@ struct NwnOverlayState {
     int*   godraysSamples  = nullptr;
     int*   godraysResolution = nullptr;
     float* atmosphereDensity = nullptr;
+    float* godraysAnisotropy = nullptr;
+    float* godraysHeightFalloff = nullptr;
+    float* godraysHeightBase = nullptr;
+    float* godraysAmbient = nullptr;
+    float* godraysLampGlow = nullptr;
+    int    godraysLamps = 0;
     int*   godraysDebug    = nullptr;
     bool*  csmComposite  = nullptr;
     bool*  localEnabled  = nullptr;

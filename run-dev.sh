@@ -91,7 +91,7 @@ TRACE_EVENTS="${NWN_SHADOWMAP_TRACE_EVENTS:-4096}"
 
 echo "[run-dev] cascades=$CASCADES (+$DYN_CASCADES moving)  cascade=${CASCADE_SIZE}^2" \
      " world=$STATIC_WORLD:${WORLD_SIZE}^2/${WORLD_EXTENT}u  alpha=$STATIC_ALPHA_RECEIVER" \
-     " local-lights=$LOCAL_RECEIVER@${LOCAL_SIZE}^2  godrays=parked/off diagnostics=ALL"
+     " local-lights=$LOCAL_RECEIVER@${LOCAL_SIZE}^2  godrays=opt-in diagnostics=ALL"
 
 exec env NWN_SHADOWMAP_CASCADE_MATH=1 \
     NWN_SHADOWMAP_LIGHT_VECTOR_TRACE=1 \

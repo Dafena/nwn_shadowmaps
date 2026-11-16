@@ -70,6 +70,7 @@ $(DEPLOY_DIR)/nwn_shadowmap.o: nwn_shadowmap.cpp shadow_drawing_probe.inc drawin
 	shadow_gl_api.inc shadow_engine_bindings.inc nwn_layer_stack.inc nwn_layer_stack_plan.h weather_runtime.inc weather_particles.inc \
 	shadow_targets.inc shadow_diagnostics_settings.inc shadow_replay.inc shadow_receiver_tags.inc \
 	shadow_shader_interposition.inc shadow_fullscreen_receiver.inc godrays_runtime.inc \
+	shadow_script_env.inc shadow_heat_haze.inc \
 	shadow_overlay_runtime.inc shadow_trace_cascade.inc shadow_aabb_guard.inc shadow_local_lights.inc \
 	nwn_overlay.h nwn_hooks_core.h nwn_platform.h shadow_config.h shadow_math.h \
 	| $(DEPLOY_DIR)
@@ -108,6 +109,7 @@ nwn_shadowmap.o: nwn_shadowmap.cpp shadow_drawing_probe.inc drawing_probe.h draw
 	shadow_gl_api.inc shadow_engine_bindings.inc nwn_layer_stack.inc nwn_layer_stack_plan.h weather_runtime.inc weather_particles.inc \
 	shadow_targets.inc shadow_diagnostics_settings.inc shadow_replay.inc shadow_receiver_tags.inc \
 	shadow_shader_interposition.inc shadow_fullscreen_receiver.inc godrays_runtime.inc \
+	shadow_script_env.inc shadow_heat_haze.inc \
 	shadow_overlay_runtime.inc shadow_trace_cascade.inc shadow_aabb_guard.inc shadow_local_lights.inc \
 	nwn_overlay.h nwn_hooks_core.h nwn_platform.h shadow_config.h shadow_math.h
 	$(CXX) $(CXXFLAGS) -c $< -o $@

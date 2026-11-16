@@ -1,12 +1,25 @@
 // ---------------------------------------------------------------------------
-// Selectable quarter-, half-, or full-resolution volumetric sun shafts.
+// Selectable quarter-, half-, or full-resolution volumetric fog and sun shafts.
 //
 // Each pixel reconstructs its world-space camera ray from the completed scene
-// depth, marches that ray through the directional cascade volume, and gathers
-// only samples visible to the sun.  The cascade maps already contain opaque,
-// dynamic, and alpha-tested casters, so foliage holes shape the lit volume in
-// world space.  Projected sun position is diagnostic-only; normal rendering
-// never clamps a source to a screen edge or performs a radial image blur.
+// depth, marches that ray through a participating medium, and at every step
+// asks the directional cascade maps whether the sun (or moon) reaches it. The
+// cascade maps already contain opaque, dynamic, and alpha-tested casters, so
+// foliage holes shape the lit volume in world space.  Projected sun position
+// is diagnostic-only; normal rendering never clamps a source to a screen edge
+// or performs a radial image blur.
+//
+// The medium is the sum of two parts:
+//   * the injector's own exponential height fog ("Atmospheric density",
+//     "Height falloff", "Fog base height"), which both scatters light toward
+//     the camera and attenuates the scene behind it (Beer-Lambert);
+//   * the AREA's authored fog, read from the engine's fogParams/fogColor
+//     uniforms. NWN has already blended that into every surface, so here it
+//     only makes the sun visible in the air -- it is never applied twice.
+//
+// Passes: linear-distance downsample -> jittered ray march -> separable
+// depth-aware blur -> depth-aware upsample composited as
+//     scene * transmittance + in-scattering.
 // ---------------------------------------------------------------------------
 static GLuint g_godrayMaskProgram = 0;
 static GLuint g_godrayScatterProgram = 0;
@@ -19,6 +32,9 @@ static GLuint g_godrayFbo = 0;
 static int g_godrayWidth = 0;
 static int g_godrayHeight = 0;
 
+// What the panel shows under the enable box. Set only by the selected area
+// scene, so UI/portrait Scene::Render calls cannot make it flicker.
+static void godrays_fail(const char* reason);
 static void godrays_blocked(const char* reason) {
     // Scene::Render is also called for UI/portrait scenes.  A one-entry
     // dedupe alternates between their reason and the area reason every frame,
@@ -45,6 +61,7 @@ struct GodrayGlState {
     GLint texture28 = 0;
     GLint texture29 = 0;
     GLint texture29Array = 0;
+    GLint texture30 = 0;
     GLint texture30Array = 0;
     GLint srcRgb = GL_ONE, dstRgb = GL_ZERO;
     GLint srcAlpha = GL_ONE, dstAlpha = GL_ZERO;
@@ -64,6 +81,7 @@ struct GodrayGlState {
         gl::GetIntegerv(GL_TEXTURE_BINDING_2D, &texture29);
         gl::GetIntegerv(GL_TEXTURE_BINDING_2D_ARRAY, &texture29Array);
         gl::ActiveTexture(GL_TEXTURE0 + 30);
+        gl::GetIntegerv(GL_TEXTURE_BINDING_2D, &texture30);
         gl::GetIntegerv(GL_TEXTURE_BINDING_2D_ARRAY, &texture30Array);
         gl::GetIntegerv(GL_BLEND_SRC_RGB, &srcRgb);
         gl::GetIntegerv(GL_BLEND_DST_RGB, &dstRgb);
@@ -88,6 +106,7 @@ struct GodrayGlState {
         gl::BindTexture(GL_TEXTURE_2D, (GLuint)texture29);
         gl::BindTexture(GL_TEXTURE_2D_ARRAY, (GLuint)texture29Array);
         gl::ActiveTexture(GL_TEXTURE0 + 30);
+        gl::BindTexture(GL_TEXTURE_2D, (GLuint)texture30);
         gl::BindTexture(GL_TEXTURE_2D_ARRAY, (GLuint)texture30Array);
         gl::ActiveTexture((GLenum)activeTexture);
         gl::BlendFuncSeparate((GLenum)srcRgb, (GLenum)dstRgb,
@@ -154,26 +173,65 @@ static void build_godray_programs() {
     static bool attempted = false;
     if (attempted) return;
     attempted = true;
-    static const char* maskFragment =
+    // Pass 1 -- low-resolution LINEAR scene distance.
+    //
+    // The march, the blur and the upsample all need to compare depths. Raw
+    // window depth cannot be used for that: it is hyperbolic, and the old pass
+    // additionally copied it into an RGBA16F target, whose 11-bit mantissa
+    // resolves only ~0.0005 near 1.0 -- i.e. tens of metres at the far end of
+    // the frustum. Ray end points terraced and the "depth-aware" blur weight
+    // exp(-|dz|*600) was blind to every distant edge. Radial distance in
+    // metres has a constant RELATIVE error in a half float (~0.05%), which is
+    // what an edge test wants. The farthest of the covered texels is kept so
+    // a thin foreground object does not truncate the fog behind it; the
+    // depth-aware upsample puts the foreground edge back.
+    static const char* depthFragment =
         "#version 330 core\n"
-        "out vec4 nwnFragColor; uniform sampler2D nwnSceneDepth;"
-        "uniform vec2 nwnTargetSize;"
-        "void main(){ vec2 uv=gl_FragCoord.xy/nwnTargetSize;"
-        "float d=texture(nwnSceneDepth,uv).r;"
-        "nwnFragColor=vec4(vec3(d),1.0); }\n";
+        "out vec4 nwnFragColor;uniform sampler2D nwnSceneDepth;"
+        "uniform vec2 nwnTargetSize;uniform mat4 nwnCameraVPInv;uniform vec4 nwnEye;"
+        "void main(){vec2 uv=gl_FragCoord.xy/nwnTargetSize;vec2 o=.25/nwnTargetSize;"
+        "float d=max(max(texture(nwnSceneDepth,uv+vec2(-o.x,-o.y)).r,"
+        "texture(nwnSceneDepth,uv+vec2(o.x,-o.y)).r),"
+        "max(texture(nwnSceneDepth,uv+vec2(-o.x,o.y)).r,"
+        "texture(nwnSceneDepth,uv+vec2(o.x,o.y)).r));"
+        "float dist=60000.0;"
+        "if(d<.9999995){vec4 h=nwnCameraVPInv*vec4(uv*2.0-1.0,d*2.0-1.0,1.0);"
+        "if(abs(h.w)>1e-6)dist=min(length(h.xyz/h.w-nwnEye.xyz),60000.0);}"
+        "nwnFragColor=vec4(dist,0.0,0.0,1.0);}\n";
+    // Pass 2 -- single-scattering ray march.
+    //
+    //   nwnMedium   x = extinction of the injector's own medium at/below the
+    //                   base height (1/m), y = exponential height falloff
+    //                   (1/m), z = base height (world Z), w = extinction
+    //                   equivalent of the AREA's authored fog (1/m, 0 = none)
+    //   nwnFogRange x,y = engine fogStart/fogEnd (view-space Z, exactly what
+    //                   inc_common's GetFog() ramps over), z = march limit,
+    //                   w = ambient (fog-colour) in-scattering amount
+    //   nwnShaft    x = sun in-scattering strength, y = Henyey-Greenstein g,
+    //                   z = area sun/moon policy fade (shafts only),
+    //                   w = 1 when the cascade maps may be sampled this frame
+    //
+    // Output: rgb = in-scattered radiance, a = transmittance applied to the
+    // scene. The composite is  scene * a + rgb.
+    //
+    // The engine has ALREADY mixed its linear fog into every surface, so the
+    // authored medium contributes sun shafts (and attenuates distant ones) but
+    // neither fog-colour in-scattering nor scene extinction a second time.
+    // Only the injector's own height medium does those.
     static const char* scatterFragment =
         "#version 330 core\n"
-        "out vec4 nwnFragColor; uniform sampler2D nwnSceneDepthQuarter;"
+        "out vec4 nwnFragColor; uniform sampler2D nwnLinearDepth;"
         "uniform sampler2DArrayShadow nwnStaticLightDepth;"
         "uniform sampler2DArrayShadow nwnDynamicLightDepth;"
-        "uniform vec2 nwnTargetSize,nwnSunUV,nwnFogRange;"
-        "uniform vec4 nwnSunTint,nwnFogColor;"
+        "uniform vec2 nwnTargetSize,nwnSunUV;"
+        "uniform vec4 nwnSunColor,nwnFogColor,nwnMedium,nwnFogRange,nwnShaft;"
         "uniform mat4 nwnCameraVPInv,nwnCameraView,nwnLightVP[4];"
         "uniform vec4 nwnClipFar,nwnEye,nwnLightDir;"
-        "uniform int nwnSamples,nwnDebug,nwnDynamicLayers,nwnFogActive;"
-        "uniform float nwnStrength,nwnBias,nwnClearDensity;"
-        "float nwnLit(vec3 world){"
-        "float z=-(nwnCameraView*vec4(world,1)).z;int layer=0;"
+        "uniform int nwnSamples,nwnDebug,nwnDynamicLayers;"
+        "uniform float nwnBias,nwnLampGain;"
+        "uniform vec4 nwnLampPos[8],nwnLampColor[8];uniform vec2 nwnLampFalloff;"
+        "uniform int nwnLampCount;"
+        "float nwnLit(vec3 world,float z){int layer=0;"
         "if(z>nwnClipFar.x)layer=1;if(z>nwnClipFar.y)layer=2;"
         "if(z>nwnClipFar.z)layer=3;"
         "vec4 lp=nwnLightVP[layer]*vec4(world,1);if(lp.w<=0.0)return 1.0;"
@@ -184,88 +242,130 @@ static void build_godray_programs() {
         "vec4(s.xy,float(layer),s.z-nwnBias)):1.0;return min(a,b);}\n"
         "void main(){ vec2 uv=gl_FragCoord.xy/nwnTargetSize;"
         "if(nwnDebug==1){nwnFragColor=vec4(1,0,1,1);return;}"
-        "float depth=texture(nwnSceneDepthQuarter,uv).r;"
-        "if(nwnDebug==2){float sky=depth>=.999999?1.0:0.0;"
-        "nwnFragColor=vec4(vec3(sky),1);return;}"
+        "float sceneDist=texture(nwnLinearDepth,uv).r;"
+        "if(nwnDebug==2){nwnFragColor=vec4(vec3(sceneDist>=50000.0?1.0:0.0),1);return;}"
         "if(nwnDebug==4){ float a=1.0-smoothstep(.010,.030,length(uv-nwnSunUV));"
         "nwnFragColor=vec4(vec3(1.0,.75,.05)*a,1);return;}"
-        "vec4 endH=nwnCameraVPInv*vec4(uv*2.0-1.0,depth*2.0-1.0,1);"
-        "if(abs(endH.w)<1e-6){nwnFragColor=vec4(0);return;}"
-        "vec3 endWorld=endH.xyz/endH.w;vec3 delta=endWorld-nwnEye.xyz;"
-        "float rayLength=length(delta);if(rayLength<1e-4){nwnFragColor=vec4(0);return;}"
-        "vec3 ray=delta/rayLength;float marchLength=min(rayLength,nwnClipFar.w);"
+        // The ray direction comes from a point INSIDE the frustum (NDC z=0),
+        // not from the far plane, whose unprojection is ill-conditioned.
+        "vec4 midH=nwnCameraVPInv*vec4(uv*2.0-1.0,0.0,1.0);"
+        "if(abs(midH.w)<1e-6){nwnFragColor=vec4(0,0,0,1);return;}"
+        "vec3 delta=midH.xyz/midH.w-nwnEye.xyz;float deltaLength=length(delta);"
+        "if(deltaLength<1e-5){nwnFragColor=vec4(0,0,0,1);return;}"
+        "vec3 ray=delta/deltaLength;"
+        // View-space depth gained per metre along this ray: the cascade
+        // split and the engine fog ramp are both defined on view Z.
+        "float viewPerMetre=max(-(nwnCameraView*vec4(ray,0.0)).z,0.0);"
+        "float marchLength=min(sceneDist,nwnFogRange.z);"
         "float stepLength=marchLength/float(nwnSamples);"
-        // Stable midpoint sampling is preferable here. Per-pixel random
-        // jitter without a temporal resolve turned the shadow volume into a
-        // crawling grey stipple instead of coherent shafts.
-        "float jitter=.5;"
-        "float litCount=0.0;float mediumCount=0.0;"
+        // Interleaved gradient noise (Jimenez 2014) offsets each pixel's
+        // samples within one step, turning the fixed-step banding into a
+        // high-frequency pattern. It is a function of the pixel only -- never
+        // of time -- so it cannot crawl, and the depth-aware blur that follows
+        // is sized to remove it. (The earlier attempt at jitter fed the result
+        // into a high-pass filter, which amplified the noise instead.)
+        "float jitter=fract(52.9829189*fract(dot(gl_FragCoord.xy,"
+        "vec2(.06711056,.00583715))));"
+        "float span=max(nwnFogRange.y-nwnFogRange.x,1.0);"
+        "float sunAcc=0.0,ambAcc=0.0,litAcc=0.0,tAll=1.0,tUser=1.0;"
         "for(int i=0;i<64;i++){if(i>=nwnSamples)break;"
-        "float dist=(float(i)+.25+.5*jitter)*stepLength;"
-        // Atmospheric density is a near-camera medium in EVERY area. Authored
-        // fog can make the medium denser with distance, but no longer disables
-        // the user's atmosphere control merely because fogParams is present.
-        "float authoredMedium=nwnFogActive!=0?clamp((dist-nwnFogRange.x)/"
-        "max(nwnFogRange.y-nwnFogRange.x,.001),0.0,1.0):0.0;"
-        "float medium=max(authoredMedium,nwnClearDensity);"
-        "litCount+=nwnLit(nwnEye.xyz+ray*dist)*medium;mediumCount+=medium;}"
-        "float raw=litCount/max(mediumCount,.0001);"
-        "float authoredAmount=nwnFogActive!=0?clamp((marchLength-nwnFogRange.x)/"
-        "max(nwnFogRange.y-nwnFogRange.x,.001),0.0,1.0):0.0;"
-        "float atmosphereAmount=nwnClearDensity*smoothstep(.02,.35,"
-        "clamp(marchLength/max(nwnClipFar.w,.001),0.0,1.0));"
-        "float fogAmount=max(authoredAmount,atmosphereAmount);"
-        "float g=.45;float ct=clamp(dot(-ray,normalize(nwnLightDir.xyz)),-1.0,1.0);"
-        // Require the CAMERA, not merely a ray at the top edge, to face the
-        // sun. Without this center-ray gate an offscreen sun could leave a
-        // serrated crescent along one edge while the player looked elsewhere.
-        "vec4 centerH=nwnCameraVPInv*vec4(0,0,1,1);"
-        "vec3 centerRay=normalize(centerH.xyz/centerH.w-nwnEye.xyz);"
-        "float cameraSun=smoothstep(.55,.82,"
-        "clamp(dot(-centerRay,normalize(nwnLightDir.xyz)),-1.0,1.0));"
-        // The per-ray term softly focuses the effect around the source once
-        // the camera-center requirement has admitted the frame.
-        "float viewSun=smoothstep(.30,.75,ct)*cameraSun;"
-        "float phase=(1.0-g*g)/pow(max(.001,1.0+g*g-2.0*g*ct),1.5)*.16*viewSun;"
-        "if(nwnDebug==3){nwnFragColor=vec4(clamp((1.0-raw)*4.0,0.0,1.0),"
-        "clamp(phase,0.0,1.0),clamp(raw,0.0,1.0),1);return;}"
-        // Preserve integrated sunlight here.  Shaft extraction happens after
-        // spatial filtering; mapping partial visibility directly to brightness
-        // projects translucent copies of every caster into the final image.
-        "float energy=clamp(raw*phase*nwnStrength*fogAmount*.52,0.0,.50);"
-        "vec3 warm=mix(clamp(nwnFogColor.rgb,vec3(0),vec3(1.5)),"
-        "clamp(nwnSunTint.rgb,vec3(0),vec3(1.5)),.58);"
-        "nwnFragColor=vec4(warm*energy,1.0); }\n";
+        "float dist=(float(i)+jitter)*stepLength;"
+        "vec3 p=nwnEye.xyz+ray*dist;float vz=dist*viewPerMetre;"
+        "float sUser=nwnMedium.x*exp(-nwnMedium.y*max(p.z-nwnMedium.z,0.0));"
+        "float sAuth=nwnMedium.w*clamp((vz-nwnFogRange.x)/(.2*span),0.0,1.0);"
+        "float sAll=sUser+sAuth;"
+        // Beer-Lambert over the step, integrated analytically so the result
+        // is independent of the step count (Hillaire 2015): the light a step
+        // scatters toward the eye is T*(1-exp(-sigma*dt)), not T*sigma*dt.
+        "float eAll=exp(-sAll*stepLength);float w=tAll*(1.0-eAll);"
+        "float vis=nwnShaft.w>.5?nwnLit(p,vz):0.0;"
+        "sunAcc+=w*vis;litAcc+=vis;"
+        "ambAcc+=w*sUser/max(sAll,1e-6);"
+        "tAll*=eAll;tUser*=exp(-sUser*stepLength);}"
+        // Henyey-Greenstein, normalised so an isotropic medium is 1. A
+        // constant floor is mixed in because NWN's camera looks DOWN: with a
+        // pure forward lobe the shafts exist only while staring at the sun,
+        // which was the previous pass's camera-facing gate in another form.
+        "float g=clamp(nwnShaft.y,0.0,.95);"
+        "float ct=clamp(dot(ray,-normalize(nwnLightDir.xyz)),-1.0,1.0);"
+        "float hg=(1.0-g*g)/pow(max(1.0+g*g-2.0*g*ct,1e-3),1.5);"
+        "float phase=min(.4+.6*hg,6.0);"
+        "if(nwnDebug==3){nwnFragColor=vec4(1.0-litAcc/float(nwnSamples),"
+        "clamp(phase/6.0,0.0,1.0),clamp(sunAcc,0.0,1.0),1);return;}"
+        "vec3 fogHue=nwnFogColor.rgb/max(max(nwnFogColor.r,"
+        "max(nwnFogColor.g,nwnFogColor.b)),.05);"
+        "vec3 shaft=nwnSunColor.rgb*mix(vec3(1.0),fogHue,.35)*"
+        "(nwnShaft.x*phase*sunAcc);"
+        "vec3 ambient=nwnFogColor.rgb*(nwnFogRange.w*ambAcc);"
+        // Local lights (torches, lamps). Each selected light is a sphere of
+        // its NWN radius; only the part of this pixel's ray that crosses it
+        // can glow, and the ray already stops at the visible surface, so a
+        // wall in front of a lamp hides the glow behind it. Inside the
+        // sphere the light falls off exactly as NWN's own point lights do
+        // (inc_lighting ComputePointLightSource, f = d^2/r^2):
+        //     (1 - f) / (lightMaxIntensityInv + lightFalloffFactor * f)
+        // normalised to 1 at the centre. That curve is steep, which is what
+        // makes a soft bright core with a wide faint halo. Eight jittered
+        // samples across the chord; the fog in between attenuates it.
+        // Not shadowed: a lamp's glow is not blocked by geometry IN THE AIR
+        // between the lamp and the ray.
+        "vec3 lampAcc=vec3(0.0);"
+        "for(int l=0;l<8;l++){if(l>=nwnLampCount)break;"
+        "vec4 lp=nwnLampPos[l];vec3 oc=nwnEye.xyz-lp.xyz;float b=dot(oc,ray);"
+        "float h=b*b-(dot(oc,oc)-lp.w*lp.w);if(h<=0.0)continue;h=sqrt(h);"
+        "float t0=max(-b-h,0.0),t1=min(-b+h,marchLength);if(t1<=t0)continue;"
+        "float dt=(t1-t0)*.125;float s=0.0;"
+        "for(int k=0;k<8;k++){float t=t0+(float(k)+jitter)*dt;vec3 q=nwnEye.xyz+ray*t;"
+        "float f=min(dot(q-lp.xyz,q-lp.xyz)/(lp.w*lp.w),1.0);"
+        "float att=(1.0-f)*nwnLampFalloff.x/(nwnLampFalloff.x+nwnLampFalloff.y*f);"
+        "float sig=nwnMedium.x*exp(-nwnMedium.y*max(q.z-nwnMedium.z,0.0))+"
+        "nwnMedium.w*clamp((t*viewPerMetre-nwnFogRange.x)/(.2*span),0.0,1.0);"
+        "s+=sig*att*exp(-sig*t);}"
+        "lampAcc+=nwnLampColor[l].rgb*(s*dt);}"
+        "vec3 lampGlow=vec3(1.0)-exp(-lampAcc*nwnLampGain);"
+        // Soft shoulder: the target is an LDR framebuffer, so a forward-lobe
+        // peak must roll off instead of clipping to a flat white disc.
+        "vec3 inscatter=ambient+(vec3(1.0)-exp(-shaft))*nwnShaft.z+lampGlow;"
+        "nwnFragColor=vec4(inscatter,tUser); }\n";
+    // Pass 4 -- depth-aware upsample and composite.  Each full-resolution
+    // pixel weights its four low-resolution neighbours by how closely their
+    // distance matches its own, so fog computed behind a silhouette does not
+    // bleed a halo onto the object in front of it.
     static const char* compositeFragment =
         "#version 330 core\n"
-        "out vec4 nwnFragColor;uniform sampler2D nwnGodrayFine,nwnGodrayBase;"
-        "uniform vec2 nwnScreenSize;uniform int nwnDebug;"
-        "void main(){vec2 uv=gl_FragCoord.xy/nwnScreenSize;"
-        "vec3 fine=texture(nwnGodrayFine,uv).rgb;"
-        "if(nwnDebug!=0){nwnFragColor=vec4(fine,1);return;}"
-        // A shaft is positive local illumination contrast, not the shadow
-        // field itself.  Removing the broad component prevents foliage and
-        // cascade silhouettes from appearing as a translucent overlay.
-        "vec3 base=texture(nwnGodrayBase,uv).rgb;"
-        // Retain a small, smooth body of the volume as well as its positive
-        // local contrast.  A pure high-pass disappears when a shaft is wider
-        // than the baseline kernel; the 8% residual keeps such shafts visible
-        // without restoring the original full-strength caster overlay.
-        "vec3 shaft=max(fine-base*.92,vec3(0))*3.25;"
-        "nwnFragColor=vec4(min(shaft,vec3(.38)),1.0);}\n";
+        "out vec4 nwnFragColor;uniform sampler2D nwnVolume,nwnLinearDepth,nwnSceneDepth;"
+        "uniform vec2 nwnScreenSize,nwnScreenOrigin,nwnLowSize;"
+        "uniform mat4 nwnCameraVPInv;uniform vec4 nwnEye;uniform int nwnDebug;"
+        "void main(){vec2 uv=(gl_FragCoord.xy-nwnScreenOrigin)/nwnScreenSize;"
+        "if(nwnDebug!=0){nwnFragColor=vec4(texture(nwnVolume,uv).rgb,1);return;}"
+        "float depth=texture(nwnSceneDepth,uv).r;float dist=60000.0;"
+        "if(depth<.9999995){vec4 h=nwnCameraVPInv*vec4(uv*2.0-1.0,depth*2.0-1.0,1.0);"
+        "if(abs(h.w)>1e-6)dist=min(length(h.xyz/h.w-nwnEye.xyz),60000.0);}"
+        "vec2 lp=uv*nwnLowSize-.5;ivec2 base=ivec2(floor(lp));vec2 f=lp-floor(lp);"
+        "ivec2 hi=ivec2(nwnLowSize)-ivec2(1);vec4 sum=vec4(0);float total=0.0;"
+        "for(int j=0;j<2;++j)for(int i=0;i<2;++i){"
+        "ivec2 q=clamp(base+ivec2(i,j),ivec2(0),hi);"
+        "float ld=texelFetch(nwnLinearDepth,q,0).r;"
+        "float bw=(i==0?1.0-f.x:f.x)*(j==0?1.0-f.y:f.y)+.02;"
+        "float w=bw/(.01+abs(ld-dist)/max(min(ld,dist),1.0));"
+        "sum+=texelFetch(nwnVolume,q,0)*w;total+=w;}"
+        "nwnFragColor=sum/max(total,1e-6);}\n";
+    // Pass 3 -- separable depth-aware Gaussian over the low-resolution
+    // volume (colour AND transmittance). The edge tolerance is relative to
+    // distance, so it behaves the same at 5 m and at 100 m.
     static const char* blurFragment =
         "#version 330 core\n"
-        "out vec4 nwnFragColor;uniform sampler2D nwnVolume,nwnSceneDepth;"
+        "out vec4 nwnFragColor;uniform sampler2D nwnVolume,nwnLinearDepth;"
         "uniform vec2 nwnTargetSize,nwnAxis;uniform float nwnSigma;"
-        "void main(){vec2 uv=gl_FragCoord.xy/nwnTargetSize;"
-        "vec2 texel=nwnAxis/nwnTargetSize;float cd=texture(nwnSceneDepth,uv).r;"
+        "void main(){ivec2 p=ivec2(gl_FragCoord.xy);ivec2 hi=ivec2(nwnTargetSize)-ivec2(1);"
+        "float cd=texelFetch(nwnLinearDepth,p,0).r;float tolerance=.08*cd+.1;"
         "vec4 sum=vec4(0);float total=0.0;"
-        "for(int i=-8;i<=8;++i){float x=float(i);vec2 q=clamp(uv+texel*x,vec2(0),vec2(1));"
-        "float d=texture(nwnSceneDepth,q).r;float spatial=exp(-.5*x*x/(nwnSigma*nwnSigma));"
-        "float edge=exp(-abs(d-cd)*600.0);float w=spatial*edge;"
-        "sum+=texture(nwnVolume,q)*w;total+=w;}"
-        "nwnFragColor=sum/max(total,.0001);}\n";
-    g_godrayMaskProgram = godrays_make_program(maskFragment, "mask");
+        "for(int i=-5;i<=5;++i){ivec2 q=clamp(p+ivec2(nwnAxis)*i,ivec2(0),hi);"
+        "float d=texelFetch(nwnLinearDepth,q,0).r;float x=float(i);"
+        "float w=exp(-.5*x*x/(nwnSigma*nwnSigma))*exp(-abs(d-cd)/tolerance);"
+        "sum+=texelFetch(nwnVolume,q,0)*w;total+=w;}"
+        "nwnFragColor=sum/max(total,1e-4);}\n";
+    g_godrayMaskProgram = godrays_make_program(depthFragment, "linear-depth");
     g_godrayScatterProgram = godrays_make_program(scatterFragment, "scatter");
     g_godrayBlurProgram = godrays_make_program(blurFragment, "bilateral-blur");
     g_godrayCompositeProgram = godrays_make_program(compositeFragment, "composite");
@@ -343,9 +443,26 @@ static void godrays_draw_fullscreen() {
     NWN_GL_INTERPOSE(glDrawArrays)(0x0004 /* GL_TRIANGLES */, 0, 3);
 }
 
+static void godrays_fail(const char* reason) {
+    g_godraysStatus = reason;
+    godrays_blocked(reason);
+}
+
 static void draw_godrays(void* scene) {
     if constexpr (!kGodraysFeatureAvailable) return;
-    if (!g_godraysEnabled) return;
+    if (!script_env::b(script_env::FogOn, g_godraysEnabled)) {
+        if (scene == g_areaScene) g_godraysStatus = "off";
+        return;
+    }
+    // Effective values: an area script's override, else the player's setting.
+    using script_env::f;
+    const float fogDensity       = f(script_env::FogDensity,       g_atmosphereDensity);
+    const float fogHeightFalloff = f(script_env::FogHeightFalloff, g_godraysHeightFalloff);
+    const float fogHeightBase    = f(script_env::FogHeightBase,    g_godraysHeightBase);
+    const float fogBrightness    = f(script_env::FogBrightness,    g_godraysAmbient);
+    const float fogLampGlow      = f(script_env::FogLampGlow,      g_godraysLampGlow);
+    const float fogShafts        = f(script_env::FogShafts,        g_godraysStrength);
+    const float fogAnisotropy    = f(script_env::FogAnisotropy,    g_godraysAnisotropy);
     // Trace mode owns the selected-area context but does not update the
     // normal-run g_isWorldScene flag.  The selected scene plus its frozen
     // context is the authoritative gate in both launch paths.
@@ -353,11 +470,17 @@ static void draw_godrays(void* scene) {
         godrays_blocked("not-current-area-scene"); return;
     }
     if (!g_shadowFrameContext.valid || g_shadowFrameContext.scene != scene) {
-        godrays_blocked("no-current-area-context"); return;
+        godrays_fail("no-current-area-context"); return;
     }
     // This is the shared authority used by the native-shadow fog fade too.
     // Polling is internally throttled and reads uniforms only; it never alters
     // NWN's shader state.
+    // Interiors keep their authored look: the injector's outdoor haze would
+    // otherwise fill every room. NWN's own interior flag is the authority.
+    if (weather_runtime::g.areaFlagsKnown && weather_runtime::g.areaInterior &&
+        weather_runtime::g.observedScene == scene) {
+        g_godraysStatus = "off in interiors"; return;
+    }
     poll_engine_fog();
     if (!gl::GetIntegerv || !gl::GetBooleanv || !gl::IsEnabled || !gl::Enable ||
         !gl::Disable || !gl::BlendFuncSeparate || !gl::BlendEquationSeparate ||
@@ -366,16 +489,16 @@ static void draw_godrays(void* scene) {
         !gl::ColorMask || !gl::GetUniformLocation ||
         !gl::Uniform1i || !gl::Uniform1f || !gl::Uniform2f || !gl::Uniform4f ||
         !gl::UniformMatrix4fv) {
-        godrays_blocked("missing-gl-entry"); return;
+        godrays_fail("missing-gl-entry"); return;
     }
     UseProgram_t useProgram = g_realUseProgram ? g_realUseProgram :
         (UseProgram_t)glew_or_dlsym(eng::GlewUseProgram, "glUseProgram");
-    if (!useProgram) { godrays_blocked("no-glUseProgram-dispatcher"); return; }
+    if (!useProgram) { godrays_fail("no-glUseProgram-dispatcher"); return; }
     GLint entryViewport[4] = {0, 0, 0, 0}, entryFbo = 0;
     gl::GetIntegerv(GL_VIEWPORT, entryViewport);
     gl::GetIntegerv(GL_FRAMEBUFFER_BINDING, &entryFbo);
     if (entryFbo != 0 || entryViewport[2] <= 0 || entryViewport[3] <= 0) {
-        godrays_blocked(entryFbo ? "not-default-framebuffer" : "empty-viewport"); return;
+        godrays_fail(entryFbo ? "not-default-framebuffer" : "empty-viewport"); return;
     }
 
     // Cross-module ownership is the required interposition guard.  g_inOurPass
@@ -392,46 +515,60 @@ static void draw_godrays(void* scene) {
     build_godray_programs();
     if (!g_godrayMaskProgram || !g_godrayScatterProgram || !g_godrayBlurProgram ||
         !g_godrayCompositeProgram) {
-        godrays_blocked("shader-build-failed"); return;
+        godrays_fail("shader-build-failed"); return;
     }
     if (!ensure_godray_targets(targetW, targetH)) {
-        godrays_blocked("target-allocation-failed"); return;
+        godrays_fail("target-allocation-failed"); return;
     }
     float sunU = 0.5f, sunV = 0.5f;
     float lightDirection[3] = {0.0f, 0.0f, -1.0f};
     const bool needsVolume = g_godraysDebug == 0 || g_godraysDebug == 3;
     const bool needsSunPosition = g_godraysDebug == 4;
-    if (needsVolume && !godrays_sun_direction(lightDirection)) {
-        godrays_blocked("no-sun-direction"); return;
-    }
+    // Sun shafts need a light direction, NWN's permission to cast sun/moon
+    // shadows, and this frame's cascade maps. The fog itself needs none of
+    // them: without them it is drawn unlit-by-shafts rather than not at all.
+    // (It used to return here, so a rainy night with moon shadows disabled
+    // showed no fog whatsoever.)
+    const char* shaftsOffReason = nullptr;
+    if (needsVolume && !godrays_sun_direction(lightDirection))
+        shaftsOffReason = "no sun/moon direction";
     if (needsSunPosition && !godrays_project_sun(sunU, sunV)) {
-        godrays_blocked("no-projectable-sun-direction"); return;
+        godrays_fail("no-projectable-sun-direction"); return;
     }
     const float projectedSunU = sunU;
     const float projectedSunV = sunV;
-    const bool sunOffscreen = needsSunPosition &&
-        (sunU < -0.10f || sunU > 1.10f || sunV < -0.10f || sunV > 1.10f);
-    // A source just outside the viewport is a normal and important shaft case:
-    // the sun can be hidden above the camera while its rays still cross the
-    // visible canopy.  Keep normal mode's origin slightly outside the edge;
-    // only the marker view pins it inside so the diagnostic remains visible.
-    if (sunOffscreen && g_godraysDebug == 4) {
+    // The marker view pins an offscreen sun to the nearest edge so the
+    // diagnostic stays visible. The volume itself never uses a screen-space
+    // sun position: an offscreen sun still lights the fog in view.
+    if (needsSunPosition) {
         sunU = std::max(0.02f, std::min(0.98f, sunU));
         sunV = std::max(0.02f, std::min(0.98f, sunV));
-    } else if (sunOffscreen) {
-        sunU = std::max(-0.08f, std::min(1.08f, sunU));
-        sunV = std::max(-0.08f, std::min(1.08f, sunV));
     }
-    if (g_godraysDebug == 0 && effective_area_sun_strength() <= 0.001f) {
-        godrays_blocked("area-sun-disabled"); return;
+    // NWN's own area policy (sun/moon shadows allowed, day/night fade) scales
+    // the SHAFTS, so a sunset fades them out with the directional shadows
+    // instead of popping. The fog body is unaffected.
+    float policyFade = 1.0f;
+    if (g_cascadeCompositeStrength > 1.0e-3f)
+        policyFade = std::max(0.0f, std::min(1.0f,
+            effective_area_sun_strength() / g_cascadeCompositeStrength));
+    if (!shaftsOffReason && policyFade <= 0.001f)
+        shaftsOffReason = "area has no sun/moon shadows";
+    const bool cascadesReady = g_cascadeTargetsUsable && g_cascadeStaticTex &&
+        g_cascadeDynamicTex && g_cascadeMath.valid &&
+        g_cascadeMath.sourceFrame == g_shadowFrameContext.serial;
+    if (!shaftsOffReason && !cascadesReady)
+        shaftsOffReason = "sun shadow maps unavailable";
+    const bool shaftsOn = needsVolume && !shaftsOffReason;
+    if (g_godraysDebug == 3 && !shaftsOn) {
+        godrays_fail(shaftsOffReason ? shaftsOffReason : "sun shadow maps unavailable");
+        return;
     }
-    if (needsVolume && (!g_cascadeTargetsUsable || !g_cascadeStaticTex ||
-                        !g_cascadeDynamicTex || !g_cascadeMath.valid ||
-                        g_cascadeMath.sourceFrame != g_shadowFrameContext.serial)) {
-        godrays_blocked("directional-volume-unavailable"); return;
-    }
-    if (g_godraysDebug != 1 && g_godraysDebug != 4 && !g_sceneDepthTex) {
-        godrays_blocked("no-scene-depth-copy"); return;
+    // The scene-depth copy is made by the sun-shadow receiver. It must be from
+    // THIS frame: with sun shadows switched off the texture still exists but
+    // holds an old camera's depth.
+    if (g_godraysDebug != 1 && g_godraysDebug != 4 &&
+        (!g_sceneDepthTex || g_sceneDepthSerial != g_shadowFrameContext.serial)) {
+        godrays_fail("no scene depth this frame (are sun shadows enabled?)"); return;
     }
 
     gl::Disable(GL_DEPTH_TEST); gl::Disable(GL_BLEND); gl::Disable(GL_SCISSOR_TEST);
@@ -439,7 +576,9 @@ static void draw_godrays(void* scene) {
     gl::BindFramebuffer(GL_FRAMEBUFFER, g_godrayFbo);
     gl::Viewport(0, 0, targetW, targetH);
 
-    if (g_godraysDebug != 1 && g_godraysDebug != 4) {
+    // Pass 1: low-resolution linear scene distance (kept for every later pass).
+    const bool haveDepth = g_godraysDebug != 1 && g_godraysDebug != 4;
+    if (haveDepth) {
         gl::FramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D,
                                  g_godrayMaskTexture, 0);
         gl::BindTexture(GL_TEXTURE_2D, g_sceneDepthTex);
@@ -448,19 +587,27 @@ static void draw_godrays(void* scene) {
         if (location >= 0) gl::Uniform1i(location, 28);
         location = gl::GetUniformLocation(g_godrayMaskProgram, "nwnTargetSize");
         if (location >= 0) gl::Uniform2f(location, (float)targetW, (float)targetH);
+        location = gl::GetUniformLocation(g_godrayMaskProgram, "nwnCameraVPInv");
+        if (location >= 0) gl::UniformMatrix4fv(location, 1, GL_FALSE,
+                                                 g_shadowFrameContext.viewProjectionInverse);
+        location = gl::GetUniformLocation(g_godrayMaskProgram, "nwnEye");
+        if (location >= 0) gl::Uniform4f(location, g_shadowFrameContext.eye.x,
+                                         g_shadowFrameContext.eye.y,
+                                         g_shadowFrameContext.eye.z, 1.0f);
         godrays_draw_fullscreen();
     }
 
+    // Pass 2: ray march.
     gl::FramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D,
                              g_godrayScatterTexture, 0);
     gl::ActiveTexture(GL_TEXTURE0 + 29);
-    gl::BindTexture(GL_TEXTURE_2D_ARRAY, g_cascadeStaticTex);
+    gl::BindTexture(GL_TEXTURE_2D_ARRAY, shaftsOn ? g_cascadeStaticTex : 0);
     gl::ActiveTexture(GL_TEXTURE0 + 30);
-    gl::BindTexture(GL_TEXTURE_2D_ARRAY, g_cascadeDynamicTex);
+    gl::BindTexture(GL_TEXTURE_2D_ARRAY, shaftsOn ? g_cascadeDynamicTex : 0);
     gl::ActiveTexture(GL_TEXTURE0 + 28);
     gl::BindTexture(GL_TEXTURE_2D, g_godrayMaskTexture);
     useProgram(g_godrayScatterProgram);
-    GLint location = gl::GetUniformLocation(g_godrayScatterProgram, "nwnSceneDepthQuarter");
+    GLint location = gl::GetUniformLocation(g_godrayScatterProgram, "nwnLinearDepth");
     if (location >= 0) gl::Uniform1i(location, 28);
     location = gl::GetUniformLocation(g_godrayScatterProgram, "nwnStaticLightDepth");
     if (location >= 0) gl::Uniform1i(location, 29);
@@ -474,37 +621,127 @@ static void draw_godrays(void* scene) {
     if (location >= 0) gl::Uniform1i(location, std::max(8, std::min(64, g_godraysSamples)));
     location = gl::GetUniformLocation(g_godrayScatterProgram, "nwnDebug");
     if (location >= 0) gl::Uniform1i(location, g_godraysDebug);
-    float tintR = (eng::SunDiffuse && std::isfinite(eng::SunDiffuse[0])) ? std::max(0.15f, eng::SunDiffuse[0]) : 1.0f;
-    float tintG = (eng::SunDiffuse && std::isfinite(eng::SunDiffuse[1])) ? std::max(0.12f, eng::SunDiffuse[1]) : 0.88f;
-    float tintB = (eng::SunDiffuse && std::isfinite(eng::SunDiffuse[2])) ? std::max(0.08f, eng::SunDiffuse[2]) : 0.62f;
-    // SunDiffuse is an LDR engine-light value, not HDR solar radiance. Keep its
-    // hue but normalize its peak so the in-scattering can balance attenuation.
-    const float tintPeak = std::max(tintR, std::max(tintG, tintB));
-    if (tintPeak > 1.0e-4f) {
-        tintR /= tintPeak; tintG /= tintPeak; tintB /= tintPeak;
+
+    // Sun/moon colour. SunDiffuse is an LDR engine-light value, not HDR solar
+    // radiance: keep its hue at full saturation, and let its peak dim the
+    // shafts only partially so a moon still reads without glowing like a sun.
+    float rawR = (eng::SunDiffuse && std::isfinite(eng::SunDiffuse[0])) ? std::max(0.0f, eng::SunDiffuse[0]) : 1.0f;
+    float rawG = (eng::SunDiffuse && std::isfinite(eng::SunDiffuse[1])) ? std::max(0.0f, eng::SunDiffuse[1]) : 0.88f;
+    float rawB = (eng::SunDiffuse && std::isfinite(eng::SunDiffuse[2])) ? std::max(0.0f, eng::SunDiffuse[2]) : 0.62f;
+    const float rawPeak = std::max(rawR, std::max(rawG, rawB));
+    float tintR = 1.0f, tintG = 0.88f, tintB = 0.62f;
+    if (rawPeak > 1.0e-4f) {
+        tintR = rawR / rawPeak; tintG = rawG / rawPeak; tintB = rawB / rawPeak;
     }
-    location = gl::GetUniformLocation(g_godrayScatterProgram, "nwnSunTint");
-    if (location >= 0) gl::Uniform4f(location, tintR, tintG, tintB, 1.0f);
+    const float sunLevel = 0.35f + 0.65f * std::min(1.0f, rawPeak);
+    location = gl::GetUniformLocation(g_godrayScatterProgram, "nwnSunColor");
+    if (location >= 0) gl::Uniform4f(location, tintR * sunLevel, tintG * sunLevel,
+                                     tintB * sunLevel, 1.0f);
+
     const bool authoredFog = g_haveEngineFog &&
         g_fogEndEngine - g_fogStartEngine >= 5.0f;
     g_fogFromEngine = authoredFog;
     g_fogStartLive = authoredFog ? g_fogStartEngine : 0.0f;
     g_fogEndLive = authoredFog ? g_fogEndEngine : 0.0f;
+    const float authoredSpan = authoredFog ?
+        std::max(5.0f, g_fogEndEngine - g_fogStartEngine) : 1.0f;
+    // March far enough to cover the shadowed volume and the authored fog
+    // range, but never so far that a sky ray spends its steps on empty air.
+    float marchFar = cascadesReady ? std::max(60.0f, g_cascadeMath.clipFar[3]) : 60.0f;
+    if (authoredFog) marchFar = std::max(marchFar, g_fogEndEngine);
+    if (!std::isfinite(marchFar)) marchFar = 60.0f;
+    marchFar = std::min(marchFar, 250.0f);
     location = gl::GetUniformLocation(g_godrayScatterProgram, "nwnFogRange");
-    if (location >= 0) gl::Uniform2f(location,
-        authoredFog ? g_fogStartEngine : 0.0f,
-        authoredFog ? g_fogEndEngine : g_cascadeMath.clipFar[3]);
-    location = gl::GetUniformLocation(g_godrayScatterProgram, "nwnFogColor");
     if (location >= 0) gl::Uniform4f(location,
-        g_haveEngineFogColor ? g_fogColorEngine[0] : 0.62f,
-        g_haveEngineFogColor ? g_fogColorEngine[1] : 0.68f,
-        g_haveEngineFogColor ? g_fogColorEngine[2] : 0.72f, 1.0f);
-    location = gl::GetUniformLocation(g_godrayScatterProgram, "nwnFogActive");
-    if (location >= 0) gl::Uniform1i(location, authoredFog ? 1 : 0);
-    location = gl::GetUniformLocation(g_godrayScatterProgram, "nwnClearDensity");
-    if (location >= 0) gl::Uniform1f(location, g_atmosphereDensity);
-    location = gl::GetUniformLocation(g_godrayScatterProgram, "nwnStrength");
-    if (location >= 0) gl::Uniform1f(location, g_godraysStrength);
+        authoredFog ? g_fogStartEngine : 0.0f,
+        authoredFog ? g_fogEndEngine : 1.0f,
+        marchFar, fogBrightness);
+    // The fog colour is the engine's `fogColor` uniform (gamma space, like the
+    // framebuffer). With no authored fog the medium takes a dimmed copy of the
+    // sun/moon colour, so a night area does not get a day-grey haze.
+    float fogR = g_fogColorEngine[0], fogG = g_fogColorEngine[1], fogB = g_fogColorEngine[2];
+    if (!g_haveEngineFogColor) {
+        fogR = std::max(0.04f, std::min(1.0f, rawR * 0.70f));
+        fogG = std::max(0.04f, std::min(1.0f, rawG * 0.74f));
+        fogB = std::max(0.05f, std::min(1.0f, rawB * 0.82f));
+    }
+    location = gl::GetUniformLocation(g_godrayScatterProgram, "nwnFogColor");
+    if (location >= 0) gl::Uniform4f(location, fogR, fogG, fogB, 1.0f);
+    // "Atmospheric density" 0..1 maps to 0..0.04 extinction per metre: at the
+    // top of the range a surface 40 m away keeps ~20% of its own colour. The
+    // area's linear fog becomes an equivalent uniform medium that removes
+    // ~78% over its authored span.
+    constexpr float kDensityScale = 0.04f;
+    location = gl::GetUniformLocation(g_godrayScatterProgram, "nwnMedium");
+    if (location >= 0) gl::Uniform4f(location,
+        std::max(0.0f, fogDensity) * kDensityScale,
+        std::max(0.0f, fogHeightFalloff),
+        fogHeightBase,
+        authoredFog ? 1.5f / authoredSpan : 0.0f);
+    // Local lights for the fog glow: the engine's own per-frame light census
+    // (the same list the sun-shadow lamp lift and the rain tint use), not a
+    // guess. The eight whose spheres come nearest the camera are kept. A
+    // radius outside 0.25..40 m is not a lamp -- the sun has been seen
+    // arriving through SetLightGL with a directional light's huge radius.
+    float lampPos[8 * 4] = {}, lampColor[8 * 4] = {};
+    int lampCount = 0;
+    if (fogLampGlow > 0.0f) {
+        struct LampPick { float distance; unsigned index; };
+        LampPick picks[kLampPool];
+        unsigned candidates = 0;
+        const unsigned count = std::min<unsigned>(g_lampLightCount, kLampPool);
+        for (unsigned i = 0; i < count; ++i) {
+            const LampEntry& lamp = g_lampLights[i];
+            if (!(lamp.radius >= 0.25f && lamp.radius <= 40.0f)) continue;
+            if (!std::isfinite(lamp.pos[0]) || !std::isfinite(lamp.pos[1]) ||
+                !std::isfinite(lamp.pos[2])) continue;
+            if (std::max(lamp.color[0], std::max(lamp.color[1], lamp.color[2])) <= 0.01f)
+                continue;
+            const float dx = lamp.pos[0] - g_shadowFrameContext.eye.x;
+            const float dy = lamp.pos[1] - g_shadowFrameContext.eye.y;
+            const float dz = lamp.pos[2] - g_shadowFrameContext.eye.z;
+            const float edge = std::sqrt(dx * dx + dy * dy + dz * dz) - lamp.radius;
+            if (edge > marchFar) continue;
+            picks[candidates++] = {std::max(0.0f, edge), i};
+        }
+        const unsigned keep = std::min(candidates, 8u);
+        std::partial_sort(picks, picks + keep, picks + candidates,
+            [](const LampPick& a, const LampPick& b) { return a.distance < b.distance; });
+        for (unsigned k = 0; k < keep; ++k) {
+            const LampEntry& lamp = g_lampLights[picks[k].index];
+            lampPos[k * 4 + 0] = lamp.pos[0];
+            lampPos[k * 4 + 1] = lamp.pos[1];
+            lampPos[k * 4 + 2] = lamp.pos[2];
+            lampPos[k * 4 + 3] = lamp.radius;
+            for (int c = 0; c < 3; ++c)
+                lampColor[k * 4 + c] = std::max(0.0f, std::min(2.0f, lamp.color[c]));
+            lampColor[k * 4 + 3] = 1.0f;
+        }
+        lampCount = (int)keep;
+    }
+    location = gl::GetUniformLocation(g_godrayScatterProgram, "nwnLampCount");
+    if (location >= 0) gl::Uniform1i(location, lampCount);
+    if (lampCount > 0 && gl::Uniform4fv) {
+        location = gl::GetUniformLocation(g_godrayScatterProgram, "nwnLampPos[0]");
+        if (location >= 0) gl::Uniform4fv(location, lampCount, lampPos);
+        location = gl::GetUniformLocation(g_godrayScatterProgram, "nwnLampColor[0]");
+        if (location >= 0) gl::Uniform4fv(location, lampCount, lampColor);
+    }
+    // "Lamp glow" 0..3 -> in-scattering gain. At 1 a lamp of radius ~6 m in
+    // the default 0.32 density reads as a clear halo, not a flare.
+    location = gl::GetUniformLocation(g_godrayScatterProgram, "nwnLampGain");
+    if (location >= 0) gl::Uniform1f(location, 8.0f * std::max(0.0f, fogLampGlow));
+    location = gl::GetUniformLocation(g_godrayScatterProgram, "nwnLampFalloff");
+    if (location >= 0) gl::Uniform2f(location,
+        (std::isfinite(g_lightMaxIntensityInv) && g_lightMaxIntensityInv > 1.0e-4f)
+            ? g_lightMaxIntensityInv : 0.1f,
+        (std::isfinite(g_lightFalloffFactor) && g_lightFalloffFactor >= 0.0f)
+            ? g_lightFalloffFactor : 1.0f);
+    g_godraysLampsDrawn = lampCount;
+    location = gl::GetUniformLocation(g_godrayScatterProgram, "nwnShaft");
+    if (location >= 0) gl::Uniform4f(location, fogShafts,
+                                     fogAnisotropy, policyFade,
+                                     shaftsOn ? 1.0f : 0.0f);
     location = gl::GetUniformLocation(g_godrayScatterProgram, "nwnCameraVPInv");
     if (location >= 0) gl::UniformMatrix4fv(location, 1, GL_FALSE,
                                              g_shadowFrameContext.viewProjectionInverse);
@@ -534,13 +771,16 @@ static void draw_godrays(void* scene) {
     godrays_draw_fullscreen();
 
     if (g_godraysDebug == 0) {
-        // First produce a softly resolved illumination field, then a much
-        // broader local baseline.  The composite keeps only illumination above
-        // that baseline, so caster silhouettes cannot survive as grey overlays.
+        // Pass 3: one separable depth-aware Gaussian. It exists to remove the
+        // per-pixel jitter pattern, not to reshape the volume: the result is
+        // composited as-is. (The previous pass subtracted a second, broader
+        // blur from this one and kept only the positive difference. That
+        // high-pass deleted the fog body and every shaft wider than the
+        // kernel, and left dark halos beside the narrow ones.)
         useProgram(g_godrayBlurProgram);
         location = gl::GetUniformLocation(g_godrayBlurProgram, "nwnVolume");
         if (location >= 0) gl::Uniform1i(location, 28);
-        location = gl::GetUniformLocation(g_godrayBlurProgram, "nwnSceneDepth");
+        location = gl::GetUniformLocation(g_godrayBlurProgram, "nwnLinearDepth");
         if (location >= 0) gl::Uniform1i(location, 29);
         location = gl::GetUniformLocation(g_godrayBlurProgram, "nwnTargetSize");
         if (location >= 0) gl::Uniform2f(location, (float)targetW, (float)targetH);
@@ -548,65 +788,62 @@ static void draw_godrays(void* scene) {
             gl::GetUniformLocation(g_godrayBlurProgram, "nwnAxis");
         const GLint sigmaLocation =
             gl::GetUniformLocation(g_godrayBlurProgram, "nwnSigma");
+        if (sigmaLocation >= 0) gl::Uniform1f(sigmaLocation, 2.5f);
         gl::ActiveTexture(GL_TEXTURE0 + 29);
-        gl::BindTexture(GL_TEXTURE_2D, g_sceneDepthTex);
-
-        // Fine resolve: enough to remove quarter-resolution stair steps while
-        // retaining coherent bands of illumination.
-        gl::FramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D,
-                                 g_godrayMaskTexture, 0);
+        gl::BindTexture(GL_TEXTURE_2D, g_godrayMaskTexture);
         gl::ActiveTexture(GL_TEXTURE0 + 28);
-        gl::BindTexture(GL_TEXTURE_2D, g_godrayScatterTexture);
-        // Keep the blur footprint in SCREEN pixels. A one-target-pixel radius
-        // made Full four times sharper than Quarter and exposed ray steps.
-        const float screenScale = 4.0f / (float)divisor;
-        if (axisLocation >= 0) gl::Uniform2f(axisLocation, screenScale, 0.0f);
-        if (sigmaLocation >= 0) gl::Uniform1f(sigmaLocation, 2.6f);
-        godrays_draw_fullscreen();
 
         gl::FramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D,
                                  g_godrayFilteredTexture, 0);
-        gl::BindTexture(GL_TEXTURE_2D, g_godrayMaskTexture);
-        if (axisLocation >= 0) gl::Uniform2f(axisLocation, 0.0f, screenScale);
-        godrays_draw_fullscreen();
-
-        // Broad resolve used only as the local daylight baseline.
-        gl::FramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D,
-                                 g_godrayMaskTexture, 0);
-        gl::BindTexture(GL_TEXTURE_2D, g_godrayFilteredTexture);
-        if (axisLocation >= 0) gl::Uniform2f(axisLocation, screenScale, 0.0f);
-        if (sigmaLocation >= 0) gl::Uniform1f(sigmaLocation, 5.0f);
+        gl::BindTexture(GL_TEXTURE_2D, g_godrayScatterTexture);
+        if (axisLocation >= 0) gl::Uniform2f(axisLocation, 1.0f, 0.0f);
         godrays_draw_fullscreen();
 
         gl::FramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D,
                                  g_godrayScatterTexture, 0);
-        gl::BindTexture(GL_TEXTURE_2D, g_godrayMaskTexture);
-        if (axisLocation >= 0) gl::Uniform2f(axisLocation, 0.0f, screenScale);
+        gl::BindTexture(GL_TEXTURE_2D, g_godrayFilteredTexture);
+        if (axisLocation >= 0) gl::Uniform2f(axisLocation, 0.0f, 1.0f);
         godrays_draw_fullscreen();
     }
 
+    // Pass 4: depth-aware upsample into the scene.
     gl::BindFramebuffer(GL_FRAMEBUFFER, (GLuint)state.framebuffer);
     gl::Viewport(state.viewport[0], state.viewport[1], state.viewport[2], state.viewport[3]);
-    gl::ActiveTexture(GL_TEXTURE0 + 28);
-    gl::BindTexture(GL_TEXTURE_2D, g_godraysDebug == 0 ?
-                    g_godrayFilteredTexture : g_godrayScatterTexture);
+    gl::ActiveTexture(GL_TEXTURE0 + 30);
+    gl::BindTexture(GL_TEXTURE_2D, g_sceneDepthTex);
     gl::ActiveTexture(GL_TEXTURE0 + 29);
+    gl::BindTexture(GL_TEXTURE_2D, g_godrayMaskTexture);
+    gl::ActiveTexture(GL_TEXTURE0 + 28);
     gl::BindTexture(GL_TEXTURE_2D, g_godrayScatterTexture);
     useProgram(g_godrayCompositeProgram);
-    location = gl::GetUniformLocation(g_godrayCompositeProgram, "nwnGodrayFine");
+    location = gl::GetUniformLocation(g_godrayCompositeProgram, "nwnVolume");
     if (location >= 0) gl::Uniform1i(location, 28);
-    location = gl::GetUniformLocation(g_godrayCompositeProgram, "nwnGodrayBase");
+    location = gl::GetUniformLocation(g_godrayCompositeProgram, "nwnLinearDepth");
     if (location >= 0) gl::Uniform1i(location, 29);
+    location = gl::GetUniformLocation(g_godrayCompositeProgram, "nwnSceneDepth");
+    if (location >= 0) gl::Uniform1i(location, 30);
     location = gl::GetUniformLocation(g_godrayCompositeProgram, "nwnDebug");
     if (location >= 0) gl::Uniform1i(location, g_godraysDebug);
     location = gl::GetUniformLocation(g_godrayCompositeProgram, "nwnScreenSize");
     if (location >= 0) gl::Uniform2f(location, (float)state.viewport[2], (float)state.viewport[3]);
+    location = gl::GetUniformLocation(g_godrayCompositeProgram, "nwnScreenOrigin");
+    if (location >= 0) gl::Uniform2f(location, (float)state.viewport[0], (float)state.viewport[1]);
+    location = gl::GetUniformLocation(g_godrayCompositeProgram, "nwnLowSize");
+    if (location >= 0) gl::Uniform2f(location, (float)targetW, (float)targetH);
+    location = gl::GetUniformLocation(g_godrayCompositeProgram, "nwnCameraVPInv");
+    if (location >= 0) gl::UniformMatrix4fv(location, 1, GL_FALSE,
+                                             g_shadowFrameContext.viewProjectionInverse);
+    location = gl::GetUniformLocation(g_godrayCompositeProgram, "nwnEye");
+    if (location >= 0) gl::Uniform4f(location, g_shadowFrameContext.eye.x,
+                                     g_shadowFrameContext.eye.y,
+                                     g_shadowFrameContext.eye.z, 1.0f);
     gl::Enable(GL_BLEND);
     gl::BlendEquationSeparate(GL_FUNC_ADD, GL_FUNC_ADD);
     // Normal mode implements the volume equation in fixed-function blending:
     //   result = in-scattering + scene * transmittance
-    // Debug modes replace RGB so their channels cannot saturate against the
-    // underlying scene. Framebuffer alpha belongs to NWN in both cases.
+    // with the transmittance carried in the fragment's alpha. Debug modes
+    // replace RGB so their channels cannot saturate against the underlying
+    // scene. Framebuffer alpha belongs to NWN in both cases.
     if (g_godraysDebug == 0)
         gl::BlendFuncSeparate(GL_ONE, GL_SRC_ALPHA, GL_ZERO, GL_ONE);
     else
@@ -614,15 +851,26 @@ static void draw_godrays(void* scene) {
     gl::ColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_FALSE);
     godrays_draw_fullscreen();
 
+    if (lampCount == 0) g_godraysLampsDrawn = 0;
+    if (g_godraysDebug != 0) g_godraysStatus = "drawing (debug view)";
+    else if (shaftsOn) g_godraysStatus = "drawing fog and sun shafts";
+    else if (shaftsOffReason && std::strcmp(shaftsOffReason, "area has no sun/moon shadows") == 0)
+        g_godraysStatus = "drawing fog only (area has no sun/moon shadows)";
+    else if (shaftsOffReason && std::strcmp(shaftsOffReason, "no sun/moon direction") == 0)
+        g_godraysStatus = "drawing fog only (no sun/moon direction)";
+    else g_godraysStatus = "drawing fog only (sun shadow maps unavailable)";
     // Log transitions including the return to normal mode.  This is bounded
     // and leaves mode 0 diagnosable without turning on a full debug view.
     static int lastMode = -1;
     if (lastMode != g_godraysDebug) {
         lastMode = g_godraysDebug;
-        fprintf(stderr, "[shadowmap][godrays] draw mode=%d target=%dx%d sunUv=(%.3f,%.3f) projected=(%.3f,%.3f) strength=%.2f fog=%s %.1f..%.1f color=%s\n",
-                g_godraysDebug, targetW, targetH, sunU, sunV,
-                projectedSunU, projectedSunV, g_godraysStrength,
+        fprintf(stderr, "[shadowmap][godrays] draw mode=%d target=%dx%d projectedSun=(%.3f,%.3f) strength=%.2f g=%.2f density=%.2f falloff=%.3f base=%.1f ambient=%.2f fade=%.2f march=%.1f fog=%s %.1f..%.1f color=%s\n",
+                g_godraysDebug, targetW, targetH,
+                projectedSunU, projectedSunV, fogShafts,
+                fogAnisotropy, fogDensity,
+                fogHeightFalloff, fogHeightBase, fogBrightness,
+                policyFade, marchFar,
                 authoredFog ? "area" : "clear", g_fogStartLive, g_fogEndLive,
-                g_haveEngineFogColor ? "area" : "fallback");
+                g_haveEngineFogColor ? "area" : "sun-derived");
     }
 }

@@ -27,6 +27,7 @@ SOURCES = [
     "weather_particles.inc",
     "shadow_fullscreen_receiver.inc",
     "godrays_runtime.inc",
+    "shadow_heat_haze.inc",
     "shadow_overlay_runtime.inc",
     "shadow_shader_interposition.inc",
     "nwn_oit.cpp",

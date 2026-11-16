@@ -78,7 +78,7 @@ struct SettingRef { const char* key; float* f; int* i; bool* b; };
 // ONE number, used by every caller and by the adders' bound. Three call sites
 // each hard-coded 32 while the list grew to 35, and the three settings past the
 // end were dropped in silence.
-static constexpr unsigned kSettingsMax = 64;
+static constexpr unsigned kSettingsMax = 128;
 
 // Bump when a DEFAULT changes, so an .ini written by an older build cannot
 // pin the retuned values. Without this, anyone who ran a previous build keeps
@@ -87,7 +87,7 @@ static constexpr unsigned kSettingsMax = 64;
 // too. On an older file the keys listed in settings_retuned() are ignored and
 // the file is rewritten at the new version; everything else the user set is
 // preserved.
-static constexpr int kSettingsVersion = 16;
+static constexpr int kSettingsVersion = 17;
 
 // Keys whose defaults changed in a local-light tuning pass.  Version 5 also
 // makes these controls live on the cube receiver; reset the old 1-unit
@@ -108,6 +108,13 @@ static bool settings_retuned(const char* key) {
     if (std::strcmp(key, "local_contact_sep") == 0) return true;
     if (std::strcmp(key, "local_backface_cast") == 0) return true;
     if (std::strcmp(key, "local_ground_only") == 0) return true;
+    // Version 17 (2026-11-10): the volumetric pass was rewritten as a
+    // physically based march. "Sun scattering" and "Atmospheric density" kept
+    // their keys but changed meaning and scale, so an older saved value would
+    // pin a look tuned for a different equation.
+    static const char* kV17[] = { "godrays_strength", "godrays_samples",
+                                  "atmosphere_density" };
+    for (const char* k : kV17) if (std::strcmp(k, key) == 0) return true;
     static const char* kV10[] = { "godrays_debug" };
     for (const char* k : kV10) if (std::strcmp(k, key) == 0) return true;
     static const char* kV9[] = { "godrays_enabled", "godrays_strength", "godrays_samples" };
@@ -188,12 +195,25 @@ static unsigned settings_table(SettingRef* out, unsigned max) {
     addf("shader_rain_wind_x", &g_shaderRainWindX);
     addf("shader_rain_wind_y", &g_shaderRainWindY);
     addf("shader_rain_splashes", &g_shaderRainSplashes);
+    addb("heat_enabled",       &g_heatEnabled);
+    addf("heat_strength",      &g_heatStrength);
+    addf("heat_scale",         &g_heatScale);
+    addf("heat_speed",         &g_heatSpeed);
+    addf("heat_start",         &g_heatStart);
+    addf("heat_base",          &g_heatBase);
+    addf("heat_falloff",       &g_heatFalloff);
+    addf("heat_fire",          &g_heatFire);
     if constexpr (kGodraysFeatureAvailable) {
         addb("godrays_enabled",    &g_godraysEnabled);
         addf("godrays_strength",   &g_godraysStrength);
         addi("godrays_samples",    &g_godraysSamples);
         addi("godrays_resolution", &g_godraysResolution);
         addf("atmosphere_density", &g_atmosphereDensity);
+        addf("godrays_anisotropy", &g_godraysAnisotropy);
+        addf("fog_height_falloff", &g_godraysHeightFalloff);
+        addf("fog_height_base",    &g_godraysHeightBase);
+        addf("fog_ambient",        &g_godraysAmbient);
+        addf("fog_lamp_glow",      &g_godraysLampGlow);
     }
 
 #if !NWN_SHIP
@@ -293,11 +313,24 @@ static void settings_reset_defaults() {
     g_shaderRainWindX          = 0.0f;
     g_shaderRainWindY          = 0.0f;
     g_shaderRainSplashes       = 1.0f;
+    g_heatEnabled              = false;
+    g_heatStrength             = 1.0f;
+    g_heatScale                = 1.0f;
+    g_heatSpeed                = 1.0f;
+    g_heatStart                = 8.0f;
+    g_heatBase                 = 0.0f;
+    g_heatFalloff              = 0.15f;
+    g_heatFire                 = 1.0f;
     g_godraysEnabled           = false;
-    g_godraysStrength          = 0.55f;
-    g_godraysSamples           = 24;
+    g_godraysStrength          = 1.5f;
+    g_godraysSamples           = 32;
     g_godraysResolution        = 0;
     g_atmosphereDensity        = 0.32f;
+    g_godraysAnisotropy        = 0.60f;
+    g_godraysHeightFalloff     = 0.06f;
+    g_godraysHeightBase        = 0.0f;
+    g_godraysAmbient           = 0.60f;
+    g_godraysLampGlow          = 1.0f;
     g_godraysDebug             = 0;
     g_localLightStrength       = 0.77f;
     g_localLightBias           = 0.0f;

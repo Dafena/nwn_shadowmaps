@@ -149,7 +149,9 @@ static void drawing_set_token_detour(void* table,int number,const void* text) {
     // The original setter always runs, including for unrecognized/invalid tokens.
     // Use a real trampoline only; never unhook/re-hook a potentially concurrent call.
     g_drawingSetToken(table,number,text);
-    if(number!=drawing_probe::token_number || !text) return;
+    // Script control of rain/fog/heat shares this hook (shadow_script_env.inc).
+    if(number==script_env::kTokenNumber){ script_env::receive(text); return; }
+    if(!drawing_probe_enabled() || number!=drawing_probe::token_number || !text) return;
     // CExoString's pointer/uint32 layout is documented in Anvil's native binding.
     const char* value=nullptr; uint32_t size=0;
     std::memcpy(&value,text,sizeof(value));
@@ -296,9 +298,16 @@ static void drawing_probe_upload_preview() {
     }
 }
 
+// One CTlkTable::SetCustomToken hook serves both the opt-in drawing probe and
+// script control (on unless NWN_SHADOWMAP_SCRIPT_CONTROL=0).
 static void install_drawing_probe() {
-    if(!drawing_probe_enabled() || !eng::DrawingSetCustomToken) return;
-    nwn_drawing_probe_install_texture_observer();
+    const bool probe=drawing_probe_enabled();
+    if((!probe && !script_env::enabled()) || !eng::DrawingSetCustomToken) {
+        if(script_env::enabled() && !eng::DrawingSetCustomToken)
+            std::fprintf(stderr,"[shadowmap][script] unavailable: SetCustomToken symbol not resolved\n");
+        return;
+    }
+    if(probe) nwn_drawing_probe_install_texture_observer();
     auto hook=subhook_new(eng::DrawingSetCustomToken,
         reinterpret_cast<void*>(drawing_set_token_detour),SUBHOOK_64BIT_OFFSET);
     void* trampoline=hook?subhook_get_trampoline(hook):nullptr;
@@ -311,7 +320,10 @@ static void install_drawing_probe() {
 #endif
     if(!hook || !trampoline) {
         if(hook)subhook_free(hook);
-        std::fprintf(stderr,"[drawing-probe] unavailable: no safe token trampoline\n");return;
+        std::fprintf(stderr,"[drawing-probe] unavailable: no safe token trampoline\n");
+        if(script_env::enabled())
+            std::fprintf(stderr,"[shadowmap][script] unavailable: no safe token trampoline\n");
+        return;
     }
     g_drawingSetToken=reinterpret_cast<DrawingSetToken>(trampoline);
     if(subhook_install(hook)!=0){
@@ -321,5 +333,7 @@ static void install_drawing_probe() {
         subhook_free(hook);g_drawingSetToken=nullptr;return;
     }
     g_drawingTokenHook=hook;
-    std::fprintf(stderr,"[drawing-probe] token observation installed; diagnostic only\n");
+    if(probe) std::fprintf(stderr,"[drawing-probe] token observation installed; diagnostic only\n");
+    if(script_env::enabled())
+        std::fprintf(stderr,"[shadowmap][script] listening on custom token %d\n",script_env::kTokenNumber);
 }

@@ -55,6 +55,11 @@ static bool g_shaderRainHideNative=false;
 static int g_shaderRainBudget=256;
 static float g_shaderRainRadius=8,g_shaderRainWindX=0,g_shaderRainWindY=0,g_shaderRainSplashes=1;
 static bool g_haveEngineFog=false;
+// No receiver in this fixture: the private pass must fall back to the
+// framebuffer depth test alone when there is no current scene-depth copy.
+static GLuint g_sceneDepthTex=0;
+static int g_sceneDepthW=0,g_sceneDepthH=0;
+static unsigned g_sceneDepthSerial=~0u;
 static float g_fogStartEngine=0,g_fogEndEngine=0;
 static int areaToken=1,sceneToken=2;
 static void* g_areaScene=&sceneToken;
@@ -84,6 +89,11 @@ static Weather g;
 static double fakeTime=100;
 static double now_seconds() { return fakeTime; }
 const char* shadow_getenv(const char* name) { return getenv(name); }
+namespace script_env {
+enum Id { RainOn, RainWindX, RainWindY, RainSplashes, RainRadius };
+static float f(Id,float user){return user;}
+static bool b(Id,bool user){return user;}
+}
 #include "../weather_particles.inc"
 static void require(bool value,const char* name) {
     if(!value) { fprintf(stderr,"FAIL: %s (GL error 0x%x)\n",name,glGetError()); exit(1); }

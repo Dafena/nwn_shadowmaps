@@ -34,7 +34,8 @@ static void note_material_texture(const char* name) {
 static bool suppress_native_draw(bool nativeAreaDraw) {
     const auto& w = weather_runtime::g;
     const auto& camera = g_shadowFrameContext;
-    if (!nativeAreaDraw || !g_shaderRainEnabled || !g_shaderRainHideNative ||
+    if (!nativeAreaDraw || !script_env::b(script_env::RainOn,g_shaderRainEnabled) ||
+        !g_shaderRainHideNative ||
         !boundNativeRainTexture || failed || !program || !camera.valid ||
         camera.scene != g_areaScene || w.observedScene != g_areaScene ||
         clockArea != w.weatherArea ||
@@ -86,6 +87,10 @@ static IndexedGetBoolean getBooleanIndexed=nullptr;
 static IndexedColorMask colorMaskIndexed=nullptr;
 static IndexedBlend blendIndexed=nullptr;
 static IndexedEquation equationIndexed=nullptr;
+using DepthRangeFn = void (*)(double,double);
+static DepthRangeFn depthRangeSet=nullptr;
+using GetFloatFn = void (*)(GLenum,GLfloat*);
+static GetFloatFn depthRangeGet=nullptr;
 
 static const char* kRainVertexShader =
     "#version 330 core\n"
@@ -95,6 +100,10 @@ static const char* kRainVertexShader =
     "uniform vec4 lightFalloff; uniform int gridSide, splashPass, lightCount;\n"
     "uniform float cellSize, splashStrength, heightStep;\n"
     "out vec2 uv; out vec3 tint; out float opacity; flat out int kind;\n"
+    // x = splash life 0..1, y = per-drop seed. Constant across a quad.
+    "flat out vec2 fx;\n"
+    // Eye-space distance of this vertex, for the explicit occlusion test.
+    "out float viewDepth;\n"
     "float hash(vec2 p) { vec3 q=fract(vec3(p.xyx)*0.1031);"
     " q+=dot(q,q.yzx+33.33); return fract((q.x+q.y)*q.z); }\n"
     "bool heightAt(vec2 xy,out float z) {\n"
@@ -107,7 +116,7 @@ static const char* kRainVertexShader =
     " const vec2 corners[6]=vec2[6](vec2(-1,-1),vec2(1,-1),vec2(1,1),"
     " vec2(-1,-1),vec2(1,1),vec2(-1,1));\n"
     " int id=gl_VertexID/6; uv=corners[gl_VertexID%6]; kind=splashPass;\n"
-    " opacity=0; tint=vec3(0); gl_Position=vec4(2,2,2,1);\n"
+    " opacity=0; tint=vec3(0); fx=vec2(0); viewDepth=0; gl_Position=vec4(2,2,2,1);\n"
     " vec2 cell=floor(eyeRadius.xy/cellSize)+vec2(id%gridSide,id/gridSide)-float(gridSide/2);\n"
     " float seed=hash(cell); if(hash(cell+17.1)>windTimeDensity.w) return;\n"
     " vec2 target=(cell+vec2(hash(cell+3.7),hash(cell+9.2)))*cellSize;\n"
@@ -143,16 +152,34 @@ static const char* kRainVertexShader =
     " !heightAt(impact.xy+vec2(0,heightStep),hy)) return;\n"
     "  if(abs(hx-iz)>heightStep*2 || abs(hy-iz)>heightStep*2) return;\n"
     "  vec3 normal=normalize(vec3((iz-hx)/heightStep,(iz-hy)/heightStep,1));\n"
-    "  center=impact+normal*(life*1.5-2.5*life*life);\n"
-    "  axis=normal; width=0.04+life*0.32; halfLength=width;\n"
-    "  opacity=splashStrength*0.32*(1-life/0.28);\n"
+    // One impact is drawn as two quads that share this simulated hit:
+    //   pass 1 -- a quad lying IN the surface: contact flash and the
+    //             expanding capillary ring, the part a top-down camera sees;
+    //   pass 2 -- an upright quad standing on the surface: the crown sheet,
+    //             the rebound jet and the ballistic secondary droplets.
+    // Both are animated per fragment from fx, so the quads themselves never
+    // move or scale -- only what is drawn inside them does. Sizes are larger
+    // than a real 1-2 cm splash on purpose: at NWN's camera distance a pixel
+    // covers about that much, and a true-scale splash would not rasterise.
+    "  float energy=0.75+0.5*hash(cell+5.3);\n"
+    "  fx=vec2(life/0.28,seed); axis=normal; center=impact;\n"
+    "  if(splashPass==1) { width=0.16*energy; halfLength=width;\n"
+    "   opacity=splashStrength*0.45; }\n"
+    "  else { width=0.144*energy; halfLength=width;\n"
+    "   center=impact+normal*halfLength; opacity=splashStrength*0.55; }\n"
     " }\n"
     " float distanceToEye=length(center.xy-eyeRadius.xy);\n"
     " opacity*=1-smoothstep(eyeRadius.w*0.75,eyeRadius.w,distanceToEye);\n"
-    " vec3 right=cross(axis,eyeRadius.xyz-center);\n"
+    " vec3 toEye=eyeRadius.xyz-center;\n"
+    " vec3 right=cross(axis,toEye);\n"
     " if(length(right)<0.0001) right=cameraInv[0].xyz; right=normalize(right);\n"
-    " if(splashPass==1) axis=normalize(cross(eyeRadius.xyz-center,right));\n"
-    " vec3 pos=center+right*uv.x*width+axis*uv.y*halfLength;\n"
+    // Streaks and the upright splash quad extend along their axis (velocity /
+    // surface normal). The ring quad instead spans the surface plane, and is
+    // nudged toward the eye so it does not z-fight the ground it lies on.
+    " vec3 up=axis;\n"
+    " if(splashPass==1) up=normalize(cross(right,axis));\n"
+    " vec3 pos=center+right*uv.x*width+up*uv.y*halfLength;\n"
+    " if(splashPass==1) pos+=normalize(toEye)*0.03;\n"
     " vec3 illumination=max(areaLight.rgb,vec3(0.035));\n"
     " for(int i=0;i<128;++i) { if(i>=lightCount) break;\n"
     "  vec4 lp=texelFetch(lightData,ivec2(i*2,0),0);\n"
@@ -161,17 +188,72 @@ static const char* kRainVertexShader =
     "  illumination+=lc*fall*fall; }\n"
     " tint=min(illumination,vec3(2))*vec3(0.68,0.76,0.82);\n"
     " if(lightFalloff.w>0.5) opacity*=1-smoothstep(lightFalloff.x,lightFalloff.y,length(center-eyeRadius.xyz));\n"
-    " gl_Position=cameraVP*vec4(pos,1);\n"
+    " gl_Position=cameraVP*vec4(pos,1); viewDepth=gl_Position.w;\n"
     "}\n";
 static const char* kRainFragmentShader =
     "#version 330 core\n"
     "in vec2 uv; in vec3 tint; in float opacity; flat in int kind;\n"
+    "flat in vec2 fx; in float viewDepth;\n"
+    "uniform sampler2D sceneDepth; uniform vec4 sceneDepthInfo;\n"
+    "uniform int sceneDepthOn;\n"
     "out vec4 nwnFragColor;\n"
+    "float hash1(float n) { return fract(sin(n*91.3458)*47453.5453); }\n"
     "void main() {\n"
-    " float shape;\n"
+    // Explicit occlusion against the injector's own copy of the completed
+    // scene depth. The fixed-function depth test stays on as well, but it
+    // depends on state this pass inherits from the engine (depth range, the
+    // bound framebuffer's depth attachment, multisample resolve). This test
+    // depends on none of it: sceneDepthInfo.xy is the viewport origin and .zw
+    // are the two projection terms that turn window depth back into distance.
+    " if(sceneDepthOn!=0) {\n"
+    "  float d=texelFetch(sceneDepth,ivec2(gl_FragCoord.xy-sceneDepthInfo.xy),0).r;\n"
+    "  if(d<0.9999995) { float visible=sceneDepthInfo.w/(d*2.0-1.0+sceneDepthInfo.z);\n"
+    "   if(viewDepth>visible*1.01+0.08) discard; }\n"
+    " }\n"
+    " float shape=0.0; float t=fx.x;\n"
     " if(kind==0) shape=exp(-uv.x*uv.x*5.0)*(1-smoothstep(0.55,1.0,abs(uv.y)));\n"
-    " else { float r=length(uv); shape=(1-smoothstep(0.18,1.0,r))*"
-    " (0.55+0.45*cos(atan(uv.y,uv.x)*5)); }\n"
+    " else if(kind==1) {\n"
+    // Surface view. The wave front decelerates (~sqrt(t)) and thins as it
+    // spreads; a weaker second ripple follows it; the first instants carry a
+    // small bright contact flash where the drop flattens.
+    "  float r=length(uv); float front=0.12+0.80*sqrt(t);\n"
+    "  float thick=mix(0.16,0.08,t);\n"
+    "  float ring=1.0-smoothstep(0.0,thick,abs(r-front));\n"
+    "  float inner=(1.0-smoothstep(0.0,thick*0.8,abs(r-front*0.55)))*"
+    "smoothstep(0.25,0.5,t)*0.45;\n"
+    "  float flash=(1.0-smoothstep(0.0,0.26,r))*(1.0-smoothstep(0.0,0.18,t))*1.4;\n"
+    "  shape=(ring+inner)*pow(1.0-t,1.5)+flash;\n"
+    " } else {\n"
+    // Side view: x in -1..1 across the impact, y in 0..2 above the surface.
+    "  vec2 p=vec2(uv.x,uv.y+1.0);\n"
+    // Crown: a bowl-shaped sheet thrown outward, lowest at the centre and
+    // tallest at its beaded rim. It rises and collapses in the first ~55%.
+    "  float ct=clamp(t/0.55,0.0,1.0); float rc=0.20+0.55*sqrt(ct);\n"
+    "  float hc=0.60*sin(3.14159*ct); float ax=abs(p.x)/rc;\n"
+    "  float beads=0.75+0.25*cos(p.x*(22.0+fx.y*12.0));\n"
+    "  float crown=(1.0-smoothstep(0.04,0.13,abs(p.y-hc*ax*ax*ax)))*"
+    "(1.0-smoothstep(0.90,1.05,ax))*beads*(1.0-ct);\n"
+    // Rebound (Worthington) jet: after the crater closes a column rises from
+    // the centre, necks, and sheds a bead from its tip. Its height varies
+    // per drop, so not every impact throws an obvious one.
+    "  float jt=clamp((t-0.30)/0.70,0.0,1.0); float on=step(0.0001,jt);\n"
+    "  float hj=(0.35+0.75*fx.y)*sin(3.14159*jt);\n"
+    "  float column=exp(-p.x*p.x/(0.010+0.020*(1.0-jt)))*"
+    "(1.0-smoothstep(hj-0.08,hj,p.y));\n"
+    "  float bead=1.0-smoothstep(0.07,0.13,length(p-vec2(0.0,hj+0.10)));\n"
+    "  float jet=(column*0.8+bead)*on*(1.0-jt*jt);\n"
+    // Secondary droplets: torn from the crown rim and thrown on ballistic
+    // arcs with their own speed, direction and flight time, shrinking as
+    // they go and gone when they land.
+    "  float drops=0.0;\n"
+    "  for(int i=0;i<5;++i) { float k=float(i)+fx.y*37.0;\n"
+    "   float dt=t/(0.65+0.35*hash1(k+1.3)); if(dt>=1.0) continue;\n"
+    "   float vx=(hash1(k+2.7)*2.0-1.0)*0.85; float peak=0.6+0.9*hash1(k+4.1);\n"
+    "   vec2 c=vec2(vx*dt,4.0*peak*dt*(1.0-dt)+0.06);\n"
+    "   float rad=0.13*(1.0-0.45*dt);\n"
+    "   drops+=(1.0-smoothstep(rad*0.55,rad,length(p-c)))*(1.0-dt*dt); }\n"
+    "  shape=crown*0.9+jet+min(drops,1.0);\n"
+    " }\n"
     " float a=clamp(opacity*shape,0,0.8); if(a<0.002) discard;\n"
     " nwnFragColor=vec4(tint*a,a);\n"
     "}\n";
@@ -228,6 +310,10 @@ static bool ensure_program() {
     // Optional GL4/ARB_draw_buffers_blend: touch target zero only when available.
     blendIndexed=(IndexedBlend)dlsym(RTLD_NEXT,"glBlendFuncSeparatei");
     equationIndexed=(IndexedEquation)dlsym(RTLD_NEXT,"glBlendEquationSeparatei");
+    // Optional: without it the pass simply inherits the engine's depth range.
+    depthRangeSet=(DepthRangeFn)dlsym(RTLD_NEXT,"glDepthRange");
+    depthRangeGet=(GetFloatFn)dlsym(RTLD_NEXT,"glGetFloatv");
+    if(!depthRangeGet) depthRangeSet=nullptr;   // never set what cannot be restored
     GLint major=0; gl::GetIntegerv(0x821B /* GL_MAJOR_VERSION */,&major);
     bool indexedBlending=major>=4;
     if(!indexedBlending) {
@@ -293,7 +379,8 @@ static bool ensure_program() {
 struct StateGuard {
     GLuint trackedProgram=g_curProgram;
     GLint active=0, oldProgram=0, oldVao=0, depthFunc=0;
-    GLint blend[6]={}, textures[2]={}, samplers[2]={};
+    GLint blend[6]={}, textures[3]={}, samplers[3]={};
+    GLfloat depthRange[2]={0,1};
     GLboolean depthMask=0, colorMask[4]={}, blendEnabled=0;
     static constexpr GLenum caps[18]={
         GL_DEPTH_TEST,GL_CULL_FACE,GL_SCISSOR_TEST,
@@ -314,15 +401,17 @@ struct StateGuard {
             GL_BLEND_SRC_ALPHA,GL_BLEND_DST_ALPHA,GL_BLEND_EQUATION_RGB,GL_BLEND_EQUATION_ALPHA};
         for(int i=0;i<6;++i) gl::GetIntegerv(queries[i],&blend[i]);
         for(int i=0;i<18;++i) enabled[i]=gl::IsEnabled(caps[i]);
-        for(int i=0;i<2;++i) {
+        for(int i=0;i<3;++i) {
             gl::ActiveTexture(GL_TEXTURE0+i);
             gl::GetIntegerv(GL_TEXTURE_BINDING_2D,&textures[i]);
             gl::GetIntegerv(0x8919,&samplers[i]);
         }
         gl::ActiveTexture((GLenum)active);
+        if(depthRangeSet && depthRangeGet) depthRangeGet(0x0B70 /* GL_DEPTH_RANGE */,depthRange);
     }
     ~StateGuard() {
-        for(int i=0;i<2;++i) {
+        if(depthRangeSet && depthRangeGet) depthRangeSet(depthRange[0],depthRange[1]);
+        for(int i=0;i<3;++i) {
             gl::ActiveTexture(GL_TEXTURE0+i);
             gl::BindTexture(GL_TEXTURE_2D,(GLuint)textures[i]);
             bindSampler(i,(GLuint)samplers[i]);
@@ -348,7 +437,7 @@ struct StateGuard {
 static void draw(void* scene) {
     auto& w=weather_runtime::g;
     const auto& camera=g_shadowFrameContext;
-    if(!g_shaderRainEnabled) { status="off"; return; }
+    if(!script_env::b(script_env::RainOn,g_shaderRainEnabled)) { status="off"; return; }
     if(!camera.valid || scene!=g_areaScene || camera.scene!=scene ||
        w.observedScene!=scene) { status="waiting for selected area"; return; }
     if(!w.weatherObserved || !w.areaFlagsKnown || w.areaInterior ||
@@ -388,7 +477,8 @@ static void draw(void* scene) {
     }
     lastSerial=camera.serial;
     if(clockArea!=w.weatherArea) { clockArea=w.weatherArea; clockStart=now_seconds(); }
-    const float radius=bounded(g_shaderRainRadius,8,64,28);
+    const float radius=bounded(script_env::f(script_env::RainRadius,g_shaderRainRadius),8,64,28);
+    const float splashes=bounded(script_env::f(script_env::RainSplashes,g_shaderRainSplashes),0,2,1);
     const int budget=std::max(kNwnShaderRainMinBudget,std::min(g_shaderRainBudget,kNwnShaderRainMaxBudget));
     // Whole square grids avoid an uneven truncated row. Requested budget is a cap.
     const int side=(int)std::floor(std::sqrt((float)budget));
@@ -402,17 +492,30 @@ static void draw(void* scene) {
     gl::BindTexture(GL_TEXTURE_2D,lightsReady?w.snowLightDataTexture:0); bindSampler(1,lightSampler);
     auto loc=[](const char* name) { return gl::GetUniformLocation(program,name); };
     gl::Uniform1i(loc("roofDepth"),0); gl::Uniform1i(loc("lightData"),1);
+    // Completed scene depth, when the receiver copied it for THIS frame at
+    // this viewport size and the camera is an ordinary perspective one.
+    const bool sceneDepthReady=g_sceneDepthTex && g_sceneDepthSerial==camera.serial &&
+        g_sceneDepthW==viewport[2] && g_sceneDepthH==viewport[3] &&
+        camera.projection[11]==-1.0f && camera.projection[15]==0.0f &&
+        std::isfinite(camera.projection[10]) && std::isfinite(camera.projection[14]) &&
+        camera.projection[14]<0.0f;
+    gl::ActiveTexture(GL_TEXTURE0+2);
+    gl::BindTexture(GL_TEXTURE_2D,sceneDepthReady?g_sceneDepthTex:0); bindSampler(2,depthSampler);
+    gl::Uniform1i(loc("sceneDepth"),2); gl::Uniform1i(loc("sceneDepthOn"),sceneDepthReady?1:0);
+    gl::Uniform4f(loc("sceneDepthInfo"),(float)viewport[0],(float)viewport[1],
+        camera.projection[10],camera.projection[14]);
     gl::Uniform1i(loc("lightCount"),lightsReady?w.snowLightDataCount:0);
     gl::Uniform1i(loc("gridSide"),side); gl::Uniform1f(loc("cellSize"),spacing);
     gl::Uniform1f(loc("heightStep"),std::max(0.15f,2*w.precipitationOcclusionExtent/w.precipitationOcclusionSize));
-    gl::Uniform1f(loc("splashStrength"),bounded(g_shaderRainSplashes,0,2,1));
+    gl::Uniform1f(loc("splashStrength"),splashes);
     gl::UniformMatrix4fv(loc("cameraVP"),1,GL_FALSE,vp);
     gl::UniformMatrix4fv(loc("cameraInv"),1,GL_FALSE,camera.viewInverse);
     gl::UniformMatrix4fv(loc("roofVP"),1,GL_FALSE,w.precipitationOcclusionVP);
     gl::UniformMatrix4fv(loc("roofInv"),1,GL_FALSE,inverse);
     gl::Uniform4f(loc("eyeRadius"),camera.eye.x,camera.eye.y,camera.eye.z,radius);
-    gl::Uniform4f(loc("windTimeDensity"),bounded(g_shaderRainWindX,-8,8,0),
-        bounded(g_shaderRainWindY,-8,8,0),(float)(now_seconds()-clockStart),
+    gl::Uniform4f(loc("windTimeDensity"),
+        bounded(script_env::f(script_env::RainWindX,g_shaderRainWindX),-8,8,0),
+        bounded(script_env::f(script_env::RainWindY,g_shaderRainWindY),-8,8,0),(float)(now_seconds()-clockStart),
         bounded(w.weatherDensity,0,1,0));
     float illumination[3]={0,0,0};
     for(int i=0;i<3;++i) {
@@ -425,6 +528,10 @@ static void draw(void* scene) {
     gl::Uniform4f(loc("lightFalloff"),fog?g_fogStartEngine:0,fog?g_fogEndEngine:1,0,fog?1:0);
     for(GLenum cap:StateGuard::caps) gl::Disable(cap);
     gl::Enable(GL_DEPTH_TEST); gl::DepthFunc(GL_LEQUAL); gl::DepthMask(GL_FALSE);
+    // The engine may leave a narrowed depth range from its last draw. Rain
+    // drawn through it lands at the wrong depth and passes the test against
+    // every mesh, so the pass states the full range itself.
+    if(depthRangeSet) depthRangeSet(0.0,1.0);
     enableIndexed(GL_BLEND,0);
     // Preserve native framebuffer alpha; RGB is premultiplied.
     if(blendIndexed && equationIndexed) {
@@ -435,8 +542,9 @@ static void draw(void* scene) {
         gl::BlendFuncSeparate(GL_ONE,GL_ONE_MINUS_SRC_ALPHA,GL_ZERO,GL_ONE);
     }
     colorMaskIndexed(0,GL_TRUE,GL_TRUE,GL_TRUE,GL_FALSE);
-    for(int pass=0;pass<2;++pass) {
-        if(pass==1 && g_shaderRainSplashes<=0) break;
+    // Pass 0: falling streaks. Pass 1: surface ring. Pass 2: upright splash.
+    for(int pass=0;pass<3;++pass) {
+        if(pass>=1 && splashes<=0) break;
         gl::Uniform1i(loc("splashPass"),pass);
         drawArrays(0x0004 /* GL_TRIANGLES */,0,side*side*6);
     }

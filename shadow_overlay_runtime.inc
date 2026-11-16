@@ -248,10 +248,30 @@ static void draw_shadow_overlay_imgui(void* scene) {
     st.areaShadowFadeSeconds = &g_areaShadowFadeSeconds;
     st.godraysAvailable = kGodraysFeatureAvailable;
     st.godraysEnabled  = &g_godraysEnabled;
+    st.godraysStatus   = g_godraysStatus;
+    static char scriptSummary[640];
+    script_env::summary(scriptSummary, sizeof(scriptSummary));
+    st.scriptOverrides = scriptSummary;
+    st.heatEnabled  = &g_heatEnabled;
+    st.heatStrength = &g_heatStrength;
+    st.heatScale    = &g_heatScale;
+    st.heatSpeed    = &g_heatSpeed;
+    st.heatStart    = &g_heatStart;
+    st.heatBase     = &g_heatBase;
+    st.heatFalloff  = &g_heatFalloff;
+    st.heatFire     = &g_heatFire;
+    st.heatStatus   = g_heatStatus;
+    st.heatFires    = g_heatFiresDrawn;
     st.godraysStrength = &g_godraysStrength;
     st.godraysSamples  = &g_godraysSamples;
     st.godraysResolution = &g_godraysResolution;
     st.atmosphereDensity = &g_atmosphereDensity;
+    st.godraysAnisotropy = &g_godraysAnisotropy;
+    st.godraysHeightFalloff = &g_godraysHeightFalloff;
+    st.godraysHeightBase = &g_godraysHeightBase;
+    st.godraysAmbient = &g_godraysAmbient;
+    st.godraysLampGlow = &g_godraysLampGlow;
+    st.godraysLamps = g_godraysLampsDrawn;
     st.godraysDebug    = &g_godraysDebug;
     st.csmComposite  = &g_cascadeCompositeShadows;
     st.localEnabled  = &g_localLightReceiver;
@@ -844,6 +864,8 @@ static void draw_static_receiver(void* scene, bool localOnly = false) {
         depthOk = localOnly ? capture_pre_dynamic_depth(vp) : capture_scene_depth(vp);
     if (localOnly && depthOk)
         g_preDynamicDepthFrame = g_shadowFrameContext.serial;
+    if (!localOnly && depthOk)
+        g_sceneDepthSerial = g_shadowFrameContext.serial;
     const GLuint receiverDepthTex = localOnly ? g_preDynamicDepthTex : g_sceneDepthTex;
     // Same moment as the final depth grab: the engine's frame is finished and
     // our composite has not run yet. The local-only prepass deliberately skips
