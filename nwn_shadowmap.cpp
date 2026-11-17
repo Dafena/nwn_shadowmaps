@@ -1007,11 +1007,27 @@ namespace weather_particles {
 static void note_material_texture(const char* name);
 static bool suppress_native_draw(bool nativeAreaDraw);
 }
-static int      g_shaderRainBudget = 2048;
-static float    g_shaderRainRadius = 28.0f;
+// Reflection ray budget: original 10 steps, reduced 5, or minimal 3.
+static bool     g_wetFilmEnabled = true; // full detailed effect / off
+// Internal native-scene profiler; never a saved rendering preference.
+static bool     g_wetFilmProfiling = false;
+static bool     g_wetFilmCandidateProfile = false;
+static int      g_wetFilmProbeMode = 0;
+static bool     g_shadowStageSkipTags = false; // armed diagnostic only
+// Linux runtime-validated attachment lifetime; Windows retains its old path.
+#ifdef _WIN32
+static bool     g_sunTagBatchAttachments = false;
+#else
+static bool     g_sunTagBatchAttachments = true;
+#endif
+static int      g_weatherShelterSize = 0; // 0 follows sun map; explicit 4096/2048/1024
+static bool     g_rainPuddlesEnabled = true;
+static int      g_puddleReflectionQuality = 0;
+static int      g_shaderRainBudget = 4352;
+static float    g_shaderRainRadius = 40.0f;
 static float    g_shaderRainWindX = 0.0f;
 static float    g_shaderRainWindY = 0.0f;
-static float    g_shaderRainSplashes = 1.0f;
+static float    g_shaderRainSplashes = 0.250f;
 static bool     g_godraysEnabled           = false;
 static float    g_godraysStrength          = 1.5f;    // sun in-scattering
 static int      g_godraysSamples           = 32;
@@ -2278,7 +2294,9 @@ static void after_draw();
 #include "godrays_runtime.inc"
 #include "shadow_heat_haze.inc"
 #include "weather_particles.inc"
+#include "shadow_stage_profile.inc"
 #include "shadow_overlay_runtime.inc"
+#include "shadow_wet_film_profile.inc"
 #include "shadow_trace_cascade.inc"
 #include "shadow_local_lights.inc"
 
@@ -2691,6 +2709,9 @@ extern "C" void SceneRender_detour(void* self) {
 
     if (g_traceEnabled) {
         trace_scene_enter(self);
+        wet_film_profile::Scope wetFilmScope(self);
+        shadow_stage_profile::Scope stageScope(self);
+        shadow_stage_profile::Timer nativeTimer(shadow_stage_profile::Native);
         void* tramp = subhook_get_trampoline(g_hook);
         if (tramp) reinterpret_cast<eng::SceneRender_t>(tramp)(self);
         else       CALL_ORIGINAL(g_hook, eng::SceneRender, self);
@@ -2712,6 +2733,10 @@ extern "C" void SceneRender_detour(void* self) {
         // GUI element and says nothing about the frame the user is complaining
         // about. Only a call that actually drew the world may report.
         const bool mainScene = g_frameDrawCalls > 100;
+        wetFilmScope.mark_world(mainScene);
+        stageScope.mark_world(mainScene);
+        finish_sun_receiver_tag_batch();
+        nativeTimer.end();
         const bool reportFrame = mainScene && g_costFinishThisFrame;
         // MSAA state of the framebuffer we are actually drawing into. With
         // antialiasing on, the per-frame scene-depth capture is a multisample
@@ -2725,9 +2750,13 @@ extern "C" void SceneRender_detour(void* self) {
             gl::GetIntegerv(GL_VIEWPORT, g_fbViewport);
         }
         const double tRecv0 = now_seconds();
-        draw_static_receiver(self);
-        if constexpr (kGodraysFeatureAvailable)
-            draw_godrays(self);
+        { shadow_stage_profile::Timer timer(shadow_stage_profile::Receiver);
+          shadow_stage_profile::finalReceiver=true;
+          draw_static_receiver(self);
+          shadow_stage_profile::finalReceiver=false; }
+        if constexpr (kGodraysFeatureAvailable) {
+            shadow_stage_profile::Timer timer(shadow_stage_profile::Fog);
+            draw_godrays(self); }
         // After the fog, so the fog shimmers with the scene behind it.
         draw_heat_haze(self);
         // glFinish so the number is the GPU's cost, not just submission time --
@@ -4364,6 +4393,27 @@ static void shadowmap_init() {
     // AFTER the environment, so the panel's saved choices win over the
     // launcher's defaults -- see load_settings().
     weather_particles::load_environment();
+#ifndef _WIN32
+    // Internal Linux A/B override; no user preference or visual-quality change.
+    if (const char* value = shadow_getenv("NWN_SHADOW_TAG_BATCH_PROBE"))
+        g_sunTagBatchAttachments = atoi(value) != 0;
+    if (const char* value = shadow_getenv("NWN_WET_FILM_PROFILE"))
+        g_wetFilmProfiling = atoi(value) != 0;
+    if (const char* value = shadow_getenv("NWN_WET_FILM_PROFILE_CANDIDATES"))
+        g_wetFilmCandidateProfile = atoi(value) != 0;
+#endif
+    if (const char* value = shadow_getenv("NWN_WET_FILM"))
+        g_wetFilmEnabled = atoi(value) != 0;
+    else if (const char* legacy = shadow_getenv("NWN_WET_FILM_QUALITY"))
+        g_wetFilmEnabled = atoi(legacy) == 0;
+    if (const char* value = shadow_getenv("NWN_WEATHER_SHELTER_SIZE")) {
+        const int size = atoi(value);
+        g_weatherShelterSize = size == 1024 || size == 2048 || size == 4096 ? size : 0;
+    }
+    if (const char* value = shadow_getenv("NWN_RAIN_PUDDLES"))
+        g_rainPuddlesEnabled = atoi(value) != 0;
+    if (const char* value = shadow_getenv("NWN_PUDDLE_REFLECTION_QUALITY"))
+        g_puddleReflectionQuality = std::max(0, std::min(2, atoi(value)));
     load_settings();
     fprintf(stderr, "[shadowmap] active. Scene::Render detoured, target %dx%d.\n",
             g_size, g_size);

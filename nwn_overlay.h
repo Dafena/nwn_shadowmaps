@@ -22,6 +22,11 @@ inline constexpr int kNwnShaderRainMaxBudget = 262144;
 // next frame with no plumbing: the receiver reads these globals each time it
 // uploads uniforms. Any pointer may be null.
 struct NwnOverlayState {
+    bool*  wetFilmEnabled = nullptr;
+    int*   weatherShelterSize = nullptr;
+    int    weatherShelterActualSize = 0;
+    bool*  rainPuddles = nullptr;
+    int*   puddleReflectionQuality = nullptr;
     bool*  shaderRain = nullptr;
     bool*  shaderRainHideNative = nullptr;
     int*   shaderRainBudget = nullptr;

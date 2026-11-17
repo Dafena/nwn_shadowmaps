@@ -87,7 +87,7 @@ static constexpr unsigned kSettingsMax = 128;
 // too. On an older file the keys listed in settings_retuned() are ignored and
 // the file is rewritten at the new version; everything else the user set is
 // preserved.
-static constexpr int kSettingsVersion = 17;
+static constexpr int kSettingsVersion = 19;
 
 // Keys whose defaults changed in a local-light tuning pass.  Version 5 also
 // makes these controls live on the cube receiver; reset the old 1-unit
@@ -100,6 +100,10 @@ static constexpr int kSettingsVersion = 17;
 // reach them; the compiled-in default IS the shipped behaviour, and a stale
 // file must not be allowed to pin the old one.
 static bool settings_retuned(const char* key) {
+    // Version 18 (2026-11-16): adopt the maintainer's private-rain tuning.
+    static const char* kV18[] = { "shader_rain_budget", "shader_rain_radius",
+                                  "shader_rain_splashes" };
+    for (const char* k : kV18) if (std::strcmp(k, key) == 0) return true;
     // Version 15 adopts the PS4/GNM point-shadow capture bias.  Do not let a
     // saved 1.8 factor override the reference factor=3 default.
     if (std::strcmp(key, "local_slope") == 0) return true;
@@ -188,6 +192,10 @@ static unsigned settings_table(SettingRef* out, unsigned max) {
     addf("selfillum_guard",    &g_liftThreshold);          // "Bright surfaces keep light"
     addb("lamp_lift",          &g_lampLiftEnabled);        // "Lights lift sun shadow"
     addb("local_character_shadows", &g_localCharacterShadows);
+    addb("wet_film_enabled", &g_wetFilmEnabled);
+    addi("weather_shelter_size", &g_weatherShelterSize);
+    addb("rain_puddles", &g_rainPuddlesEnabled);
+    addi("puddle_reflection_quality", &g_puddleReflectionQuality);
     addb("shader_rain", &g_shaderRainEnabled);
     addb("shader_rain_hide_native", &g_shaderRainHideNative);
     addi("shader_rain_budget", &g_shaderRainBudget);
@@ -306,13 +314,17 @@ static void settings_reset_defaults() {
     g_localLightReceiver       = false;  // opt-in on the development build
 #endif
     g_areaShadowFadeSeconds    = 0.75f;
+    g_wetFilmEnabled = true;
+    g_weatherShelterSize = 0;
+    g_rainPuddlesEnabled = true;
+    g_puddleReflectionQuality = 0;
     g_shaderRainEnabled        = false;
     g_shaderRainHideNative     = false;
-    g_shaderRainBudget         = 2048;
-    g_shaderRainRadius         = 28.0f;
+    g_shaderRainBudget         = 4352;
+    g_shaderRainRadius         = 40.0f;
     g_shaderRainWindX          = 0.0f;
     g_shaderRainWindY          = 0.0f;
-    g_shaderRainSplashes       = 1.0f;
+    g_shaderRainSplashes       = 0.250f;
     g_heatEnabled              = false;
     g_heatStrength             = 1.0f;
     g_heatScale                = 1.0f;
@@ -532,7 +544,8 @@ static void apply_local_map_runtime_settings(bool startup, const char* source) {
 
 static void load_settings() {
     g_settingsLoaded = true;
-    if (shadow_getenv("NWN_SHADOWMAP_NO_SETTINGS")) {
+    const char* noSettings = shadow_getenv("NWN_SHADOWMAP_NO_SETTINGS");
+    if (noSettings && std::strcmp(noSettings, "0") != 0) {
         fprintf(stderr, "[shadowmap][settings] NWN_SHADOWMAP_NO_SETTINGS set; using defaults\n");
         apply_local_cube_runtime_settings(true, "environment/defaults");
         apply_local_map_runtime_settings(true, "environment/defaults");
@@ -550,11 +563,14 @@ static void load_settings() {
     const unsigned count = settings_table(table, kSettingsMax);
     // Two passes: the version is needed before deciding what to honour.
     int fileVersion = 1;
+    bool hasWetFilmEnabled = false;
     {
         char probe[256];
         while (fgets(probe, sizeof(probe), f)) {
             int v = 0;
-            if (std::sscanf(probe, "version=%d", &v) == 1) { fileVersion = v; break; }
+            if (std::sscanf(probe, "version=%d", &v) == 1) fileVersion = v;
+            if (std::strncmp(probe, "wet_film_enabled=", sizeof("wet_film_enabled=")-1) == 0)
+                hasWetFilmEnabled = true;
         }
         std::rewind(f);
     }
@@ -565,6 +581,13 @@ static void load_settings() {
     while (fgets(line, sizeof(line), f)) {
         char key[64] = {}; double value = 0.0;
         if (std::sscanf(line, "%63[^=]=%lf", key, &value) != 2) continue;
+        // Preserve Detailed/Off choices, and retire Simple as Off. An explicit
+        // new boolean always wins, regardless of line order in a legacy file.
+        if (std::strcmp(key, "wet_film_quality") == 0) {
+            if (!hasWetFilmEnabled && std::isfinite(value))
+                g_wetFilmEnabled = value == 0.0;
+            continue;
+        }
         if (stale && settings_retuned(key)) { ++skipped; continue; }
         for (unsigned i = 0; i < count; ++i) {
             if (std::strcmp(table[i].key, key) != 0) continue;

@@ -96,18 +96,43 @@ static bool ensure_sun_tag_textures(int width, int height, int samples) {
     return g_sunTagTex && g_sunTagDummy2D && g_sunTagDummyMS;
 }
 
+// Hold the reserved attachment during one native
+// scene pass, while restoring draw buffers after every individual draw.
+// Linux defaults to this validated path; Windows retains per-draw attachment.
+static GLuint g_sunTagBatchFbo = 0, g_sunTagBatchTexture = 0;
+static GLenum g_sunTagBatchTarget = GL_TEXTURE_2D;
+static void finish_sun_receiver_tag_batch() {
+    if (!g_sunTagBatchFbo) return;
+    if (gl::IsFramebuffer && gl::IsFramebuffer(g_sunTagBatchFbo)) {
+        GLint previous=0, type=0, name=0;
+        gl::GetIntegerv(GL_DRAW_FRAMEBUFFER_BINDING,&previous);
+        gl::BindFramebuffer(GL_DRAW_FRAMEBUFFER,g_sunTagBatchFbo);
+        gl::GetFramebufferAttachmentParameteriv(GL_DRAW_FRAMEBUFFER,
+            GL_COLOR_ATTACHMENT0+kSunTagOutput,GL_FRAMEBUFFER_ATTACHMENT_OBJECT_TYPE,&type);
+        gl::GetFramebufferAttachmentParameteriv(GL_DRAW_FRAMEBUFFER,
+            GL_COLOR_ATTACHMENT0+kSunTagOutput,GL_FRAMEBUFFER_ATTACHMENT_OBJECT_NAME,&name);
+        // Never detach an attachment the engine replaced during its pass.
+        if (type==GL_TEXTURE && (GLuint)name==g_sunTagBatchTexture)
+            gl::FramebufferTexture2D(GL_DRAW_FRAMEBUFFER,GL_COLOR_ATTACHMENT0+kSunTagOutput,
+                                    g_sunTagBatchTarget,0,0);
+        gl::BindFramebuffer(GL_DRAW_FRAMEBUFFER,(GLuint)previous);
+    }
+    g_sunTagBatchFbo=g_sunTagBatchTexture=0;
+}
+
 static void end_sun_receiver_tag() {
     if (!g_sunTagBorrowed)
         return;
     // Every caller restores its own FBO before reaching this boundary.
-    gl::FramebufferTexture2D(GL_DRAW_FRAMEBUFFER, GL_COLOR_ATTACHMENT0 + kSunTagOutput,
-                             g_sunTagSamples > 0 ? GL_TEXTURE_2D_MULTISAMPLE : GL_TEXTURE_2D, 0, 0);
+    if (!g_sunTagBatchFbo)
+        gl::FramebufferTexture2D(GL_DRAW_FRAMEBUFFER, GL_COLOR_ATTACHMENT0 + kSunTagOutput,
+                                 g_sunTagSamples > 0 ? GL_TEXTURE_2D_MULTISAMPLE : GL_TEXTURE_2D, 0, 0);
     gl::DrawBuffers(8, g_sunTagOldDrawBuffers);
     g_sunTagBorrowed = false;
 }
 
 static void begin_sun_receiver_tag() {
-    if (g_sunTagBorrowed || !g_receiverEnabled || g_inOurPass || g_cascadeReplayActive ||
+    if (g_shadowStageSkipTags || g_sunTagBorrowed || !g_receiverEnabled || g_inOurPass || g_cascadeReplayActive ||
         g_localLightPassActive || g_overlayPassActive || nwn_core::g_ownedPass ||
         g_inStencilShadow || !g_shadowFrameContext.valid || !g_traceFrameActive ||
         g_traceCurrentScene != g_areaScene || nwn_core::g_currentBucket < 0 || !gl::DrawBuffers ||
@@ -145,7 +170,14 @@ static void begin_sun_receiver_tag() {
     gl::GetFramebufferAttachmentParameteriv(GL_DRAW_FRAMEBUFFER,
                                             GL_COLOR_ATTACHMENT0 + kSunTagOutput,
                                             GL_FRAMEBUFFER_ATTACHMENT_OBJECT_TYPE, &type);
-    if (type != GL_NONE)
+    bool held = false;
+    if (g_sunTagBatchFbo==(GLuint)fbo && type==GL_TEXTURE) {
+        GLint name=0;
+        gl::GetFramebufferAttachmentParameteriv(GL_DRAW_FRAMEBUFFER,
+            GL_COLOR_ATTACHMENT0+kSunTagOutput,GL_FRAMEBUFFER_ATTACHMENT_OBJECT_NAME,&name);
+        held=(GLuint)name==g_sunTagBatchTexture;
+    }
+    if (type != GL_NONE && !held)
         return; // Never borrow an attachment NWN already owns.
     gl::GetIntegerv(GL_VIEWPORT, vp);
     if (vp[0] != 0 || vp[1] != 0)
@@ -163,13 +195,21 @@ static void begin_sun_receiver_tag() {
     GLenum buffers[8];
     std::copy_n(g_sunTagOldDrawBuffers, 8, buffers);
     buffers[kSunTagOutput] = GL_COLOR_ATTACHMENT0 + kSunTagOutput;
-    gl::FramebufferTexture2D(GL_DRAW_FRAMEBUFFER, buffers[kSunTagOutput],
-                             samples > 0 ? GL_TEXTURE_2D_MULTISAMPLE : GL_TEXTURE_2D, g_sunTagTex,
-                             0);
+    if (!held || g_sunTagBatchTexture!=g_sunTagTex) {
+        if (g_sunTagBatchFbo) finish_sun_receiver_tag_batch();
+        gl::FramebufferTexture2D(GL_DRAW_FRAMEBUFFER, buffers[kSunTagOutput],
+                                 samples > 0 ? GL_TEXTURE_2D_MULTISAMPLE : GL_TEXTURE_2D, g_sunTagTex,0);
+        if (g_sunTagBatchAttachments && gl::IsFramebuffer && gl::BindFramebuffer) {
+            g_sunTagBatchFbo=(GLuint)fbo;
+            g_sunTagBatchTexture=g_sunTagTex;
+            g_sunTagBatchTarget=samples>0 ? GL_TEXTURE_2D_MULTISAMPLE : GL_TEXTURE_2D;
+        }
+    }
     gl::DrawBuffers(8, buffers);
     g_sunTagBorrowed = true;
     if (gl::CheckFramebufferStatus(GL_DRAW_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE) {
         end_sun_receiver_tag();
+        finish_sun_receiver_tag_batch();
         return;
     }
     if (g_sunTagFrame != g_shadowFrameContext.serial) {

@@ -8,6 +8,8 @@ modules. Use `rg -n` to locate the current definition.
 
 | Symbol | File | Purpose |
 | --- | --- | --- |
+| `shadow_stage_profile::Scope` / `Timer` | `shadow_stage_profile.inc` | Opt-in asynchronous GPU/CPU timing of selected world scene, final receiver copies and composite |
+| `wet_film_profile::Scope` | `shadow_wet_film_profile.inc` | Opt-in native-scene GPU timestamps and automated wet-film component ablation |
 | `SceneRender_detour` | `nwn_shadowmap.cpp` | Top-level scene entry, receiver, overlay, and post-scene work |
 | `trace_scene_enter` / `trace_scene_exit` | `shadow_trace_cascade.inc` | Selected-area frame context and lifecycle |
 | `SceneRenderDrawBucket_trace_detour` | `shadow_trace_cascade.inc` | Original bucket draw followed by sun/local replay |

@@ -35,7 +35,12 @@ static void get_bool(GLenum key, GLboolean *out) {
 }
 static GLboolean enabled(GLenum) { return GL_FALSE; }
 static GLint location(GLuint, const char *) { return 11; }
-static void attachment(GLenum, GLenum, GLenum, GLint *out) { *out = attachmentType; }
+static void attachment(GLenum, GLenum, GLenum key, GLint *out) {
+    *out = key==GL_FRAMEBUFFER_ATTACHMENT_OBJECT_NAME ? GLint(attached) : (attached ? GL_TEXTURE : attachmentType);
+}
+static bool deletedFbo=false;
+static GLboolean is_framebuffer(GLuint fbo){return fbo==42 && !deletedFbo;}
+static void bind_framebuffer(GLenum target, GLuint fbo){if(target==GL_DRAW_FRAMEBUFFER)nativeFbo=GLint(fbo);}
 static void attach(GLenum, GLenum, GLenum, GLuint tex, GLint) {
     attached = tex;
     ++changedAttachments;
@@ -69,6 +74,7 @@ static void* highlight_external(void* gob) {
     return static_cast<HighlightGobFixture*>(gob)->owner;
 }
 int main() {
+    g_sunTagBatchAttachments=false; // Exercise the legacy fallback first.
     GLboolean savedMasks[8][4];
     std::memcpy(savedMasks, masks, sizeof(masks));
     gl::GetIntegerv = get_int;
@@ -127,6 +133,33 @@ int main() {
         if (!safe)
             ++failures;
     }
+    nativeFbo=42;attachmentType=GL_NONE;maxBuffers=8;
+    gl::IsFramebuffer=is_framebuffer;gl::BindFramebuffer=bind_framebuffer;
+    g_sunTagBatchAttachments=true;
+    ++g_shadowFrameContext.serial;
+    int priorChanges=changedAttachments,priorClears=clears;
+    for(int i=0;i<32;++i){
+        g_currentDrawOwnerKind=i%2 ? DrawOwnerKind::Creature:DrawOwnerKind::NonCreature;
+        begin_sun_receiver_tag();
+        if(!g_sunTagBorrowed || tagKind!=(i%2))++failures;
+        end_sun_receiver_tag();
+        if(g_sunTagBorrowed || drawBuffers[7]!=GL_NONE || attached!=103)++failures;
+    }
+    nativeFbo=43; // Cleanup must restore whichever native target is current.
+    finish_sun_receiver_tag_batch();
+    bool batchOk=changedAttachments-priorChanges==2 && clears-priorClears==1 &&
+        !attached && !g_sunTagBatchFbo && nativeFbo==43;
+    printf("sun batched attachment: 32 draws, two attachment changes, one clear, exact FBO restore %s\n",batchOk?"PASS":"FAIL");
+    if(!batchOk)++failures;
+    nativeFbo=42;begin_sun_receiver_tag();end_sun_receiver_tag();
+    attached=999; // Engine replacement must never be detached by cleanup.
+    finish_sun_receiver_tag_batch();
+    if(attached!=999 || g_sunTagBatchFbo)++failures;
+    attached=0;
+    begin_sun_receiver_tag();end_sun_receiver_tag();deletedFbo=true;
+    priorChanges=changedAttachments;finish_sun_receiver_tag_batch();
+    if(changedAttachments!=priorChanges || g_sunTagBatchFbo)++failures;
+    deletedFbo=false;attached=0;g_sunTagBatchAttachments=false;
     // Exercise the measured native list, including inherited part ownership
     // and removal. No mouse position or brightness heuristics participate.
     unsigned char scene[0xa0] = {};
