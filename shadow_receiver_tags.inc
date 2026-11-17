@@ -4,6 +4,10 @@
 // No native colour/depth is replaced, and no camera geometry is replayed.
 static constexpr int kSunTagOutput = 7;
 static bool g_sunTagBorrowed = false;
+#if defined(NWN_TAG_WORK_BENCH_DIAGNOSTIC) && !defined(_WIN32)
+static bool g_sunTagProbeMaskBorrowed=false;
+static GLboolean g_sunTagProbeMask[4]={};
+#endif
 static GLenum g_sunTagOldDrawBuffers[8] = {};
 struct SunTagProgram {
     GLuint program;
@@ -55,6 +59,9 @@ static bool inject_sun_receiver_tag(std::string &source) {
 static bool ensure_sun_tag_textures(int width, int height, int samples) {
     if (!gl::TexImage2DMultisample || width <= 0 || height <= 0 || samples > 16)
         return false;
+    if (tag_work::fastTextures && g_sunTagTex && g_sunTagDummy2D && g_sunTagDummyMS &&
+        width==g_sunTagWidth && height==g_sunTagHeight && samples==g_sunTagSamples)
+        return true;
     GLint old2D = 0, oldMS = 0;
     gl::GetIntegerv(GL_TEXTURE_BINDING_2D, &old2D);
     gl::GetIntegerv(GL_TEXTURE_BINDING_2D_MULTISAMPLE, &oldMS);
@@ -102,6 +109,9 @@ static bool ensure_sun_tag_textures(int width, int height, int samples) {
 static GLuint g_sunTagBatchFbo = 0, g_sunTagBatchTexture = 0;
 static GLenum g_sunTagBatchTarget = GL_TEXTURE_2D;
 static void finish_sun_receiver_tag_batch() {
+    if(!tag_buffer_lease::safe_context())return;
+    tag_buffer_lease::release(tag_buffer_lease::Fence::Boundary);
+    tag_buffer_lease::Internal internal;
     if (!g_sunTagBatchFbo) return;
     if (gl::IsFramebuffer && gl::IsFramebuffer(g_sunTagBatchFbo)) {
         GLint previous=0, type=0, name=0;
@@ -118,26 +128,64 @@ static void finish_sun_receiver_tag_batch() {
         gl::BindFramebuffer(GL_DRAW_FRAMEBUFFER,(GLuint)previous);
     }
     g_sunTagBatchFbo=g_sunTagBatchTexture=0;
+    tag_buffer_lease::attachment_finished();
 }
 
 static void end_sun_receiver_tag() {
     if (!g_sunTagBorrowed)
         return;
+    tag_buffer_lease::Internal internal;
+    tag_work::Timer timing(tag_work::Restore);
+#if defined(NWN_TAG_WORK_BENCH_DIAGNOSTIC) && !defined(_WIN32)
+    if(g_sunTagProbeMaskBorrowed){
+        gl::ColorMaski(kSunTagOutput,g_sunTagProbeMask[0],g_sunTagProbeMask[1],g_sunTagProbeMask[2],g_sunTagProbeMask[3]);
+        g_sunTagProbeMaskBorrowed=false;
+    }
+#endif
     // Every caller restores its own FBO before reaching this boundary.
     if (!g_sunTagBatchFbo)
         gl::FramebufferTexture2D(GL_DRAW_FRAMEBUFFER, GL_COLOR_ATTACHMENT0 + kSunTagOutput,
                                  g_sunTagSamples > 0 ? GL_TEXTURE_2D_MULTISAMPLE : GL_TEXTURE_2D, 0, 0);
-    gl::DrawBuffers(8, g_sunTagOldDrawBuffers);
+    if(!tag_buffer_lease::retain())gl::DrawBuffers(8, g_sunTagOldDrawBuffers);
     g_sunTagBorrowed = false;
 }
 
+// Cache only an immutable limit, bounded by both current context and scene serial.
+// Unknown contexts retain the checkpoint's query path. Mutable FBO state is never cached.
+static GLint sun_tag_draw_buffer_limit(std::uintptr_t context) {
+    static std::uintptr_t cachedContext=0;
+    static unsigned cachedSerial=0;
+    static GLint cachedLimit=0;
+    if (!tag_work::fastCapability || !context) {
+        GLint limit=0;gl::GetIntegerv(GL_MAX_DRAW_BUFFERS,&limit);return limit;
+    }
+    if (context!=cachedContext || cachedSerial!=g_shadowFrameContext.serial) {
+        gl::GetIntegerv(GL_MAX_DRAW_BUFFERS,&cachedLimit);
+        cachedContext=context;cachedSerial=g_shadowFrameContext.serial;
+    }
+    return cachedLimit;
+}
+
+// Any draw that cannot publish a tag must see the native buffer selection.
+struct SunTagBufferEligibility {
+    tag_buffer_lease::Internal internal;
+    bool previouslyBorrowed=g_sunTagBorrowed;
+    ~SunTagBufferEligibility(){
+        if(!previouslyBorrowed && !g_sunTagBorrowed)
+            tag_buffer_lease::release(tag_buffer_lease::Fence::Boundary);
+    }
+};
 static void begin_sun_receiver_tag() {
+    SunTagBufferEligibility bufferEligibility;
+    tag_work::BeginDraw beginTiming;
+    if(!tag_buffer_lease::safe_context())return;
     if (g_shadowStageSkipTags || g_sunTagBorrowed || !g_receiverEnabled || g_inOurPass || g_cascadeReplayActive ||
         g_localLightPassActive || g_overlayPassActive || nwn_core::g_ownedPass ||
         g_inStencilShadow || !g_shadowFrameContext.valid || !g_traceFrameActive ||
         g_traceCurrentScene != g_areaScene || nwn_core::g_currentBucket < 0 || !gl::DrawBuffers ||
         !gl::ClearBufferuiv || !gl::GetBooleani_v || !gl::ColorMaski)
         return;
+    tag_work::Timer basicTiming(tag_work::Basics);
     GLboolean depthWrite = GL_FALSE;
     gl::GetBooleanv(GL_DEPTH_WRITEMASK, &depthWrite);
     if (!depthWrite)
@@ -163,7 +211,9 @@ static void begin_sun_receiver_tag() {
     }
     if (kind < 0)
         return;
-    gl::GetIntegerv(GL_MAX_DRAW_BUFFERS, &maxBuffers);
+    basicTiming.end();
+    { tag_work::Timer timing(tag_work::Capability);
+      maxBuffers=sun_tag_draw_buffer_limit(tag_work::fastCapability ? nwn_drawing_probe_context() : 0); }
     if (maxBuffers < 8)
         return;
     GLint type = 0;
@@ -185,16 +235,22 @@ static void begin_sun_receiver_tag() {
     if (g_sunTagFrame == g_shadowFrameContext.serial && g_sunTagSourceFbo != (GLuint)fbo)
         return;
     gl::GetIntegerv(GL_SAMPLES, &samples);
-    if (!ensure_sun_tag_textures(vp[2], vp[3], samples))
-        return;
+    bool texturesReady=false;
+    { tag_work::Timer timing(tag_work::Textures);
+      texturesReady=ensure_sun_tag_textures(vp[2],vp[3],samples); }
+    if (!texturesReady) return;
+    { tag_work::Timer timing(tag_work::DrawBufferRead);
     for (int i = 0; i < 8; ++i) {
         GLint value = 0;
         gl::GetIntegerv(GL_DRAW_BUFFER0 + i, &value);
         g_sunTagOldDrawBuffers[i] = (GLenum)value;
     }
+    }
+    tag_buffer_lease::native_buffers((GLuint)fbo,g_sunTagOldDrawBuffers);
     GLenum buffers[8];
     std::copy_n(g_sunTagOldDrawBuffers, 8, buffers);
     buffers[kSunTagOutput] = GL_COLOR_ATTACHMENT0 + kSunTagOutput;
+    { tag_work::Timer timing(tag_work::Attachment);
     if (!held || g_sunTagBatchTexture!=g_sunTagTex) {
         if (g_sunTagBatchFbo) finish_sun_receiver_tag_batch();
         gl::FramebufferTexture2D(GL_DRAW_FRAMEBUFFER, buffers[kSunTagOutput],
@@ -203,16 +259,51 @@ static void begin_sun_receiver_tag() {
             g_sunTagBatchFbo=(GLuint)fbo;
             g_sunTagBatchTexture=g_sunTagTex;
             g_sunTagBatchTarget=samples>0 ? GL_TEXTURE_2D_MULTISAMPLE : GL_TEXTURE_2D;
+            tag_buffer_lease::attachment_selected();
         }
     }
-    gl::DrawBuffers(8, buffers);
+    }
+    if(tag_work::suppressDrawTarget)buffers[kSunTagOutput]=GL_NONE;
+    { tag_work::Timer timing(tag_work::DrawBufferEnable);
+      if(!tag_buffer_lease::already_selected((GLuint)fbo,buffers)) {
+          gl::DrawBuffers(8,buffers);
+          tag_buffer_lease::selected((GLuint)fbo,g_sunTagOldDrawBuffers,buffers);
+      }
+    }
     g_sunTagBorrowed = true;
-    if (gl::CheckFramebufferStatus(GL_DRAW_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE) {
+    GLenum complete=0;
+    {
+        tag_work::Timer timing(tag_work::Validation);
+#if defined(NWN_TAG_WORK_BENCH_DIAGNOSTIC) && !defined(_WIN32)
+        static GLuint checkedFbo=0,checkedTexture=0;
+        static unsigned checkedSerial=0;
+        static GLenum checkedBuffers[8]={};
+        bool repeated=tag_work::skipRepeatedValidation && held && checkedFbo==(GLuint)fbo && checkedTexture==g_sunTagTex &&
+                      checkedSerial==g_shadowFrameContext.serial &&
+                      std::memcmp(checkedBuffers,buffers,sizeof(buffers))==0;
+        if (tag_work::skipRepeatedValidation && repeated) complete=GL_FRAMEBUFFER_COMPLETE;
+        else {
+            complete=gl::CheckFramebufferStatus(GL_DRAW_FRAMEBUFFER);
+            if(tag_work::skipRepeatedValidation && complete==GL_FRAMEBUFFER_COMPLETE){
+                checkedFbo=(GLuint)fbo;checkedTexture=g_sunTagTex;
+                checkedSerial=g_shadowFrameContext.serial;
+                std::copy_n(buffers,8,checkedBuffers);
+            }
+        }
+#else
+        complete=gl::CheckFramebufferStatus(GL_DRAW_FRAMEBUFFER);
+#endif
+    }
+    if (complete != GL_FRAMEBUFFER_COMPLETE) {
         end_sun_receiver_tag();
         finish_sun_receiver_tag_batch();
         return;
     }
     if (g_sunTagFrame != g_shadowFrameContext.serial) {
+        if(tag_work::suppressDrawTarget){
+            buffers[kSunTagOutput]=GL_COLOR_ATTACHMENT0+kSunTagOutput;
+            gl::DrawBuffers(8,buffers);
+        }
         const GLuint clear[4] = {0xffffffffu, 0, 0, 0};
         const GLboolean scissor = gl::IsEnabled(GL_SCISSOR_TEST);
         GLboolean mask[4];
@@ -226,9 +317,22 @@ static void begin_sun_receiver_tag() {
             gl::Enable(GL_SCISSOR_TEST);
         g_sunTagFrame = g_shadowFrameContext.serial;
         g_sunTagSourceFbo = (GLuint)fbo;
+        if(tag_work::suppressDrawTarget){
+            buffers[kSunTagOutput]=GL_NONE;
+            gl::DrawBuffers(8,buffers);
+        }
     }
-    const bool highlighted = current_draw_is_highlighted();
-    gl::Uniform1i(kind, (current_draw_is_creature() ? 1 : 0) | (highlighted ? 2 : 0));
+#if defined(NWN_TAG_WORK_BENCH_DIAGNOSTIC) && !defined(_WIN32)
+    if(tag_work::suppressTagWrites){
+        gl::GetBooleani_v(GL_COLOR_WRITEMASK,kSunTagOutput,g_sunTagProbeMask);
+        gl::ColorMaski(kSunTagOutput,GL_FALSE,GL_FALSE,GL_FALSE,GL_FALSE);
+        g_sunTagProbeMaskBorrowed=true;
+    }
+#endif
+    bool highlighted=false;
+    { tag_work::Timer timing(tag_work::Classification);
+      highlighted=current_draw_is_highlighted();
+      gl::Uniform1i(kind,(current_draw_is_creature()?1:0)|(highlighted?2:0)); }
     if (highlighted) {
         static bool reportedHighlight = false;
         if (!reportedHighlight) {

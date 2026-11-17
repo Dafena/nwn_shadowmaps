@@ -3,6 +3,7 @@ set -euo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$HERE"
 make -s
+make -s tag-bench
 TEST_DIR="$(mktemp -d /tmp/nwn-sun-filter.XXXXXX)"
 trap 'rm -rf "$TEST_DIR"' EXIT
 "${CXX:-g++}" -O1 -std=c++17 -fPIC -I. -Isubhook \
@@ -12,8 +13,8 @@ trap 'rm -rf "$TEST_DIR"' EXIT
     -ldl -o "$TEST_DIR/sun-filter"
 NWN_SHADOWMAP_OFF=1 "$TEST_DIR/sun-filter" "$TEST_DIR/tag.frag"
 "${CXX:-g++}" -O1 -std=c++17 -fPIC -I. -Isubhook \
-    tests/sun_receiver_tag_state_regression.cpp \
-    shadow_config.o shadow_math.o nwn_oit.o nwn_overlay_imgui.o drawing_texture_probe.o subhook.o \
+    -DNWN_TAG_WORK_BENCH_DIAGNOSTIC tests/sun_receiver_tag_state_regression.cpp \
+    shadow_config.o shadow_math.o build-tag-bench/nwn_oit.o nwn_overlay_imgui.o drawing_texture_probe.o subhook.o \
     imgui.o imgui_draw.o imgui_tables.o imgui_widgets.o imgui_impl_opengl3.o \
     -ldl -o "$TEST_DIR/tag-state"
 NWN_SHADOWMAP_OFF=1 "$TEST_DIR/tag-state"

@@ -8,6 +8,7 @@ modules. Use `rg -n` to locate the current definition.
 
 | Symbol | File | Purpose |
 | --- | --- | --- |
+| `tag_work_benchmark::Scope` / `tag_work::Timer` | `shadow_tag_benchmark.inc` / `shadow_tag_work.inc` | Opt-in matched frame-time benchmark and sampled per-draw CPU attribution |
 | `shadow_stage_profile::Scope` / `Timer` | `shadow_stage_profile.inc` | Opt-in asynchronous GPU/CPU timing of selected world scene, final receiver copies and composite |
 | `wet_film_profile::Scope` | `shadow_wet_film_profile.inc` | Opt-in native-scene GPU timestamps and automated wet-film component ablation |
 | `SceneRender_detour` | `nwn_shadowmap.cpp` | Top-level scene entry, receiver, overlay, and post-scene work |

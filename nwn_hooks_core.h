@@ -46,11 +46,21 @@ namespace nwn_core {
 // shadow module is always linked; when a real nwn_core.cpp exists, move it.
 extern bool g_ownedPass;
 
+// Explicit diagnostic coordination only. Normal builds compile this out.
+#if defined(NWN_TAG_WORK_BENCH_DIAGNOSTIC) && !defined(_WIN32)
+extern void (*g_beforeFramebufferStateCapture)();
+inline void before_framebuffer_state_capture(){
+    if(g_beforeFramebufferStateCapture)g_beforeFramebufferStateCapture();
+}
+#else
+inline void before_framebuffer_state_capture(){}
+#endif
+
 // RAII form. Nests correctly -- restores the previous value rather than
 // clearing, because an injector pass can legitimately run inside another one.
 struct OwnedPass {
     bool prev;
-    OwnedPass() : prev(g_ownedPass) { g_ownedPass = true; }
+    OwnedPass() : prev(g_ownedPass) { before_framebuffer_state_capture();g_ownedPass = true; }
     ~OwnedPass() { g_ownedPass = prev; }
     OwnedPass(const OwnedPass&) = delete;
     OwnedPass& operator=(const OwnedPass&) = delete;

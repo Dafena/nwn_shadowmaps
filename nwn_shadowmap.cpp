@@ -1458,6 +1458,9 @@ static bool    g_inOurPass    = false;     // re-entrancy guard for our own call
 // Declared in nwn_hooks_core.h; defined here because the shadow module is
 // always linked. See that header for why the two modules share one .so.
 bool nwn_core::g_ownedPass = false;
+#if defined(NWN_TAG_WORK_BENCH_DIAGNOSTIC) && !defined(_WIN32)
+void (*nwn_core::g_beforeFramebufferStateCapture)() = nullptr;
+#endif
 int  nwn_core::g_currentBucket = -1;
 void (*nwn_core::g_drawObserver)() = nullptr;
 void (*nwn_core::g_drawObserverAfter)() = nullptr;
@@ -2282,7 +2285,10 @@ static bool set_light_view_direct(const Vec3f& eye, const float dir[3]) {
 }
 
 #include "weather_runtime.inc"
+#include "shadow_tag_work.inc"
+#include "shadow_tag_buffer_lease.h"
 #include "shadow_receiver_tags.inc"
+#include "shadow_tag_buffer_lease.inc"
 namespace layer_stack {
 static bool iterator(void*, int, int, const void**, bool first = false);
 static void before_draw();
@@ -2295,6 +2301,7 @@ static void after_draw();
 #include "shadow_heat_haze.inc"
 #include "weather_particles.inc"
 #include "shadow_stage_profile.inc"
+#include "shadow_tag_benchmark.inc"
 #include "shadow_overlay_runtime.inc"
 #include "shadow_wet_film_profile.inc"
 #include "shadow_trace_cascade.inc"
@@ -2711,6 +2718,7 @@ extern "C" void SceneRender_detour(void* self) {
         trace_scene_enter(self);
         wet_film_profile::Scope wetFilmScope(self);
         shadow_stage_profile::Scope stageScope(self);
+        tag_work_benchmark::Scope tagBenchmark(self);
         shadow_stage_profile::Timer nativeTimer(shadow_stage_profile::Native);
         void* tramp = subhook_get_trampoline(g_hook);
         if (tramp) reinterpret_cast<eng::SceneRender_t>(tramp)(self);
@@ -2736,6 +2744,8 @@ extern "C" void SceneRender_detour(void* self) {
         wetFilmScope.mark_world(mainScene);
         stageScope.mark_world(mainScene);
         finish_sun_receiver_tag_batch();
+        tagBenchmark.mark_world(mainScene);
+        tagBenchmark.native_end();
         nativeTimer.end();
         const bool reportFrame = mainScene && g_costFinishThisFrame;
         // MSAA state of the framebuffer we are actually drawing into. With
@@ -4442,6 +4452,7 @@ static void shadowmap_init() {
 
 __attribute__((destructor))
 static void shadowmap_fini() {
+    tag_work_benchmark::shutdown();
     layer_stack::shutdown();
     // Deliberately not deleting the GL objects: at destructor time the context
     // may already be gone, and a bad GL call on the way out would turn a clean
