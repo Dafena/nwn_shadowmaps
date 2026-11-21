@@ -62,10 +62,12 @@ static void part_draw_detour(void* part) {
     void* previous_part = current_part;
     const int previous_pass = draw_pass;
     current_part = part; draw_pass = submission_pass;
+    caster_census::PartScope casterPartTiming(part);
 #ifdef _WIN32
     if (windows_part_draw) windows_part_draw(part);
 #else
-    if (void* trampoline = subhook_get_trampoline(part_draw_hook))
+    if (native_hook_gateway::call_part(part)) {}
+    else if (void* trampoline = subhook_get_trampoline(part_draw_hook))
         reinterpret_cast<eng::LayerStackPartDraw_t>(trampoline)(part);
     else {
         subhook_remove(part_draw_hook);

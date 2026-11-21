@@ -1037,7 +1037,7 @@ static float    g_godraysAnisotropy        = 0.60f;   // Henyey-Greenstein g
 static float    g_godraysHeightFalloff     = 0.06f;   // 1/m above the base
 static float    g_godraysHeightBase        = 0.0f;    // world Z of full density
 static float    g_godraysAmbient           = 0.60f;   // fog-colour in-scatter
-static float    g_godraysLampGlow          = 1.0f;    // local-light in-scatter
+static float    g_godraysLampGlow          = 0.2f;    // local-light in-scatter
 static int      g_godraysLampsDrawn        = 0;       // panel readout only
 // Development-only output ladder. Zero is the normal effect; non-zero modes
 // make an otherwise invisible early return or wrong sun vector diagnosable.
@@ -1458,7 +1458,7 @@ static bool    g_inOurPass    = false;     // re-entrancy guard for our own call
 // Declared in nwn_hooks_core.h; defined here because the shadow module is
 // always linked. See that header for why the two modules share one .so.
 bool nwn_core::g_ownedPass = false;
-#if defined(NWN_TAG_WORK_BENCH_DIAGNOSTIC) && !defined(_WIN32)
+#ifndef _WIN32
 void (*nwn_core::g_beforeFramebufferStateCapture)() = nullptr;
 #endif
 int  nwn_core::g_currentBucket = -1;
@@ -1566,6 +1566,7 @@ static bool resolve_symbols() {
 #endif
 
 #include "shadow_targets.inc"
+#include "shadow_local_capture_demand.inc"
 #include "shadow_script_env.inc"
 #include "shadow_drawing_probe.inc"
 #include "shadow_diagnostics_settings.inc"
@@ -2294,6 +2295,9 @@ static bool iterator(void*, int, int, const void**, bool first = false);
 static void before_draw();
 static void after_draw();
 }
+#include "shadow_verified_gateway.h"
+#include "shadow_native_gateways.inc"
+#include "shadow_caster_census.inc"
 #include "shadow_shader_interposition.inc"
 #include "nwn_layer_stack.inc"
 #include "shadow_fullscreen_receiver.inc"
@@ -2389,6 +2393,7 @@ A2cShadowLocations* a2c_shadow_locations(GLuint program) {
 } // namespace
 
 bool nwn_shadow_begin_a2c_receiver(unsigned int rawProgram) {
+    draw_cpu_probe::Timer timing(draw_cpu_probe::AlphaBegin);
     const GLuint program = (GLuint)rawProgram;
     if (!program || g_a2cShadowBorrowed || !g_receiverEnabled ||
         !g_cascadeCompositeShadows || !g_cascadeCsmStaticReceiver ||
@@ -2598,6 +2603,7 @@ bool nwn_shadow_begin_a2c_receiver(unsigned int rawProgram) {
 }
 
 void nwn_shadow_end_a2c_receiver(void) {
+    draw_cpu_probe::Timer timing(draw_cpu_probe::AlphaEnd);
     if (!g_a2cShadowBorrowed || !gl::ActiveTexture || !gl::BindTexture) return;
     constexpr int kLocalUnit = 28;
     constexpr int kDynamicUnit = 29;
@@ -2716,6 +2722,19 @@ extern "C" void SceneRender_detour(void* self) {
 
     if (g_traceEnabled) {
         trace_scene_enter(self);
+        caster_census::TimingScope casterTiming(self);
+        caster_census::Scope casterCensus(self);
+        if(self==g_areaScene)(void)local_capture_demand::allow();
+#if !defined(_WIN32) && !defined(NWN_TAG_WORK_BENCH_DIAGNOSTIC)
+        // Install only with a selected native world context. Incomplete
+        // coverage leaves the accepted per-draw selection path intact.
+        static bool selectionLeaseAttempted=false;
+        if(!selectionLeaseAttempted && self==g_areaScene && g_shadowFrameContext.valid){
+            selectionLeaseAttempted=true;
+            if(!tag_buffer_lease::install())
+                fprintf(stderr,"[tag-buffer-lease] unavailable; per-draw selection retained\n");
+        }
+#endif
         wet_film_profile::Scope wetFilmScope(self);
         shadow_stage_profile::Scope stageScope(self);
         tag_work_benchmark::Scope tagBenchmark(self);
@@ -4270,6 +4289,7 @@ static void shadowmap_init() {
             if (!layer_stack::install_windows_part_draw())
                 fprintf(stderr, "[shadowmap][layer-stack] Windows Draw slot unavailable; keeping native policy\n");
 #else
+            native_hook_gateway::prepare_part((void*)eng::LayerStackPartDraw);
             install_trace(layer_stack::part_draw_hook, (void*)eng::LayerStackPartDraw,
                           (void*)layer_stack::part_draw_detour, "PartTriMesh::Draw layer stack scope");
 #endif
@@ -4302,6 +4322,7 @@ static void shadowmap_init() {
                         "(verified Windows replacement; trampoline not required)\n");
             }
 #else
+            native_hook_gateway::prepare_next((void*)eng::DrawBucketGetNextItem);
             install_trace(g_hookDrawBucketNext, (void*)eng::DrawBucketGetNextItem,
                           (void*)DrawBucketGetNextItem_detour,
                           "DrawBucketManager::GetNextItem");
@@ -4453,6 +4474,9 @@ static void shadowmap_init() {
 __attribute__((destructor))
 static void shadowmap_fini() {
     tag_work_benchmark::shutdown();
+#if !defined(_WIN32) && !defined(NWN_TAG_WORK_BENCH_DIAGNOSTIC)
+    tag_buffer_lease::shutdown();
+#endif
     layer_stack::shutdown();
     // Deliberately not deleting the GL objects: at destructor time the context
     // may already be gone, and a bad GL call on the way out would turn a clean
@@ -4527,6 +4551,7 @@ static void shadowmap_fini() {
     if (g_hookTraceGetShadowLights) { subhook_remove(g_hookTraceGetShadowLights); subhook_free(g_hookTraceGetShadowLights); }
     if (g_hookTracePrioritizeShadow) { subhook_remove(g_hookTracePrioritizeShadow); subhook_free(g_hookTracePrioritizeShadow); }
     if (g_hookDrawBucketNext) { subhook_remove(g_hookDrawBucketNext); subhook_free(g_hookDrawBucketNext); }
+    native_hook_gateway::shutdown();
 #ifdef _WIN32
     if (g_hookDrawBucketFirst) { subhook_remove(g_hookDrawBucketFirst); subhook_free(g_hookDrawBucketFirst); }
 #endif

@@ -542,7 +542,7 @@ extern "C" void SceneRenderDynamicGeometry_detour(void* self) {
                               g_shadowFrameContext.valid && g_cascadeMath.valid &&
                               g_cascadeMath.sourceFrame == g_shadowFrameContext.serial &&
                               !g_cascadeLightCaptureDumped;
-    const bool localVisibleCapture = g_localLightCapture &&
+    const bool localVisibleCapture = local_capture_demand::allow() && g_localLightCapture &&
                                      g_localVisibleDynamicPrepared &&
                                      self == g_traceCurrentScene && trace_area_live() &&
                                      g_shadowFrameContext.valid &&
@@ -665,6 +665,7 @@ static constexpr int kEngineObjectTypeCreature = 5;
 static constexpr int kEngineObjectTypePlaceable = 9;
 
 static void classify_current_draw_item(const void* drawItem) {
+    caster_census::note_item(drawItem);
     g_currentDrawOwnerKind = DrawOwnerKind::Unknown;
     g_currentDrawOwner = nullptr;
     if (!drawItem || !eng::PartGetAurObject || !eng::GobGetExternalDataType) {
@@ -731,6 +732,10 @@ static const void* call_draw_bucket_item_original(subhook_t hook,
                                                    void* self, int bucket,
                                                    int ordering) {
     if (!fn) return nullptr;
+#ifndef _WIN32
+    const void* gatewayResult=nullptr;
+    if(fn==eng::DrawBucketGetNextItem && native_hook_gateway::call_next(self,bucket,ordering,gatewayResult))return gatewayResult;
+#endif
     if (hook) {
         if (void* trampoline = subhook_get_trampoline(hook))
             return reinterpret_cast<eng::DrawBucketGetItem_t>(trampoline)(
@@ -936,21 +941,21 @@ extern "C" void SceneRenderDrawBucket_trace_detour(void* self, int bucket) {
     if (self == g_areaScene) nwn_oit_bucket_complete(self, bucket);
     if (useBucketReplay) {
         const bool staticTarget = staticBucketCapture || staticAlphaBucketCapture;
-        replay_bucket_into_cascade_layers(self, bucket, staticTarget);
+        { draw_cpu_probe::Timer timing(draw_cpu_probe::SunReplay); replay_bucket_into_cascade_layers(self, bucket, staticTarget); }
     }
     // Weather owns a separate straight-down static depth target. Its replay is
     // requested here, adjacent to the proven cascade bucket replay. Linux and
     // Windows now share this renderer; only weather discovery and GL hook
     // transport differ by platform.
     if (self == g_areaScene)
-        weather_runtime::capture_precipitation_occlusion_bucket(self, bucket);
+        { draw_cpu_probe::Timer timing(draw_cpu_probe::ShelterCapture); weather_runtime::capture_precipitation_occlusion_bucket(self, bucket); }
     // SUN-PATH local lights fill from here for the same reason the cascades do:
     // the engine has just rendered this bucket for the CAMERA, so replaying it
     // now captures exactly the visible casters. Area scene only, and never from
     // inside our own replay (that guard is g_localLightPassActive, checked in
     // the callee via the flag it sets around its own bucket calls).
     if (self == g_areaScene && !g_localLightPassActive)
-        replay_bucket_into_local_light_layers(self, bucket);
+        { draw_cpu_probe::Timer timing(draw_cpu_probe::LocalReplay); replay_bucket_into_local_light_layers(self, bucket); }
     if (capture) dump_cascade_camera_capture_once();
     if (census) {
         g_traceGeometryActive = false;

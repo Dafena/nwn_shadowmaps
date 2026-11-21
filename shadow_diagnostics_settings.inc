@@ -87,7 +87,7 @@ static constexpr unsigned kSettingsMax = 128;
 // too. On an older file the keys listed in settings_retuned() are ignored and
 // the file is rewritten at the new version; everything else the user set is
 // preserved.
-static constexpr int kSettingsVersion = 19;
+static constexpr int kSettingsVersion = 20;
 
 // Keys whose defaults changed in a local-light tuning pass.  Version 5 also
 // makes these controls live on the cube receiver; reset the old 1-unit
@@ -99,7 +99,10 @@ static constexpr int kSettingsVersion = 19;
 // exactly the controls "#if !NWN_SHIP" hides, so a Windows tester has no way to
 // reach them; the compiled-in default IS the shipped behaviour, and a stale
 // file must not be allowed to pin the old one.
-static bool settings_retuned(const char* key) {
+static bool settings_retuned(const char* key, int fileVersion) {
+    // v20 changes only fog lamp glow; do not retune unrelated v19 settings.
+    if(fileVersion >= 19) return std::strcmp(key, "fog_lamp_glow") == 0;
+    if(std::strcmp(key, "fog_lamp_glow") == 0) return true;
     // Version 18 (2026-11-16): adopt the maintainer's private-rain tuning.
     static const char* kV18[] = { "shader_rain_budget", "shader_rain_radius",
                                   "shader_rain_splashes" };
@@ -342,7 +345,7 @@ static void settings_reset_defaults() {
     g_godraysHeightFalloff     = 0.06f;
     g_godraysHeightBase        = 0.0f;
     g_godraysAmbient           = 0.60f;
-    g_godraysLampGlow          = 1.0f;
+    g_godraysLampGlow          = 0.2f;
     g_godraysDebug             = 0;
     g_localLightStrength       = 0.77f;
     g_localLightBias           = 0.0f;
@@ -588,7 +591,7 @@ static void load_settings() {
                 g_wetFilmEnabled = value == 0.0;
             continue;
         }
-        if (stale && settings_retuned(key)) { ++skipped; continue; }
+        if (stale && settings_retuned(key, fileVersion)) { ++skipped; continue; }
         for (unsigned i = 0; i < count; ++i) {
             if (std::strcmp(table[i].key, key) != 0) continue;
             if (!std::isfinite(value)) break;

@@ -8,6 +8,7 @@ modules. Use `rg -n` to locate the current definition.
 
 | Symbol | File | Purpose |
 | --- | --- | --- |
+| `tag_buffer_lease::install` / `release` | `shadow_tag_buffer_lease.{h,inc}` | Linux draw-buffer selection ownership, native/injector fences and conservative fallback |
 | `tag_work_benchmark::Scope` / `tag_work::Timer` | `shadow_tag_benchmark.inc` / `shadow_tag_work.inc` | Opt-in matched frame-time benchmark and sampled per-draw CPU attribution |
 | `shadow_stage_profile::Scope` / `Timer` | `shadow_stage_profile.inc` | Opt-in asynchronous GPU/CPU timing of selected world scene, final receiver copies and composite |
 | `wet_film_profile::Scope` | `shadow_wet_film_profile.inc` | Opt-in native-scene GPU timestamps and automated wet-film component ablation |
@@ -122,3 +123,13 @@ line numbers back.
 | `layer_stack::part_draw_detour` | `nwn_layer_stack.inc` | Preserve actual Part identity and submitted alpha pass |
 | `layer_stack::before_draw` / `after_draw` | `nwn_layer_stack.inc` | Apply and restore alpha-pass uniform and depth-write mask |
 | `nwn_layer_stack::plan` | `nwn_layer_stack_plan.h` | Pure complete-hint scheduling; native equal ties |
+
+
+## Verified Linux native-call gateways
+
+`native_hook_gateway::prepare_part` / `prepare_next` in
+`shadow_native_gateways.inc` prepare exact-prefix gateways before detour install.
+`verified_gateway::make_part` / `make_next` in `shadow_verified_gateway.h` preserve
+original native code; unsupported instruction patterns retain hook fallback.
+`tests/run-native-gateway-regression.sh` executes installed-hook fixture checks.
+Normal Linux enables verified dispatch; diagnostic benchmarking can alternate it.

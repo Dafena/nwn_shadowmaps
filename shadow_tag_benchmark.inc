@@ -5,17 +5,22 @@ static constexpr int cheapSequence[]={0,1,0,2,0,3,0};
 static constexpr int validationSequence[]={0,4,0,4,0};
 static constexpr int gpuSequence[]={0,5,0,6,0,5,0};
 static constexpr int leaseSequence[]={0,7,0,7,0};
+static constexpr int weatherSequence[]={7,8,7,8,7};
+static constexpr int demandSequence[]={8,9,8,9,8};
+static constexpr int gatewaySequence[]={9,10,9,10,9};
+static constexpr int localAblationSequence[]={12,13,14,13,12};
 static const int* sequence=cheapSequence;
 static unsigned phaseCount=7;
 static constexpr unsigned PhaseCount=7;
-static const char* labels[]={"checkpoint","texture-fast-path","capability-cache","both","validation-upper-bound","tag-target-disabled","tag-writes-masked","buffer-selection-lease"};
+static const char* labels[]={"checkpoint","texture-fast-path","capability-cache","both","validation-upper-bound","tag-target-disabled","tag-writes-masked","buffer-selection-lease","inactive-weather-upload","local-capture-demand","native-hook-gateways","reserved","local-full","local-capture-only","local-off"};
 struct Stats {
     std::vector<float> frame,scene,native,cpu;
     double work[tag_work::CostCount]={};unsigned draws=0,worlds=0;
+    native_hook_gateway::Counters gateway;
     tag_buffer_lease::Counters lease;
 };
 static Stats stats[PhaseCount];
-struct Record {GLuint ids[3]={};bool pending=false;unsigned phase=0;double cpu=0;tag_work::Frame work;tag_buffer_lease::Counters lease;};
+struct Record {GLuint ids[3]={};bool pending=false;unsigned phase=0;double cpu=0;tag_work::Frame work;tag_buffer_lease::Counters lease;native_hook_gateway::Counters gateway;};
 static Record records[32];static Record* current=nullptr;
 using Counter=void(*)(GLuint,GLenum);
 using Result=void(*)(GLuint,GLenum,uint64_t*);
@@ -25,11 +30,15 @@ static Swap realSwap=nullptr;static void** swapSlot=nullptr;static void* window=
 static void*(*focus)()=nullptr;
 static int(*swapInterval)()=nullptr;
 static bool initialized=false,running=false,inside=false;
+static bool localAblation=false,restoreLocalReceive=false,restoreLocalCast=false;
 static unsigned phase=0,cursor=0,lastSwapPhase=0;
 static double phaseStart=0,lastSwap=0;
 static ShadowFrameContext reference;
 static bool receiver=false,fog=false,moving=false,fixed=false,film=false,puddles=false,rainParticles=false;
 static float rainAmount=0,snowAmount=0;
+static bool localReceive=false,localCast=false;
+static int localMap=0,localSources=0;
+static double localCadence=0;
 static bool enabled(){static bool value=[](){const char* s=shadow_getenv("NWN_TAG_WORK_BENCH");return s && atoi(s)!=0;}();return value;}
 static float percentile(std::vector<float> v,float fraction){if(v.empty())return 0;std::sort(v.begin(),v.end());return v[std::min(v.size()-1,size_t((v.size()-1)*fraction))];}
 static void swap(void* target){
@@ -71,7 +80,7 @@ static void poll(){for(auto& r:records)if(r.pending){
     if(b<a || c<b || c-a>1000000000ull)continue;
     auto& s=stats[r.phase];s.scene.push_back(float((c-a)/1e6));s.native.push_back(float((b-a)/1e6));s.cpu.push_back(float(r.cpu));
     for(int i=0;i<tag_work::CostCount;++i)s.work[i]+=r.work.ms[i]*16; // 1/16 draw sampling
-    s.draws+=r.work.draws;++s.worlds;
+    s.draws+=r.work.draws;++s.worlds;s.gateway.parts+=r.gateway.parts;s.gateway.items+=r.gateway.items;
     s.lease.acquired+=r.lease.acquired;s.lease.reused+=r.lease.reused;
     s.lease.released+=r.lease.released;s.lease.gaps+=r.lease.gaps;
     for(unsigned i=0;i<9;++i)s.lease.fences[i]+=r.lease.fences[i];
@@ -83,6 +92,7 @@ static void report(unsigned p){const auto& s=stats[p];
           fprintf(stderr," %s=%.4f",tag_work::names[i],s.work[i]/s.worlds);
       }
       fprintf(stderr,"\n");
+      fprintf(stderr,"[tag-work-bench] gateways phase=%u part_calls_per_world=%.2f iterator_calls_per_world=%.2f\n",p,double(s.gateway.parts)/s.worlds,double(s.gateway.items)/s.worlds);
       if(s.lease.acquired || s.lease.gaps){
           fprintf(stderr,"[tag-work-bench] lease phase=%u acquired_per_world=%.2f reused_per_world=%.2f released_per_world=%.2f gaps=%u fences_per_world=",p,double(s.lease.acquired)/s.worlds,double(s.lease.reused)/s.worlds,double(s.lease.released)/s.worlds,s.lease.gaps);
           for(unsigned i=0;i<9;++i)fprintf(stderr,"%s%.2f",i?",":"",double(s.lease.fences[i])/s.worlds);
@@ -90,16 +100,19 @@ static void report(unsigned p){const auto& s=stats[p];
       }
     }
 }
-static void stop(const char* reason){running=false;tag_work::fastTextures=tag_work::fastCapability=tag_work::skipRepeatedValidation=tag_work::suppressDrawTarget=tag_work::suppressTagWrites=false;tag_work::active=tag_work::sampled=false;tag_buffer_lease::requested=false;tag_buffer_lease::release(tag_buffer_lease::Fence::Boundary);
+static void stop(const char* reason){running=false;
+    if(localAblation){g_localLightReceiver=restoreLocalReceive;g_localLightEmittersCast=restoreLocalCast;localAblation=false;}
+native_hook_gateway::enabled=false;weather_runtime::inactiveUploadProbe=false;local_capture_demand::set_enabled(false);tag_work::fastTextures=tag_work::fastCapability=tag_work::skipRepeatedValidation=tag_work::suppressDrawTarget=tag_work::suppressTagWrites=false;tag_work::active=tag_work::sampled=false;tag_buffer_lease::requested=false;tag_buffer_lease::release(tag_buffer_lease::Fence::Boundary);
     fprintf(stderr,"[tag-work-bench] %s; checkpoint candidates restored\n",reason);
 }
-static void apply(){int mode=sequence[phase];tag_work::fastTextures=mode==1 || mode==3;tag_work::fastCapability=mode==2 || mode==3;tag_work::skipRepeatedValidation=mode==4;tag_work::suppressDrawTarget=mode==5;tag_work::suppressTagWrites=mode==6;tag_buffer_lease::requested=mode==7;lastSwap=0;
+static void apply(){int mode=sequence[phase];tag_work::fastTextures=mode==1 || mode==3;tag_work::fastCapability=mode==2 || mode==3;tag_work::skipRepeatedValidation=mode==4;tag_work::suppressDrawTarget=mode==5;tag_work::suppressTagWrites=mode==6;tag_buffer_lease::requested=mode>=7;weather_runtime::inactiveUploadProbe=mode>=8;local_capture_demand::set_enabled(!localAblation && mode>=9);native_hook_gateway::enabled=mode==10 || localAblation;
+    if(localAblation){g_localLightReceiver=mode==12;g_localLightEmittersCast=mode!=14;localReceive=g_localLightReceiver;localCast=g_localLightEmittersCast;}lastSwap=0;
     fprintf(stderr,"[tag-work-bench] begin phase=%u mode=%s\n",phase,labels[mode]);
 }
 static bool same_view(const ShadowFrameContext& f){
     if(f.scene!=reference.scene || std::memcmp(f.viewport,reference.viewport,sizeof(f.viewport))!=0)return false;
     for(int i=0;i<16;++i)if(std::fabs(f.viewInverse[i]-reference.viewInverse[i])>(i>=12 && i<=14?.001f:.0001f) || std::fabs(f.projection[i]-reference.projection[i])>.00001f)return false;
-    return receiver==g_receiverEnabled && fog==g_godraysEnabled && moving==g_dynamicCastersEnabled && fixed==g_staticCastersEnabled && film==g_wetFilmEnabled && puddles==g_rainPuddlesEnabled && rainParticles==g_shaderRainEnabled && std::fabs(rainAmount-weather_runtime::g.rainAmount)<.001f && std::fabs(snowAmount-weather_runtime::g.snowAmount)<.001f;
+    return localReceive==g_localLightReceiver && localCast==g_localLightEmittersCast && localMap==g_localLightCaptureSize && localSources==g_localCubeSourceBudget && localCadence==g_localCubeUpdateSeconds && receiver==g_receiverEnabled && fog==g_godraysEnabled && moving==g_dynamicCastersEnabled && fixed==g_staticCastersEnabled && film==g_wetFilmEnabled && puddles==g_rainPuddlesEnabled && rainParticles==g_shaderRainEnabled && std::fabs(rainAmount-weather_runtime::g.rainAmount)<.001f && std::fabs(snowAmount-weather_runtime::g.snowAmount)<.001f;
 }
 static void update(double now,const ShadowFrameContext& frame){
     poll();
@@ -111,15 +124,20 @@ static void update(double now,const ShadowFrameContext& frame){
                 std::remove("/tmp/nwn-tag-work-preview");
                 bool ready=!on || tag_buffer_lease::install();
                 tag_buffer_lease::requested=on && ready;
+                weather_runtime::inactiveUploadProbe=on>=2 && ready;
+                local_capture_demand::set_enabled(on>=3 && on!=5 && ready);
+                native_hook_gateway::enabled=on>=4 && ready && native_hook_gateway::ready();
                 if(!tag_buffer_lease::requested)tag_buffer_lease::release(tag_buffer_lease::Fence::Boundary);
-                fprintf(stderr,"[tag-work-bench] visual preview %s\n",tag_buffer_lease::requested?"candidate ON":"checkpoint ON");
+                fprintf(stderr,"[tag-work-bench] visual preview %s inactive_weather=%d local_demand=%d\n",tag_buffer_lease::requested?"candidate ON":"checkpoint ON",int(weather_runtime::inactiveUploadProbe),int(local_capture_demand::enabled));
+                fprintf(stderr,"[preview-isolation] mode=%u gateways=%d local_lifecycle=%d\n",on,int(native_hook_gateway::enabled),int(local_capture_demand::enabled));
             }
         }
         FILE* f=fopen("/tmp/nwn-tag-work-benchmark.start","r");if(!f)return;
         unsigned pid=0,variant=0;int parsed=fscanf(f,"%u %u",&pid,&variant);fclose(f);
-        if(parsed<1 || pid!=(unsigned)getpid() || variant>3)return;
+        if(parsed<1 || pid!=(unsigned)getpid() || variant>7)return;
         std::remove("/tmp/nwn-tag-work-benchmark.start");
-        if(variant==3 && !tag_buffer_lease::install()){
+        if(variant>=6 && !native_hook_gateway::ready()){fprintf(stderr,"[tag-work-bench] refused: native gateways unverified\n");return;}
+        if(variant>=3 && !tag_buffer_lease::install()){
             fprintf(stderr,"[tag-work-bench] refused: buffer-lease ownership coverage incomplete\n");return;
         }
         if(swapInterval()!=0){fprintf(stderr,"[tag-work-bench] refused: VSync must be OFF\n");return;}
@@ -130,8 +148,10 @@ static void update(double now,const ShadowFrameContext& frame){
             s.frame.reserve(4096);s.scene.reserve(4096);s.native.reserve(4096);s.cpu.reserve(4096);
         }
         for(auto& r:records)r.pending=false;
-        reference=frame;receiver=g_receiverEnabled;fog=g_godraysEnabled;moving=g_dynamicCastersEnabled;fixed=g_staticCastersEnabled;film=g_wetFilmEnabled;puddles=g_rainPuddlesEnabled;rainParticles=g_shaderRainEnabled;rainAmount=weather_runtime::g.rainAmount;snowAmount=weather_runtime::g.snowAmount;
-        sequence=variant==3?leaseSequence:(variant==2?gpuSequence:(variant==1?validationSequence:cheapSequence));phaseCount=(variant==1 || variant==3)?5:7;
+        localAblation=variant==7;restoreLocalReceive=g_localLightReceiver;restoreLocalCast=g_localLightEmittersCast;
+        reference=frame;localReceive=g_localLightReceiver;localCast=g_localLightEmittersCast;localMap=g_localLightCaptureSize;localSources=g_localCubeSourceBudget;localCadence=g_localCubeUpdateSeconds;receiver=g_receiverEnabled;fog=g_godraysEnabled;moving=g_dynamicCastersEnabled;fixed=g_staticCastersEnabled;film=g_wetFilmEnabled;puddles=g_rainPuddlesEnabled;rainParticles=g_shaderRainEnabled;rainAmount=weather_runtime::g.rainAmount;snowAmount=weather_runtime::g.snowAmount;
+        sequence=variant==7?localAblationSequence:(variant==6?gatewaySequence:(variant==5?demandSequence:(variant==4?weatherSequence:(variant==3?leaseSequence:(variant==2?gpuSequence:(variant==1?validationSequence:cheapSequence))))));phaseCount=(variant==1 || variant>=3)?5:7;
+        fprintf(stderr,"[tag-work-bench] local receive=%d cast=%d map=%d sources=%d cadence_ms=%.3f\n",int(localReceive),int(localCast),localMap,localSources,localCadence*1000);
         phase=0;phaseStart=now;running=true;apply();
         fprintf(stderr,"[tag-work-bench] START pid=%u viewport=%dx%d receiver=%d fog=%d moving=%d fixed=%d rain=%.3f; %u 8-second phases\n",pid,reference.viewport[2],reference.viewport[3],receiver,fog,moving,fixed,rainAmount,phaseCount);
         return;
@@ -165,10 +185,10 @@ struct Scope {
         if(!running || now_seconds()-phaseStart<2)return;
         auto& r=records[cursor++%32];if(r.pending)return;
         r.phase=phase;record=current=&r;tag_work::frame=tag_work::Frame{};
-        tag_work::active=true;tag_work::sampled=false;tag_buffer_lease::reset_frame();start=now_seconds();counter(r.ids[0],0x8E28);
+        tag_work::active=true;tag_work::sampled=false;tag_buffer_lease::reset_frame();native_hook_gateway::reset_frame();start=now_seconds();counter(r.ids[0],0x8E28);
     }
     void mark_world(bool value){world=value;}
-    void native_end(){if(record && !nativeEnded){counter(record->ids[1],0x8E28);record->lease=tag_buffer_lease::end_native();nativeEnded=true;}}
+    void native_end(){if(record && !nativeEnded){counter(record->ids[1],0x8E28);record->lease=tag_buffer_lease::end_native();record->gateway=native_hook_gateway::end_native();nativeEnded=true;}}
     ~Scope(){
         if(record){
             native_end();counter(record->ids[2],0x8E28);record->cpu=(now_seconds()-start)*1000;

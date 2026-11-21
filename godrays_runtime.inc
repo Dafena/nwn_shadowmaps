@@ -1,3 +1,5 @@
+#include "shadow_fog_lamp_fade.h"
+static fog_lamp_fade::History g_fogLampHistory;
 // ---------------------------------------------------------------------------
 // Selectable quarter-, half-, or full-resolution volumetric fog and sun shafts.
 //
@@ -19,7 +21,7 @@
 //
 // Passes: linear-distance downsample -> jittered ray march -> separable
 // depth-aware blur -> depth-aware upsample composited as
-//     scene * transmittance + in-scattering.
+//     scene * transmittance + (1 - scene) * bounded in-scattering.
 // ---------------------------------------------------------------------------
 static GLuint g_godrayMaskProgram = 0;
 static GLuint g_godrayScatterProgram = 0;
@@ -58,6 +60,7 @@ struct GodrayGlState {
     GLint framebuffer = 0;
     GLint program = 0;
     GLint activeTexture = GL_TEXTURE0;
+    GLint texture27 = 0;
     GLint texture28 = 0;
     GLint texture29 = 0;
     GLint texture29Array = 0;
@@ -75,6 +78,8 @@ struct GodrayGlState {
         gl::GetIntegerv(GL_FRAMEBUFFER_BINDING, &framebuffer);
         gl::GetIntegerv(GL_CURRENT_PROGRAM, &program);
         gl::GetIntegerv(GL_ACTIVE_TEXTURE, &activeTexture);
+        gl::ActiveTexture(GL_TEXTURE0 + 27);
+        gl::GetIntegerv(GL_TEXTURE_BINDING_2D, &texture27);
         gl::ActiveTexture(GL_TEXTURE0 + 28);
         gl::GetIntegerv(GL_TEXTURE_BINDING_2D, &texture28);
         gl::ActiveTexture(GL_TEXTURE0 + 29);
@@ -100,6 +105,8 @@ struct GodrayGlState {
         gl::BindFramebuffer(GL_FRAMEBUFFER, (GLuint)framebuffer);
         gl::Viewport(viewport[0], viewport[1], viewport[2], viewport[3]);
         useProgram((GLuint)program);
+        gl::ActiveTexture(GL_TEXTURE0 + 27);
+        gl::BindTexture(GL_TEXTURE_2D, (GLuint)texture27);
         gl::ActiveTexture(GL_TEXTURE0 + 28);
         gl::BindTexture(GL_TEXTURE_2D, (GLuint)texture28);
         gl::ActiveTexture(GL_TEXTURE0 + 29);
@@ -229,8 +236,10 @@ static void build_godray_programs() {
         "uniform vec4 nwnClipFar,nwnEye,nwnLightDir;"
         "uniform int nwnSamples,nwnDebug,nwnDynamicLayers;"
         "uniform float nwnBias,nwnLampGain;"
-        "uniform vec4 nwnLampPos[8],nwnLampColor[8];uniform vec2 nwnLampFalloff;"
-        "uniform int nwnLampCount;"
+        "uniform vec4 nwnLampPos[128],nwnLampColor[128];uniform vec2 nwnLampFalloff;"
+        "uniform int nwnLampCount,nwnRefinePass;uniform sampler2D nwnRefineSceneDepth;"
+        "uniform vec2 nwnRefineOrigin;"
+        "bool nwnFogDepthMatch(float a,float b){return abs(a-b)<=max(.05,.02*min(a,b));}"
         "float nwnLit(vec3 world,float z){int layer=0;"
         "if(z>nwnClipFar.x)layer=1;if(z>nwnClipFar.y)layer=2;"
         "if(z>nwnClipFar.z)layer=3;"
@@ -240,9 +249,21 @@ static void build_godray_programs() {
         "float a=texture(nwnStaticLightDepth,vec4(s.xy,float(layer),s.z-nwnBias));"
         "float b=layer<nwnDynamicLayers?texture(nwnDynamicLightDepth,"
         "vec4(s.xy,float(layer),s.z-nwnBias)):1.0;return min(a,b);}\n"
-        "void main(){ vec2 uv=gl_FragCoord.xy/nwnTargetSize;"
+        // Native fog becomes opaque at its authored view-space end. Never
+        // let geometry hidden beyond it change the volume's integration end.
+        "float nwnFogMarchEnd(float sceneDist,float farLimit,float fogEnd,float authored,float viewPerMetre){"
+        "return authored>0.0?min(min(sceneDist,farLimit),max(fogEnd,0.0)/max(viewPerMetre,1e-6)):min(sceneDist,farLimit);}"
+        "void main(){ vec2 uv=(gl_FragCoord.xy-(nwnRefinePass!=0?nwnRefineOrigin:vec2(0)))/nwnTargetSize;"
         "if(nwnDebug==1){nwnFragColor=vec4(1,0,1,1);return;}"
         "float sceneDist=texture(nwnLinearDepth,uv).r;"
+        "if(nwnRefinePass!=0){float d=texture(nwnRefineSceneDepth,uv).r;sceneDist=60000.0;"
+        "if(d<.9999995){vec4 h=nwnCameraVPInv*vec4(uv*2.0-1.0,d*2.0-1.0,1);"
+        "if(abs(h.w)>1e-6)sceneDist=min(length(h.xyz/h.w-nwnEye.xyz),60000.0);}"
+        "ivec2 size=textureSize(nwnLinearDepth,0);ivec2 base=ivec2(floor(uv*vec2(size)-.5));"
+        "bool matched=false;for(int j=0;j<2;++j)for(int i=0;i<2;++i){"
+        "ivec2 q=clamp(base+ivec2(i,j),ivec2(0),size-ivec2(1));"
+        "matched=matched||nwnFogDepthMatch(texelFetch(nwnLinearDepth,q,0).r,sceneDist);}"
+        "if(matched)discard;}"
         "if(nwnDebug==2){nwnFragColor=vec4(vec3(sceneDist>=50000.0?1.0:0.0),1);return;}"
         "if(nwnDebug==4){ float a=1.0-smoothstep(.010,.030,length(uv-nwnSunUV));"
         "nwnFragColor=vec4(vec3(1.0,.75,.05)*a,1);return;}"
@@ -256,7 +277,7 @@ static void build_godray_programs() {
         // View-space depth gained per metre along this ray: the cascade
         // split and the engine fog ramp are both defined on view Z.
         "float viewPerMetre=max(-(nwnCameraView*vec4(ray,0.0)).z,0.0);"
-        "float marchLength=min(sceneDist,nwnFogRange.z);"
+        "float marchLength=nwnFogMarchEnd(sceneDist,nwnFogRange.z,nwnFogRange.y,nwnMedium.w,viewPerMetre);"
         "float stepLength=marchLength/float(nwnSamples);"
         // Interleaved gradient noise (Jimenez 2014) offsets each pixel's
         // samples within one step, turning the fixed-step banding into a
@@ -310,7 +331,7 @@ static void build_godray_programs() {
         // Not shadowed: a lamp's glow is not blocked by geometry IN THE AIR
         // between the lamp and the ray.
         "vec3 lampAcc=vec3(0.0);"
-        "for(int l=0;l<8;l++){if(l>=nwnLampCount)break;"
+        "for(int l=0;l<128;l++){if(l>=nwnLampCount)break;"
         "vec4 lp=nwnLampPos[l];vec3 oc=nwnEye.xyz-lp.xyz;float b=dot(oc,ray);"
         "float h=b*b-(dot(oc,oc)-lp.w*lp.w);if(h<=0.0)continue;h=sqrt(h);"
         "float t0=max(-b-h,0.0),t1=min(-b+h,marchLength);if(t1<=t0)continue;"
@@ -321,11 +342,11 @@ static void build_godray_programs() {
         "float sig=nwnMedium.x*exp(-nwnMedium.y*max(q.z-nwnMedium.z,0.0))+"
         "nwnMedium.w*clamp((t*viewPerMetre-nwnFogRange.x)/(.2*span),0.0,1.0);"
         "s+=sig*att*exp(-sig*t);}"
-        "lampAcc+=nwnLampColor[l].rgb*(s*dt);}"
-        "vec3 lampGlow=vec3(1.0)-exp(-lampAcc*nwnLampGain);"
-        // Soft shoulder: the target is an LDR framebuffer, so a forward-lobe
-        // peak must roll off instead of clipping to a flat white disc.
-        "vec3 inscatter=ambient+(vec3(1.0)-exp(-shaft))*nwnShaft.z+lampGlow;"
+        "lampAcc+=nwnLampColor[l].rgb*(nwnLampColor[l].a*s*dt);}"
+        // One shoulder for all sources. Bounding each source separately still
+        // allows their sum to exceed the LDR framebuffer's range. Apply the
+        // area fade to radiance before the shoulder, not afterwards.
+        "vec3 inscatter=vec3(1.0)-exp(-(ambient+shaft*nwnShaft.z+lampAcc*nwnLampGain));"
         "nwnFragColor=vec4(inscatter,tUser); }\n";
     // Pass 4 -- depth-aware upsample and composite.  Each full-resolution
     // pixel weights its four low-resolution neighbours by how closely their
@@ -336,7 +357,9 @@ static void build_godray_programs() {
         "out vec4 nwnFragColor;uniform sampler2D nwnVolume,nwnLinearDepth,nwnSceneDepth;"
         "uniform vec2 nwnScreenSize,nwnScreenOrigin,nwnLowSize;"
         "uniform mat4 nwnCameraVPInv;uniform vec4 nwnEye;uniform int nwnDebug;"
+        "bool nwnFogDepthMatch(float a,float b){return abs(a-b)<=max(.05,.02*min(a,b));}"
         "void main(){vec2 uv=(gl_FragCoord.xy-nwnScreenOrigin)/nwnScreenSize;"
+        "if(all(equal(nwnLowSize,nwnScreenSize))){nwnFragColor=texelFetch(nwnVolume,ivec2(gl_FragCoord.xy-nwnScreenOrigin),0);return;}"
         "if(nwnDebug!=0){nwnFragColor=vec4(texture(nwnVolume,uv).rgb,1);return;}"
         "float depth=texture(nwnSceneDepth,uv).r;float dist=60000.0;"
         "if(depth<.9999995){vec4 h=nwnCameraVPInv*vec4(uv*2.0-1.0,depth*2.0-1.0,1.0);"
@@ -346,10 +369,11 @@ static void build_godray_programs() {
         "for(int j=0;j<2;++j)for(int i=0;i<2;++i){"
         "ivec2 q=clamp(base+ivec2(i,j),ivec2(0),hi);"
         "float ld=texelFetch(nwnLinearDepth,q,0).r;"
+        "if(!nwnFogDepthMatch(ld,dist))continue;"
         "float bw=(i==0?1.0-f.x:f.x)*(j==0?1.0-f.y:f.y)+.02;"
         "float w=bw/(.01+abs(ld-dist)/max(min(ld,dist),1.0));"
         "sum+=texelFetch(nwnVolume,q,0)*w;total+=w;}"
-        "nwnFragColor=sum/max(total,1e-6);}\n";
+        "if(total<=0.0)discard;nwnFragColor=sum/total;}\n";
     // Pass 3 -- separable depth-aware Gaussian over the low-resolution
     // volume (colour AND transmittance). The edge tolerance is relative to
     // distance, so it behaves the same at 5 m and at 100 m.
@@ -362,6 +386,7 @@ static void build_godray_programs() {
         "vec4 sum=vec4(0);float total=0.0;"
         "for(int i=-5;i<=5;++i){ivec2 q=clamp(p+ivec2(nwnAxis)*i,ivec2(0),hi);"
         "float d=texelFetch(nwnLinearDepth,q,0).r;float x=float(i);"
+        "if(abs(d-cd)>max(.05,.02*min(d,cd)))continue;"
         "float w=exp(-.5*x*x/(nwnSigma*nwnSigma))*exp(-abs(d-cd)/tolerance);"
         "sum+=texelFetch(nwnVolume,q,0)*w;total+=w;}"
         "nwnFragColor=sum/max(total,1e-4);}\n";
@@ -451,7 +476,7 @@ static void godrays_fail(const char* reason) {
 static void draw_godrays(void* scene) {
     if constexpr (!kGodraysFeatureAvailable) return;
     if (!script_env::b(script_env::FogOn, g_godraysEnabled)) {
-        if (scene == g_areaScene) g_godraysStatus = "off";
+        if (scene == g_areaScene) { g_godraysStatus = "off"; g_fogLampHistory.reset(); }
         return;
     }
     // Effective values: an area script's override, else the player's setting.
@@ -607,6 +632,12 @@ static void draw_godrays(void* scene) {
     gl::ActiveTexture(GL_TEXTURE0 + 28);
     gl::BindTexture(GL_TEXTURE_2D, g_godrayMaskTexture);
     useProgram(g_godrayScatterProgram);
+    GLint refineLocation=gl::GetUniformLocation(g_godrayScatterProgram,"nwnRefinePass");
+    if(refineLocation>=0)gl::Uniform1i(refineLocation,0);
+    // Separate texture unit: sampler2D and sampler2DArrayShadow must not alias.
+    gl::ActiveTexture(GL_TEXTURE0+27);gl::BindTexture(GL_TEXTURE_2D,g_sceneDepthTex);
+    GLint refineDepth=gl::GetUniformLocation(g_godrayScatterProgram,"nwnRefineSceneDepth");
+    if(refineDepth>=0)gl::Uniform1i(refineDepth,27);
     GLint location = gl::GetUniformLocation(g_godrayScatterProgram, "nwnLinearDepth");
     if (location >= 0) gl::Uniform1i(location, 28);
     location = gl::GetUniformLocation(g_godrayScatterProgram, "nwnStaticLightDepth");
@@ -680,11 +711,15 @@ static void draw_godrays(void* scene) {
         authoredFog ? 1.5f / authoredSpan : 0.0f);
     // Local lights for the fog glow: the engine's own per-frame light census
     // (the same list the sun-shadow lamp lift and the rain tint use), not a
-    // guess. The eight whose spheres come nearest the camera are kept. A
+    // guess. Follow Lighting Max Lights, separately from shadow-map budgets. A
     // radius outside 0.25..40 m is not a lamp -- the sun has been seen
     // arriving through SetLightGL with a directional light's huge radius.
-    float lampPos[8 * 4] = {}, lampColor[8 * 4] = {};
+    static_assert(kMaxLampLights == fog_lamp_fade::kCapacity, "fog light capacities must match");
+    float lampPos[kMaxLampLights * 4] = {}, lampColor[kMaxLampLights * 4] = {};
+    const unsigned lampLimit=static_cast<unsigned>(std::max(1,std::min(lamp_upload_max(),static_cast<int>(kMaxLampLights))));
     int lampCount = 0;
+    fog_lamp_fade::Light targets[kMaxLampLights] = {};
+    unsigned targetCount=0;
     if (fogLampGlow > 0.0f) {
         struct LampPick { float distance; unsigned index; };
         LampPick picks[kLampPool];
@@ -704,20 +739,32 @@ static void draw_godrays(void* scene) {
             if (edge > marchFar) continue;
             picks[candidates++] = {std::max(0.0f, edge), i};
         }
-        const unsigned keep = std::min(candidates, 8u);
+        const unsigned keep = std::min(candidates, lampLimit);
         std::partial_sort(picks, picks + keep, picks + candidates,
             [](const LampPick& a, const LampPick& b) { return a.distance < b.distance; });
         for (unsigned k = 0; k < keep; ++k) {
             const LampEntry& lamp = g_lampLights[picks[k].index];
-            lampPos[k * 4 + 0] = lamp.pos[0];
-            lampPos[k * 4 + 1] = lamp.pos[1];
-            lampPos[k * 4 + 2] = lamp.pos[2];
-            lampPos[k * 4 + 3] = lamp.radius;
-            for (int c = 0; c < 3; ++c)
-                lampColor[k * 4 + c] = std::max(0.0f, std::min(2.0f, lamp.color[c]));
-            lampColor[k * 4 + 3] = 1.0f;
+            auto& target=targets[targetCount++];
+            target.key=lamp.key;target.radius=lamp.radius;
+            for(int c=0;c<3;++c){
+                target.pos[c]=lamp.pos[c];
+                target.color[c]=std::isfinite(lamp.color[c]) ? std::max(0.f,std::min(2.f,lamp.color[c])) : 0.f;
+            }
         }
-        lampCount = (int)keep;
+    }
+    static unsigned loggedLampLimit=0;
+    if(targetCount && loggedLampLimit!=lampLimit){
+        loggedLampLimit=lampLimit;
+        fprintf(stderr,"[shadowmap][godrays] Lighting Max Lights=%u fog candidates selected=%u capacity=%u\n",lampLimit,targetCount,kMaxLampLights);
+    }
+    if(fogLampGlow<=0) g_fogLampHistory.reset();
+    g_fogLampHistory.update(targets,targetCount,now_seconds(),scene,weather_runtime::g.weatherArea);
+    for(const auto& slot:g_fogLampHistory.slots){
+        if(!slot.light.key || slot.weight<=0)continue;
+        for(int c=0;c<3;++c){lampPos[lampCount*4+c]=slot.light.pos[c];lampColor[lampCount*4+c]=slot.light.color[c];}
+        lampPos[lampCount*4+3]=slot.light.radius;
+        lampColor[lampCount*4+3]=slot.weight;
+        ++lampCount;
     }
     location = gl::GetUniformLocation(g_godrayScatterProgram, "nwnLampCount");
     if (location >= 0) gl::Uniform1i(location, lampCount);
@@ -727,8 +774,8 @@ static void draw_godrays(void* scene) {
         location = gl::GetUniformLocation(g_godrayScatterProgram, "nwnLampColor[0]");
         if (location >= 0) gl::Uniform4fv(location, lampCount, lampColor);
     }
-    // "Lamp glow" 0..3 -> in-scattering gain. At 1 a lamp of radius ~6 m in
-    // the default 0.32 density reads as a clear halo, not a flare.
+    // "Lamp glow" 0..3 -> in-scattering gain (default 0.2). Slot alpha
+    // fades source radiance before the shared LDR shoulder.
     location = gl::GetUniformLocation(g_godrayScatterProgram, "nwnLampGain");
     if (location >= 0) gl::Uniform1f(location, 8.0f * std::max(0.0f, fogLampGlow));
     location = gl::GetUniformLocation(g_godrayScatterProgram, "nwnLampFalloff");
@@ -839,17 +886,32 @@ static void draw_godrays(void* scene) {
                                      g_shadowFrameContext.eye.z, 1.0f);
     gl::Enable(GL_BLEND);
     gl::BlendEquationSeparate(GL_FUNC_ADD, GL_FUNC_ADD);
-    // Normal mode implements the volume equation in fixed-function blending:
-    //   result = in-scattering + scene * transmittance
-    // with the transmittance carried in the fragment's alpha. Debug modes
+    // NWN supplies an already-lit, already authored-fogged LDR scene. Scatter
+    // into its remaining channel headroom, rather than adding a second exposure:
+    //   result = in-scattering * (1 - scene) + scene * transmittance.
+    // With scatter/scene/T in [0,1], this stays in [0,1] without hard clipping.
+    // The transmittance still attenuates only the injector's own medium. Debug modes
     // replace RGB so their channels cannot saturate against the underlying
     // scene. Framebuffer alpha belongs to NWN in both cases.
     if (g_godraysDebug == 0)
-        gl::BlendFuncSeparate(GL_ONE, GL_SRC_ALPHA, GL_ZERO, GL_ONE);
+        gl::BlendFuncSeparate(GL_ONE_MINUS_DST_COLOR, GL_SRC_ALPHA, GL_ZERO, GL_ONE);
     else
         gl::BlendFuncSeparate(GL_ONE, GL_ZERO, GL_ZERO, GL_ONE);
     gl::ColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_FALSE);
     godrays_draw_fullscreen();
+
+    // Only pixels rejected by the low-resolution composite reach this march.
+    // Reuse precisely the same medium/light uniforms and shadow maps as pass2.
+    if(g_godraysDebug==0 && divisor>1){
+        useProgram(g_godrayScatterProgram);
+        if(refineLocation>=0)gl::Uniform1i(refineLocation,1);
+        location=gl::GetUniformLocation(g_godrayScatterProgram,"nwnTargetSize");
+        if(location>=0)gl::Uniform2f(location,(float)state.viewport[2],(float)state.viewport[3]);
+        location=gl::GetUniformLocation(g_godrayScatterProgram,"nwnRefineOrigin");
+        if(location>=0)gl::Uniform2f(location,(float)state.viewport[0],(float)state.viewport[1]);
+        gl::ActiveTexture(GL_TEXTURE0+28);gl::BindTexture(GL_TEXTURE_2D,g_godrayMaskTexture);
+        godrays_draw_fullscreen();
+    }
 
     if (lampCount == 0) g_godraysLampsDrawn = 0;
     if (g_godraysDebug != 0) g_godraysStatus = "drawing (debug view)";

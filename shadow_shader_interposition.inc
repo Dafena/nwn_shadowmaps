@@ -233,6 +233,9 @@ extern "C" GLuint my_create_program() {
 }
 
 extern "C" void my_delete_program(GLuint program) {
+#ifndef _WIN32
+    if(auto* state=weather_runtime::find_program_state(program))state->inactiveUploadPrimed=false;
+#endif
     sun_tag_forget_program(program);
     if (g_realDeleteProgram) g_realDeleteProgram(program);
     g_programsWithPatchedRuntimeShaders.erase(program);
@@ -323,6 +326,9 @@ extern "C" void my_attach_shader(GLuint program, GLuint shader) {
 }
 
 extern "C" void my_link_program(GLuint program) {
+#ifndef _WIN32
+    if(auto* state=weather_runtime::find_program_state(program))state->inactiveUploadPrimed=false;
+#endif
     if (!g_realLinkProgram) return;
     g_realLinkProgram(program);
     if (g_programsWithPatchedRuntimeShaders.find(program) ==
@@ -2204,6 +2210,8 @@ static void dump_quad_program_source(unsigned prog, int bucket) {
 // inside one native RenderDrawBucket invocation; the call below still reaches
 // NWN exactly once and with its unmodified state.
 static void trace_normal_geometry_draw(GLsizei count, bool indexed) {
+    caster_census::observe(count,indexed);
+    draw_cpu_probe::Timer traceTiming(draw_cpu_probe::TraceDraw);
     if (g_overlayPassActive) return;   // UI draws are not scene geometry
     // NWN applies culling while preparing each material, after the local replay
     // begins. Override it at the common draw funnel so closed character bodies
@@ -2222,8 +2230,8 @@ static void trace_normal_geometry_draw(GLsizei count, bool indexed) {
                     "[shadowmap][local-light] back-face character capture active\n");
         }
     }
-    weather_observe_draw(g_curProgram, count);
-    layer_stack::before_draw();
+    { draw_cpu_probe::Timer timing(draw_cpu_probe::Weather); weather_observe_draw(g_curProgram, count); }
+    { draw_cpu_probe::Timer timing(draw_cpu_probe::Layers); layer_stack::before_draw(); }
     if (!g_inOurPass && !g_cascadeReplayActive &&
         nwn_core::g_currentBucket == 2 && weather_tracks_dynamic_creatures()) {
         float weatherActorPosition[3] = {};
@@ -2295,8 +2303,8 @@ static void trace_normal_geometry_draw(GLsizei count, bool indexed) {
     // the ones the bounded Phase 3e census happens to still be counting.
     if (nwn_core::g_drawObserver &&
         (!nwn_core::g_ownedPass || nwn_oit_observes_owned_draws()) && !g_inOurPass)
-        nwn_core::g_drawObserver();
-    begin_sun_receiver_tag();
+        { draw_cpu_probe::Timer timing(draw_cpu_probe::ObserverBefore); nwn_core::g_drawObserver(); }
+    { draw_cpu_probe::Timer timing(draw_cpu_probe::TagBegin); begin_sun_receiver_tag(); }
     if (!g_cascadeGeometryTrace || !g_traceGeometryActive ||
         !g_traceFrameActive || g_traceGeometryBuckets >= g_traceGeometryMaxBuckets ||
         count <= 0 || !gl::GetIntegerv) return;
@@ -2338,11 +2346,12 @@ static void trace_normal_geometry_draw(GLsizei count, bool indexed) {
 }
 
 static inline void finish_observed_engine_draw() {
+    draw_cpu_probe::Timer finishTiming(draw_cpu_probe::FinishDraw);
     layer_stack::after_draw();
-    end_sun_receiver_tag();
+    { draw_cpu_probe::Timer timing(draw_cpu_probe::TagEnd); end_sun_receiver_tag(); }
     if (nwn_core::g_drawObserverAfter &&
         (!nwn_core::g_ownedPass || nwn_oit_observes_owned_draws()) && !g_inOurPass)
-        nwn_core::g_drawObserverAfter();
+        { draw_cpu_probe::Timer timing(draw_cpu_probe::ObserverAfter); nwn_core::g_drawObserverAfter(); }
 }
 
 #define DUPLICATE_OIT_FRINGE(drawCall)                                      \
@@ -2524,6 +2533,7 @@ static bool local_cube_visible_dynamic_draw() {
         const bool duplicateLocal = g_localVisibleDynamicCaptureActive &&    \
                                     g_localVisibleDynamicPrepared;           \
         if (duplicateLocal && local_cube_visible_dynamic_draw()) {           \
+            draw_cpu_probe::Timer localTiming(draw_cpu_probe::LocalDynamic); \
           {                                                                   \
             float localCasterPos[3];                                          \
             const bool localHavePos =                                         \
@@ -2578,6 +2588,7 @@ static bool local_cube_visible_dynamic_draw() {
         if (g_localObjectCaptureActive && !current_draw_is_creature() &&      \
             g_localObjectTargetUsable && g_localObjectFbo &&                  \
             g_localObjectWriteDepthTex) {                                     \
+            draw_cpu_probe::Timer filteredTiming(draw_cpu_probe::LocalFiltered); \
             const int selectiveLayer = g_localObjectCaptureLayer;             \
             gl::BindFramebuffer(GL_FRAMEBUFFER, g_localObjectFbo);            \
             gl::Viewport(0, 0, g_localObjectMapSize, g_localObjectMapSize);   \
@@ -2612,32 +2623,32 @@ extern "C" void NWN_GL_INTERPOSE(glDrawElements)(GLenum mode, GLsizei count, GLe
     if (suppress_native_rain_draw()) { finish_observed_engine_draw(); return; }
     const bool suppressNative = nwn_oit_suppress_current_draw();
     if (g_nextDrawElements && !suppressNative)
-        g_nextDrawElements(mode, count, type, indices);
+        caster_census::submit([&](){g_nextDrawElements(mode, count, type, indices);});
     if (g_nextDrawElements && !suppressNative)
         DUPLICATE_SELECTIVE_LOCAL_DEPTH(
-            g_nextDrawElements(mode, count, type, indices), (void)0);
+            caster_census::submit([&](){g_nextDrawElements(mode, count, type, indices);}), (void)0);
     if (g_nextDrawElements)
-        DUPLICATE_OIT_FRINGE(g_nextDrawElements(mode, count, type, indices));
+        DUPLICATE_OIT_FRINGE(caster_census::submit([&](){g_nextDrawElements(mode, count, type, indices);}));
     if (g_nextDrawElements)
-        DUPLICATE_A2C_OPAQUE_DEPTH(g_nextDrawElements(mode, count, type, indices));
+        DUPLICATE_A2C_OPAQUE_DEPTH(caster_census::submit([&](){g_nextDrawElements(mode, count, type, indices);}));
     if (g_nextDrawElements)
-        DUPLICATE_MODE3_OPAQUE_DEPTH(g_nextDrawElements(mode, count, type, indices));
+        DUPLICATE_MODE3_OPAQUE_DEPTH(caster_census::submit([&](){g_nextDrawElements(mode, count, type, indices);}));
     if (g_nextDrawElements)
-        DUPLICATE_A2C_PRIVATE_EMITTER(g_nextDrawElements(mode, count, type, indices));
+        DUPLICATE_A2C_PRIVATE_EMITTER(caster_census::submit([&](){g_nextDrawElements(mode, count, type, indices);}));
     finish_observed_engine_draw();
     note_cascade_replay_draws(1);
     note_local_light_draws(1);
     SavedState st;
     if (g_nextDrawElements && begin_cascade_camera_capture(st)) {
-        g_nextDrawElements(mode, count, type, indices);
+        caster_census::submit([&](){g_nextDrawElements(mode, count, type, indices);});
         ++g_cascadeCameraCaptureDraws;
         end_cascade_camera_capture(st);
     }
     if (g_nextDrawElements)
-        DUPLICATE_CASCADE_LIGHT(g_nextDrawElements(mode, count, type, indices),
+        DUPLICATE_CASCADE_LIGHT(caster_census::submit([&](){g_nextDrawElements(mode, count, type, indices);}),
                                 note_cascade_light_draws(1));
     if (g_nextDrawElements)
-        DUPLICATE_LOCAL_CUBE_DYNAMIC(g_nextDrawElements(mode, count, type, indices), (void)0);
+        DUPLICATE_LOCAL_CUBE_DYNAMIC(caster_census::submit([&](){g_nextDrawElements(mode, count, type, indices);}), (void)0);
 }
 
 static void (*g_nextDrawArrays)(GLenum, GLint, GLsizei) = nullptr;
@@ -2650,32 +2661,32 @@ extern "C" void NWN_GL_INTERPOSE(glDrawArrays)(GLenum mode, GLint first, GLsizei
     if (suppress_native_rain_draw()) { finish_observed_engine_draw(); return; }
     const bool suppressNative = nwn_oit_suppress_current_draw();
     if (g_nextDrawArrays && !suppressNative)
-        g_nextDrawArrays(mode, first, count);
+        caster_census::submit([&](){g_nextDrawArrays(mode, first, count);});
     if (g_nextDrawArrays && !suppressNative)
         DUPLICATE_SELECTIVE_LOCAL_DEPTH(
-            g_nextDrawArrays(mode, first, count), (void)0);
+            caster_census::submit([&](){g_nextDrawArrays(mode, first, count);}), (void)0);
     if (g_nextDrawArrays)
-        DUPLICATE_OIT_FRINGE(g_nextDrawArrays(mode, first, count));
+        DUPLICATE_OIT_FRINGE(caster_census::submit([&](){g_nextDrawArrays(mode, first, count);}));
     if (g_nextDrawArrays)
-        DUPLICATE_A2C_OPAQUE_DEPTH(g_nextDrawArrays(mode, first, count));
+        DUPLICATE_A2C_OPAQUE_DEPTH(caster_census::submit([&](){g_nextDrawArrays(mode, first, count);}));
     if (g_nextDrawArrays)
-        DUPLICATE_MODE3_OPAQUE_DEPTH(g_nextDrawArrays(mode, first, count));
+        DUPLICATE_MODE3_OPAQUE_DEPTH(caster_census::submit([&](){g_nextDrawArrays(mode, first, count);}));
     if (g_nextDrawArrays)
-        DUPLICATE_A2C_PRIVATE_EMITTER(g_nextDrawArrays(mode, first, count));
+        DUPLICATE_A2C_PRIVATE_EMITTER(caster_census::submit([&](){g_nextDrawArrays(mode, first, count);}));
     finish_observed_engine_draw();
     note_cascade_replay_draws(1);
     note_local_light_draws(1);
     SavedState st;
     if (g_nextDrawArrays && begin_cascade_camera_capture(st)) {
-        g_nextDrawArrays(mode, first, count);
+        caster_census::submit([&](){g_nextDrawArrays(mode, first, count);});
         ++g_cascadeCameraCaptureDraws;
         end_cascade_camera_capture(st);
     }
     if (g_nextDrawArrays)
-        DUPLICATE_CASCADE_LIGHT(g_nextDrawArrays(mode, first, count),
+        DUPLICATE_CASCADE_LIGHT(caster_census::submit([&](){g_nextDrawArrays(mode, first, count);}),
                                 note_cascade_light_draws(1));
     if (g_nextDrawArrays)
-        DUPLICATE_LOCAL_CUBE_DYNAMIC(g_nextDrawArrays(mode, first, count), (void)0);
+        DUPLICATE_LOCAL_CUBE_DYNAMIC(caster_census::submit([&](){g_nextDrawArrays(mode, first, count);}), (void)0);
 }
 
 using DrawRangeElements_t = void (*)(GLenum, GLuint, GLuint, GLsizei, GLenum,
@@ -2718,36 +2729,36 @@ extern "C" void my_draw_range_elements(GLenum mode, GLuint start, GLuint end,
     if (suppress_native_rain_draw()) { finish_observed_engine_draw(); return; }
     const bool suppressNative = nwn_oit_suppress_current_draw();
     if (g_realDrawRangeElements && !suppressNative)
-        g_realDrawRangeElements(mode, start, end, count, type, indices);
+        caster_census::submit([&](){g_realDrawRangeElements(mode, start, end, count, type, indices);});
     if (g_realDrawRangeElements && !suppressNative)
         DUPLICATE_SELECTIVE_LOCAL_DEPTH(
-            g_realDrawRangeElements(mode, start, end, count, type, indices), (void)0);
+            caster_census::submit([&](){g_realDrawRangeElements(mode, start, end, count, type, indices);}), (void)0);
     if (g_realDrawRangeElements)
-        DUPLICATE_OIT_FRINGE(g_realDrawRangeElements(mode, start, end, count,
-                                                      type, indices));
+        DUPLICATE_OIT_FRINGE(caster_census::submit([&](){g_realDrawRangeElements(mode, start, end, count,
+                                                      type, indices);}));
     if (g_realDrawRangeElements)
-        DUPLICATE_A2C_OPAQUE_DEPTH(g_realDrawRangeElements(mode, start, end, count,
-                                                            type, indices));
+        DUPLICATE_A2C_OPAQUE_DEPTH(caster_census::submit([&](){g_realDrawRangeElements(mode, start, end, count,
+                                                            type, indices);}));
     if (g_realDrawRangeElements)
-        DUPLICATE_MODE3_OPAQUE_DEPTH(g_realDrawRangeElements(
-            mode, start, end, count, type, indices));
+        DUPLICATE_MODE3_OPAQUE_DEPTH(caster_census::submit([&](){g_realDrawRangeElements(
+            mode, start, end, count, type, indices);}));
     if (g_realDrawRangeElements)
-        DUPLICATE_A2C_PRIVATE_EMITTER(g_realDrawRangeElements(
-            mode, start, end, count, type, indices));
+        DUPLICATE_A2C_PRIVATE_EMITTER(caster_census::submit([&](){g_realDrawRangeElements(
+            mode, start, end, count, type, indices);}));
     finish_observed_engine_draw();
     note_cascade_replay_draws(1);
     note_local_light_draws(1);
     SavedState st;
     if (g_realDrawRangeElements && begin_cascade_camera_capture(st)) {
-        g_realDrawRangeElements(mode, start, end, count, type, indices);
+        caster_census::submit([&](){g_realDrawRangeElements(mode, start, end, count, type, indices);});
         ++g_cascadeCameraCaptureDraws;
         end_cascade_camera_capture(st);
     }
     if (g_realDrawRangeElements)
-        DUPLICATE_CASCADE_LIGHT(g_realDrawRangeElements(mode, start, end, count, type, indices),
+        DUPLICATE_CASCADE_LIGHT(caster_census::submit([&](){g_realDrawRangeElements(mode, start, end, count, type, indices);}),
                                 note_cascade_light_draws(1));
     if (g_realDrawRangeElements)
-        DUPLICATE_LOCAL_CUBE_DYNAMIC(g_realDrawRangeElements(mode, start, end, count, type, indices), (void)0);
+        DUPLICATE_LOCAL_CUBE_DYNAMIC(caster_census::submit([&](){g_realDrawRangeElements(mode, start, end, count, type, indices);}), (void)0);
 }
 
 extern "C" void my_multi_draw_arrays(GLenum mode, const GLint* first,
@@ -2757,34 +2768,34 @@ extern "C" void my_multi_draw_arrays(GLenum mode, const GLint* first,
     if (suppress_native_rain_draw()) { finish_observed_engine_draw(); return; }
     const bool suppressNative = nwn_oit_suppress_current_draw();
     if (g_realMultiDrawArrays && !suppressNative)
-        g_realMultiDrawArrays(mode, first, count, drawcount);
+        caster_census::submit([&](){g_realMultiDrawArrays(mode, first, count, drawcount);});
     if (g_realMultiDrawArrays && !suppressNative)
         DUPLICATE_SELECTIVE_LOCAL_DEPTH(
-            g_realMultiDrawArrays(mode, first, count, drawcount), (void)0);
+            caster_census::submit([&](){g_realMultiDrawArrays(mode, first, count, drawcount);}), (void)0);
     if (g_realMultiDrawArrays)
-        DUPLICATE_OIT_FRINGE(g_realMultiDrawArrays(mode, first, count, drawcount));
+        DUPLICATE_OIT_FRINGE(caster_census::submit([&](){g_realMultiDrawArrays(mode, first, count, drawcount);}));
     if (g_realMultiDrawArrays)
-        DUPLICATE_A2C_OPAQUE_DEPTH(g_realMultiDrawArrays(mode, first, count, drawcount));
+        DUPLICATE_A2C_OPAQUE_DEPTH(caster_census::submit([&](){g_realMultiDrawArrays(mode, first, count, drawcount);}));
     if (g_realMultiDrawArrays)
-        DUPLICATE_MODE3_OPAQUE_DEPTH(g_realMultiDrawArrays(
-            mode, first, count, drawcount));
+        DUPLICATE_MODE3_OPAQUE_DEPTH(caster_census::submit([&](){g_realMultiDrawArrays(
+            mode, first, count, drawcount);}));
     if (g_realMultiDrawArrays)
-        DUPLICATE_A2C_PRIVATE_EMITTER(g_realMultiDrawArrays(
-            mode, first, count, drawcount));
+        DUPLICATE_A2C_PRIVATE_EMITTER(caster_census::submit([&](){g_realMultiDrawArrays(
+            mode, first, count, drawcount);}));
     finish_observed_engine_draw();
     note_cascade_replay_draws((unsigned)std::max(0, drawcount));
     note_local_light_draws((unsigned)std::max(0, drawcount));
     SavedState st;
     if (g_realMultiDrawArrays && begin_cascade_camera_capture(st)) {
-        g_realMultiDrawArrays(mode, first, count, drawcount);
+        caster_census::submit([&](){g_realMultiDrawArrays(mode, first, count, drawcount);});
         g_cascadeCameraCaptureDraws += (unsigned)std::max(0, drawcount);
         end_cascade_camera_capture(st);
     }
     if (g_realMultiDrawArrays)
-        DUPLICATE_CASCADE_LIGHT(g_realMultiDrawArrays(mode, first, count, drawcount),
+        DUPLICATE_CASCADE_LIGHT(caster_census::submit([&](){g_realMultiDrawArrays(mode, first, count, drawcount);}),
                                 note_cascade_light_draws((unsigned)std::max(0, drawcount)));
     if (g_realMultiDrawArrays)
-        DUPLICATE_LOCAL_CUBE_DYNAMIC(g_realMultiDrawArrays(mode, first, count, drawcount), (void)0);
+        DUPLICATE_LOCAL_CUBE_DYNAMIC(caster_census::submit([&](){g_realMultiDrawArrays(mode, first, count, drawcount);}), (void)0);
 }
 
 extern "C" void my_multi_draw_elements(GLenum mode, const GLsizei* count,
@@ -2795,36 +2806,36 @@ extern "C" void my_multi_draw_elements(GLenum mode, const GLsizei* count,
     if (suppress_native_rain_draw()) { finish_observed_engine_draw(); return; }
     const bool suppressNative = nwn_oit_suppress_current_draw();
     if (g_realMultiDrawElements && !suppressNative)
-        g_realMultiDrawElements(mode, count, type, indices, drawcount);
+        caster_census::submit([&](){g_realMultiDrawElements(mode, count, type, indices, drawcount);});
     if (g_realMultiDrawElements && !suppressNative)
         DUPLICATE_SELECTIVE_LOCAL_DEPTH(
-            g_realMultiDrawElements(mode, count, type, indices, drawcount), (void)0);
+            caster_census::submit([&](){g_realMultiDrawElements(mode, count, type, indices, drawcount);}), (void)0);
     if (g_realMultiDrawElements)
-        DUPLICATE_OIT_FRINGE(g_realMultiDrawElements(mode, count, type, indices,
-                                                      drawcount));
+        DUPLICATE_OIT_FRINGE(caster_census::submit([&](){g_realMultiDrawElements(mode, count, type, indices,
+                                                      drawcount);}));
     if (g_realMultiDrawElements)
-        DUPLICATE_A2C_OPAQUE_DEPTH(g_realMultiDrawElements(mode, count, type,
-                                                            indices, drawcount));
+        DUPLICATE_A2C_OPAQUE_DEPTH(caster_census::submit([&](){g_realMultiDrawElements(mode, count, type,
+                                                            indices, drawcount);}));
     if (g_realMultiDrawElements)
-        DUPLICATE_MODE3_OPAQUE_DEPTH(g_realMultiDrawElements(
-            mode, count, type, indices, drawcount));
+        DUPLICATE_MODE3_OPAQUE_DEPTH(caster_census::submit([&](){g_realMultiDrawElements(
+            mode, count, type, indices, drawcount);}));
     if (g_realMultiDrawElements)
-        DUPLICATE_A2C_PRIVATE_EMITTER(g_realMultiDrawElements(
-            mode, count, type, indices, drawcount));
+        DUPLICATE_A2C_PRIVATE_EMITTER(caster_census::submit([&](){g_realMultiDrawElements(
+            mode, count, type, indices, drawcount);}));
     finish_observed_engine_draw();
     note_cascade_replay_draws((unsigned)std::max(0, drawcount));
     note_local_light_draws((unsigned)std::max(0, drawcount));
     SavedState st;
     if (g_realMultiDrawElements && begin_cascade_camera_capture(st)) {
-        g_realMultiDrawElements(mode, count, type, indices, drawcount);
+        caster_census::submit([&](){g_realMultiDrawElements(mode, count, type, indices, drawcount);});
         g_cascadeCameraCaptureDraws += (unsigned)std::max(0, drawcount);
         end_cascade_camera_capture(st);
     }
     if (g_realMultiDrawElements)
-        DUPLICATE_CASCADE_LIGHT(g_realMultiDrawElements(mode, count, type, indices, drawcount),
+        DUPLICATE_CASCADE_LIGHT(caster_census::submit([&](){g_realMultiDrawElements(mode, count, type, indices, drawcount);}),
                                 note_cascade_light_draws((unsigned)std::max(0, drawcount)));
     if (g_realMultiDrawElements)
-        DUPLICATE_LOCAL_CUBE_DYNAMIC(g_realMultiDrawElements(mode, count, type, indices, drawcount), (void)0);
+        DUPLICATE_LOCAL_CUBE_DYNAMIC(caster_census::submit([&](){g_realMultiDrawElements(mode, count, type, indices, drawcount);}), (void)0);
 }
 
 extern "C" void my_draw_elements_base_vertex(GLenum mode, GLsizei count,
@@ -2834,37 +2845,37 @@ extern "C" void my_draw_elements_base_vertex(GLenum mode, GLsizei count,
     if (suppress_native_rain_draw()) { finish_observed_engine_draw(); return; }
     const bool suppressNative = nwn_oit_suppress_current_draw();
     if (g_realDrawElementsBaseVertex && !suppressNative)
-        g_realDrawElementsBaseVertex(mode, count, type, indices, basevertex);
+        caster_census::submit([&](){g_realDrawElementsBaseVertex(mode, count, type, indices, basevertex);});
     if (g_realDrawElementsBaseVertex && !suppressNative)
         DUPLICATE_SELECTIVE_LOCAL_DEPTH(
-            g_realDrawElementsBaseVertex(mode, count, type, indices, basevertex), (void)0);
+            caster_census::submit([&](){g_realDrawElementsBaseVertex(mode, count, type, indices, basevertex);}), (void)0);
     if (g_realDrawElementsBaseVertex)
-        DUPLICATE_OIT_FRINGE(g_realDrawElementsBaseVertex(mode, count, type,
-                                                          indices, basevertex));
+        DUPLICATE_OIT_FRINGE(caster_census::submit([&](){g_realDrawElementsBaseVertex(mode, count, type,
+                                                          indices, basevertex);}));
     if (g_realDrawElementsBaseVertex)
-        DUPLICATE_A2C_OPAQUE_DEPTH(g_realDrawElementsBaseVertex(mode, count, type,
-                                                                indices, basevertex));
+        DUPLICATE_A2C_OPAQUE_DEPTH(caster_census::submit([&](){g_realDrawElementsBaseVertex(mode, count, type,
+                                                                indices, basevertex);}));
     if (g_realDrawElementsBaseVertex)
-        DUPLICATE_MODE3_OPAQUE_DEPTH(g_realDrawElementsBaseVertex(
-            mode, count, type, indices, basevertex));
+        DUPLICATE_MODE3_OPAQUE_DEPTH(caster_census::submit([&](){g_realDrawElementsBaseVertex(
+            mode, count, type, indices, basevertex);}));
     if (g_realDrawElementsBaseVertex)
-        DUPLICATE_A2C_PRIVATE_EMITTER(g_realDrawElementsBaseVertex(
-            mode, count, type, indices, basevertex));
+        DUPLICATE_A2C_PRIVATE_EMITTER(caster_census::submit([&](){g_realDrawElementsBaseVertex(
+            mode, count, type, indices, basevertex);}));
     finish_observed_engine_draw();
     note_cascade_replay_draws(1);
     note_local_light_draws(1);
     SavedState st;
     if (g_realDrawElementsBaseVertex && begin_cascade_camera_capture(st)) {
-        g_realDrawElementsBaseVertex(mode, count, type, indices, basevertex);
+        caster_census::submit([&](){g_realDrawElementsBaseVertex(mode, count, type, indices, basevertex);});
         ++g_cascadeCameraCaptureDraws;
         end_cascade_camera_capture(st);
     }
     if (g_realDrawElementsBaseVertex)
-        DUPLICATE_CASCADE_LIGHT(g_realDrawElementsBaseVertex(mode, count, type, indices, basevertex),
+        DUPLICATE_CASCADE_LIGHT(caster_census::submit([&](){g_realDrawElementsBaseVertex(mode, count, type, indices, basevertex);}),
                                 note_cascade_light_draws(1));
     if (g_realDrawElementsBaseVertex)
-        DUPLICATE_LOCAL_CUBE_DYNAMIC(g_realDrawElementsBaseVertex(mode, count, type, indices,
-                                                                   basevertex), (void)0);
+        DUPLICATE_LOCAL_CUBE_DYNAMIC(caster_census::submit([&](){g_realDrawElementsBaseVertex(mode, count, type, indices,
+                                                                   basevertex);}), (void)0);
 }
 
 extern "C" void my_draw_range_elements_base_vertex(GLenum mode, GLuint start,
@@ -2875,41 +2886,41 @@ extern "C" void my_draw_range_elements_base_vertex(GLenum mode, GLuint start,
     if (suppress_native_rain_draw()) { finish_observed_engine_draw(); return; }
     const bool suppressNative = nwn_oit_suppress_current_draw();
     if (g_realDrawRangeElementsBaseVertex && !suppressNative)
-        g_realDrawRangeElementsBaseVertex(mode, start, end, count, type,
-                                           indices, basevertex);
+        caster_census::submit([&](){g_realDrawRangeElementsBaseVertex(mode, start, end, count, type,
+                                           indices, basevertex);});
     if (g_realDrawRangeElementsBaseVertex && !suppressNative)
         DUPLICATE_SELECTIVE_LOCAL_DEPTH(
-            g_realDrawRangeElementsBaseVertex(mode, start, end, count, type,
-                                               indices, basevertex), (void)0);
+            caster_census::submit([&](){g_realDrawRangeElementsBaseVertex(mode, start, end, count, type,
+                                               indices, basevertex);}), (void)0);
     if (g_realDrawRangeElementsBaseVertex)
-        DUPLICATE_OIT_FRINGE(g_realDrawRangeElementsBaseVertex(
-            mode, start, end, count, type, indices, basevertex));
+        DUPLICATE_OIT_FRINGE(caster_census::submit([&](){g_realDrawRangeElementsBaseVertex(
+            mode, start, end, count, type, indices, basevertex);}));
     if (g_realDrawRangeElementsBaseVertex)
-        DUPLICATE_A2C_OPAQUE_DEPTH(g_realDrawRangeElementsBaseVertex(
-            mode, start, end, count, type, indices, basevertex));
+        DUPLICATE_A2C_OPAQUE_DEPTH(caster_census::submit([&](){g_realDrawRangeElementsBaseVertex(
+            mode, start, end, count, type, indices, basevertex);}));
     if (g_realDrawRangeElementsBaseVertex)
-        DUPLICATE_MODE3_OPAQUE_DEPTH(g_realDrawRangeElementsBaseVertex(
-            mode, start, end, count, type, indices, basevertex));
+        DUPLICATE_MODE3_OPAQUE_DEPTH(caster_census::submit([&](){g_realDrawRangeElementsBaseVertex(
+            mode, start, end, count, type, indices, basevertex);}));
     if (g_realDrawRangeElementsBaseVertex)
-        DUPLICATE_A2C_PRIVATE_EMITTER(g_realDrawRangeElementsBaseVertex(
-            mode, start, end, count, type, indices, basevertex));
+        DUPLICATE_A2C_PRIVATE_EMITTER(caster_census::submit([&](){g_realDrawRangeElementsBaseVertex(
+            mode, start, end, count, type, indices, basevertex);}));
     finish_observed_engine_draw();
     note_cascade_replay_draws(1);
     note_local_light_draws(1);
     SavedState st;
     if (g_realDrawRangeElementsBaseVertex && begin_cascade_camera_capture(st)) {
-        g_realDrawRangeElementsBaseVertex(mode, start, end, count, type,
-                                           indices, basevertex);
+        caster_census::submit([&](){g_realDrawRangeElementsBaseVertex(mode, start, end, count, type,
+                                           indices, basevertex);});
         ++g_cascadeCameraCaptureDraws;
         end_cascade_camera_capture(st);
     }
     if (g_realDrawRangeElementsBaseVertex)
-        DUPLICATE_CASCADE_LIGHT(g_realDrawRangeElementsBaseVertex(mode, start, end, count, type,
-                                                                     indices, basevertex),
+        DUPLICATE_CASCADE_LIGHT(caster_census::submit([&](){g_realDrawRangeElementsBaseVertex(mode, start, end, count, type,
+                                                                     indices, basevertex);}),
                                 note_cascade_light_draws(1));
     if (g_realDrawRangeElementsBaseVertex)
-        DUPLICATE_LOCAL_CUBE_DYNAMIC(g_realDrawRangeElementsBaseVertex(mode, start, end, count, type,
-                                                                        indices, basevertex), (void)0);
+        DUPLICATE_LOCAL_CUBE_DYNAMIC(caster_census::submit([&](){g_realDrawRangeElementsBaseVertex(mode, start, end, count, type,
+                                                                        indices, basevertex);}), (void)0);
 }
 
 extern "C" void my_draw_elements_instanced(GLenum mode, GLsizei count,
@@ -2919,36 +2930,36 @@ extern "C" void my_draw_elements_instanced(GLenum mode, GLsizei count,
     if (suppress_native_rain_draw()) { finish_observed_engine_draw(); return; }
     const bool suppressNative = nwn_oit_suppress_current_draw();
     if (g_realDrawElementsInstanced && !suppressNative)
-        g_realDrawElementsInstanced(mode, count, type, indices, instances);
+        caster_census::submit([&](){g_realDrawElementsInstanced(mode, count, type, indices, instances);});
     if (g_realDrawElementsInstanced && !suppressNative)
         DUPLICATE_SELECTIVE_LOCAL_DEPTH(
-            g_realDrawElementsInstanced(mode, count, type, indices, instances), (void)0);
+            caster_census::submit([&](){g_realDrawElementsInstanced(mode, count, type, indices, instances);}), (void)0);
     if (g_realDrawElementsInstanced)
-        DUPLICATE_OIT_FRINGE(g_realDrawElementsInstanced(
-            mode, count, type, indices, instances));
+        DUPLICATE_OIT_FRINGE(caster_census::submit([&](){g_realDrawElementsInstanced(
+            mode, count, type, indices, instances);}));
     if (g_realDrawElementsInstanced)
-        DUPLICATE_A2C_OPAQUE_DEPTH(g_realDrawElementsInstanced(
-            mode, count, type, indices, instances));
+        DUPLICATE_A2C_OPAQUE_DEPTH(caster_census::submit([&](){g_realDrawElementsInstanced(
+            mode, count, type, indices, instances);}));
     if (g_realDrawElementsInstanced)
-        DUPLICATE_MODE3_OPAQUE_DEPTH(g_realDrawElementsInstanced(
-            mode, count, type, indices, instances));
+        DUPLICATE_MODE3_OPAQUE_DEPTH(caster_census::submit([&](){g_realDrawElementsInstanced(
+            mode, count, type, indices, instances);}));
     if (g_realDrawElementsInstanced)
-        DUPLICATE_A2C_PRIVATE_EMITTER(g_realDrawElementsInstanced(
-            mode, count, type, indices, instances));
+        DUPLICATE_A2C_PRIVATE_EMITTER(caster_census::submit([&](){g_realDrawElementsInstanced(
+            mode, count, type, indices, instances);}));
     finish_observed_engine_draw();
     note_cascade_replay_draws((unsigned)std::max(0, instances));
     note_local_light_draws((unsigned)std::max(0, instances));
     SavedState st;
     if (g_realDrawElementsInstanced && begin_cascade_camera_capture(st)) {
-        g_realDrawElementsInstanced(mode, count, type, indices, instances);
+        caster_census::submit([&](){g_realDrawElementsInstanced(mode, count, type, indices, instances);});
         g_cascadeCameraCaptureDraws += (unsigned)std::max(0, instances);
         end_cascade_camera_capture(st);
     }
     if (g_realDrawElementsInstanced)
-        DUPLICATE_CASCADE_LIGHT(g_realDrawElementsInstanced(mode, count, type, indices, instances),
+        DUPLICATE_CASCADE_LIGHT(caster_census::submit([&](){g_realDrawElementsInstanced(mode, count, type, indices, instances);}),
                                 note_cascade_light_draws((unsigned)std::max(0, instances)));
     if (g_realDrawElementsInstanced)
-        DUPLICATE_LOCAL_CUBE_DYNAMIC(g_realDrawElementsInstanced(mode, count, type, indices, instances),
+        DUPLICATE_LOCAL_CUBE_DYNAMIC(caster_census::submit([&](){g_realDrawElementsInstanced(mode, count, type, indices, instances);}),
                                      (void)0);
 }
 
@@ -2959,41 +2970,41 @@ extern "C" void my_draw_elements_instanced_base_vertex(GLenum mode, GLsizei coun
     if (suppress_native_rain_draw()) { finish_observed_engine_draw(); return; }
     const bool suppressNative = nwn_oit_suppress_current_draw();
     if (g_realDrawElementsInstancedBaseVertex && !suppressNative)
-        g_realDrawElementsInstancedBaseVertex(mode, count, type, indices,
-                                               instances, basevertex);
+        caster_census::submit([&](){g_realDrawElementsInstancedBaseVertex(mode, count, type, indices,
+                                               instances, basevertex);});
     if (g_realDrawElementsInstancedBaseVertex && !suppressNative)
         DUPLICATE_SELECTIVE_LOCAL_DEPTH(
-            g_realDrawElementsInstancedBaseVertex(mode, count, type, indices,
-                                                   instances, basevertex), (void)0);
+            caster_census::submit([&](){g_realDrawElementsInstancedBaseVertex(mode, count, type, indices,
+                                                   instances, basevertex);}), (void)0);
     if (g_realDrawElementsInstancedBaseVertex)
-        DUPLICATE_OIT_FRINGE(g_realDrawElementsInstancedBaseVertex(
-            mode, count, type, indices, instances, basevertex));
+        DUPLICATE_OIT_FRINGE(caster_census::submit([&](){g_realDrawElementsInstancedBaseVertex(
+            mode, count, type, indices, instances, basevertex);}));
     if (g_realDrawElementsInstancedBaseVertex)
-        DUPLICATE_A2C_OPAQUE_DEPTH(g_realDrawElementsInstancedBaseVertex(
-            mode, count, type, indices, instances, basevertex));
+        DUPLICATE_A2C_OPAQUE_DEPTH(caster_census::submit([&](){g_realDrawElementsInstancedBaseVertex(
+            mode, count, type, indices, instances, basevertex);}));
     if (g_realDrawElementsInstancedBaseVertex)
-        DUPLICATE_MODE3_OPAQUE_DEPTH(g_realDrawElementsInstancedBaseVertex(
-            mode, count, type, indices, instances, basevertex));
+        DUPLICATE_MODE3_OPAQUE_DEPTH(caster_census::submit([&](){g_realDrawElementsInstancedBaseVertex(
+            mode, count, type, indices, instances, basevertex);}));
     if (g_realDrawElementsInstancedBaseVertex)
-        DUPLICATE_A2C_PRIVATE_EMITTER(g_realDrawElementsInstancedBaseVertex(
-            mode, count, type, indices, instances, basevertex));
+        DUPLICATE_A2C_PRIVATE_EMITTER(caster_census::submit([&](){g_realDrawElementsInstancedBaseVertex(
+            mode, count, type, indices, instances, basevertex);}));
     finish_observed_engine_draw();
     note_cascade_replay_draws((unsigned)std::max(0, instances));
     note_local_light_draws((unsigned)std::max(0, instances));
     SavedState st;
     if (g_realDrawElementsInstancedBaseVertex && begin_cascade_camera_capture(st)) {
-        g_realDrawElementsInstancedBaseVertex(mode, count, type, indices,
-                                               instances, basevertex);
+        caster_census::submit([&](){g_realDrawElementsInstancedBaseVertex(mode, count, type, indices,
+                                               instances, basevertex);});
         g_cascadeCameraCaptureDraws += (unsigned)std::max(0, instances);
         end_cascade_camera_capture(st);
     }
     if (g_realDrawElementsInstancedBaseVertex)
-        DUPLICATE_CASCADE_LIGHT(g_realDrawElementsInstancedBaseVertex(mode, count, type, indices,
-                                                                         instances, basevertex),
+        DUPLICATE_CASCADE_LIGHT(caster_census::submit([&](){g_realDrawElementsInstancedBaseVertex(mode, count, type, indices,
+                                                                         instances, basevertex);}),
                                 note_cascade_light_draws((unsigned)std::max(0, instances)));
     if (g_realDrawElementsInstancedBaseVertex)
-        DUPLICATE_LOCAL_CUBE_DYNAMIC(g_realDrawElementsInstancedBaseVertex(mode, count, type, indices,
-                                                                             instances, basevertex), (void)0);
+        DUPLICATE_LOCAL_CUBE_DYNAMIC(caster_census::submit([&](){g_realDrawElementsInstancedBaseVertex(mode, count, type, indices,
+                                                                             instances, basevertex);}), (void)0);
 }
 
 #undef DUPLICATE_OIT_FRINGE

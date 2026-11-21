@@ -46,8 +46,8 @@ namespace nwn_core {
 // shadow module is always linked; when a real nwn_core.cpp exists, move it.
 extern bool g_ownedPass;
 
-// Explicit diagnostic coordination only. Normal builds compile this out.
-#if defined(NWN_TAG_WORK_BENCH_DIAGNOSTIC) && !defined(_WIN32)
+// Linux coordination for borrowed framebuffer state; Windows stays native.
+#ifndef _WIN32
 extern void (*g_beforeFramebufferStateCapture)();
 inline void before_framebuffer_state_capture(){
     if(g_beforeFramebufferStateCapture)g_beforeFramebufferStateCapture();

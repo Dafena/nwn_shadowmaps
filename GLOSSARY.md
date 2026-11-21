@@ -20,3 +20,15 @@ The overhead representation of roofs and other static scenery that determines wh
 
 **Sun receiver tags**:
 The classification and depth information identifying the visible surface as scenery, a creature or a highlighted object when applying sun shadows. Classification follows the game’s actual rendered surfaces and coverage.
+
+**Baseline injector overhead**:
+The additional frame time from running the injector with its visual effects disabled, compared with the same native game view and video settings. It is separate from the cost of rendering enabled effects.
+
+**Injector effect cost**:
+The additional frame time associated with an enabled injector effect relative to the injector baseline in the same view.
+
+**Effect data demand**:
+The need for an effect’s generated data by a visible effect or an explicitly requested diagnostic. Hidden effects with no such consumer have no data demand.
+
+**Creature-filtered shadow map**:
+A shadow map that includes eligible scenery and other non-creature casters while excluding creatures. It lets creature receivers retain scenery shadows without receiving shadows from creature casters.

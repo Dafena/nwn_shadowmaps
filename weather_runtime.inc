@@ -44,8 +44,18 @@ static constexpr int kWaterNoiseUnit = 15;
 static constexpr int kWeatherCaptureColorUnit = 23;
 static constexpr int kWeatherCaptureDepthUnit = 24;
 
+#ifndef _WIN32
+#ifdef NWN_TAG_WORK_BENCH_DIAGNOSTIC
+static bool inactiveUploadProbe=false;
+#else
+static constexpr bool inactiveUploadProbe=true;
+#endif
+#endif
 struct ProgramState {
     GLuint program = 0;
+#ifndef _WIN32
+    bool inactiveUploadPrimed=false;
+#endif
     GLint skinmesh = -1;
     GLint areaFlags = -1;
     int areaFlagsValue = 0;
@@ -1111,6 +1121,13 @@ static void push_draw_state(ProgramState* state, float receiverClass) {
         gl::Uniform1f(state->rainAmount, g.rainAmount);
     if (state->snowAmount >= 0)
         gl::Uniform1f(state->snowAmount, g.snowAmount);
+#ifndef _WIN32
+    // Both shader effect branches are inactive at these exact thresholds.
+    // Eligibility and amounts above remain per-draw; sampler initialization
+    // must have completed once before skipping the inactive payload.
+    if(inactiveUploadProbe && state->inactiveUploadPrimed &&
+       g.rainAmount<=0.001f && g.snowAmount<=0.001f)return;
+#endif
     if (state->weatherTime >= 0) {
         const float t = (float)std::fmod(now_seconds(), 4096.0);
         gl::Uniform1f(state->weatherTime, t);
@@ -1263,6 +1280,9 @@ static void push_draw_state(ProgramState* state, float receiverClass) {
         gl::BindTexture(GL_TEXTURE_2D, g.precipitationOcclusionTexture);
         gl::ActiveTexture((GLenum)oldActive);
     }
+#ifndef _WIN32
+    state->inactiveUploadPrimed=true;
+#endif
 }
 
 static void observe_engine_weather(void* area, int weather, float densityPercent) {

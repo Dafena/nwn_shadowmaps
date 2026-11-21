@@ -31,3 +31,20 @@ struct Timer { explicit Timer(Cost){} void end(){} };
 struct BeginDraw { BeginDraw(){} };
 #endif
 } // namespace tag_work
+
+// Test2 CPU attribution, independent of tag benchmark sampling.
+namespace draw_cpu_probe {
+enum Group { Weather, Layers, AlphaBegin, AlphaEnd, TraceDraw, ObserverBefore, TagBegin, FinishDraw, ObserverAfter, TagEnd, LocalReplay, SunReplay, ShelterCapture, LocalPrepare, LocalDynamic, LocalFiltered, Count };
+#if defined(NWN_TAG_WORK_BENCH_DIAGNOSTIC) && !defined(_WIN32)
+static bool active=false;
+static double ms[Count]={};
+static unsigned cursor[Count]={};
+struct Timer {
+    Group group; bool sampled; double start; double scale;
+    explicit Timer(Group g):group(g),sampled(active && (g>=LocalReplay || (++cursor[g]%16)==0)),start(sampled?now_seconds():0),scale(g>=LocalReplay?1000.0:16000.0){}
+    ~Timer(){if(sampled)ms[group]+=(now_seconds()-start)*scale;}
+};
+#else
+struct Timer { explicit Timer(Group){} };
+#endif
+}

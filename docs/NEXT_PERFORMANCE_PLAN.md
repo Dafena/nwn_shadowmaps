@@ -43,3 +43,7 @@ The texture candidate skips binding queries/restores only when all existing tag/
 ## First measured outcomes
 
 See [TAG_WORK_PROFILING.md](TAG_WORK_PROFILING.md). The no-allocation fast path, capability cache and their combination failed the1ms criterion. Diagnostic repeated-validation suppression also did not improve actual frame time. None is enabled in normal play. The benchmark now has a separate diagnostic build, preserving normal hot-path behavior. The subsequent buffer-selection lease passed matched timing runs and user visual checks in both Balamb views; see the profiling record. It remains exclusive to the diagnostic preview. Normal development/shipping integration is the next task, not part of this checkpoint.
+
+## Current outcome
+
+Both Balamb views passed lease timing/visual criteria. ChapterOne test2 historical comparison identified tag-capture overhead introduced in0cc705d; modern selection leasing recovers the earlier40–60FPS range with tags intact. Inactive-weather upload skipping adds1.78–1.97ms saving in matched drytest2. Combined preview dry→rain transitions passed; normal Linux development build runtime matched preview (~47FPStest2/100+FPSrainyBalamb). Full evidence and current artifact status are in TAG_WORK_PROFILING.md. The remaining scene cost predates tagging and is separate from the completed optimization/integration phase.

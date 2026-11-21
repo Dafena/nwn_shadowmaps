@@ -1,4 +1,4 @@
-#if defined(NWN_TAG_WORK_BENCH_DIAGNOSTIC) && !defined(_WIN32)
+#ifndef _WIN32
 #include <tuple>
 #include <type_traits>
 extern "C" {
@@ -10,7 +10,7 @@ __attribute__((visibility("protected"))) void glGetBooleanv(GLenum,GLboolean*);
 __attribute__((visibility("protected"))) void glGetDoublev(GLenum,double*);
 }
 namespace tag_buffer_lease {
-// All new dispatch changes are confined to the explicit diagnostic artifact.
+// Dispatch changes install only after complete Linux boundary verification.
 // Each optional alias retains its own original pointer; no alias is forwarded
 // through an assumed-equivalent implementation.
 #define TAG_BUFFER_HOOKS(X) \
