@@ -52,6 +52,9 @@ gl_FragColor = FragmentColor;
   material.puddleTraceSteps = 7;
   material.disablePuddles = 8;
   material.wetFilmDisabled = 9;
+  // These controls govern active wet rendering. Dry payload skipping is tested
+  // independently by weather_inactive_upload_regression.cpp.
+  weather_runtime::g.rainAmount = 1.0f;
   for (bool enabled : {true, false, true}) {
     g_wetFilmEnabled = enabled;
     weather_runtime::push_draw_state(&material, 0.0f);
