@@ -18,7 +18,7 @@ static void report_engine_contract(const char* boundary,void* part){
 
 static std::vector<void*> nominatedParts;
 static bool currentNominated=false;
-static double nominatedAll=0,nominatedLater=0,nominatedDriverLater=0,nominatedDriverAll=0; 
+static double nominatedAll=0,nominatedLater=0,nominatedDriverLater=0,nominatedDriverAll=0;
 static double crossAll=0,crossLater=0,crossDriverLater=0;
 static unsigned crossSourceCalls=0,crossLaterCalls=0;
 static std::vector<double> crossAllSamples,crossLaterSamples,crossDriverSamples,crossOtherSamples,crossSourceSamples,crossCallSamples;

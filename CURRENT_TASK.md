@@ -211,3 +211,19 @@ Fog math/depth/fade regressions, shader validation and diff checks pass.
 User's pre-existing untracked launch-linux.sh is preserved outside the checkpoint;
 Python bytecode caches and generated DLL/build output are not source checkpoint
 content. No remote push requested.
+
+## PR preparation and maintainer confirmation (2026-11-21)
+
+Maintainer confirms the delivered build worked and requests cleanup plus a PR
+for merge. This supersedes the prior runtime-unconfirmed delivery status; no
+additional Windows scene/GPU details were supplied. Preserve evidence and
+opt-in diagnostics, remove generated Python cache, ignore future caches and the
+diagnostic build directory, and fix the remaining census whitespace. Keep the
+local machine-specific launch-linux.sh outside version control without deleting
+it; retain compiled Linux/Windows artifacts for testing.
+
+Final gate: Linux development/shipping/diagnostic builds, shader compilation,
+fog depth/energy/opacity/fade, native gateway, buffer lease, local demand,
+inactive-weather and real weather-surface software-GL regressions passed.
+Windows rebuild and 17 proxy/60 game-export verification passed. PR targets main;
+no direct merge is requested or performed during preparation.
