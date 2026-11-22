@@ -10,6 +10,20 @@ The Linux target is `libnwn_shadowmap.so`, loaded with `LD_PRELOAD`. The
 Windows target is `win/version.dll`, a proxy DLL loaded beside `nwmain.exe`.
 Both targets are built from the same renderer source.
 
+## Shipping performance controls
+
+The non-developer panel groups these controls under **Performance**:
+
+- **Wetness:** Low (off), Medium (wet film), High (wet film and puddles).
+- **Volumetric fog:** Off, Quarter, Half, Full. Shipping fog lighting follows
+  the area's authored fog colour and range, without adding independent haze
+  or applying NWN's surface fog opacity a second time. Explicit area-script
+  atmosphere overrides remain supported.
+- **3D Custom Rain:** Off or On (default). Precipitation still follows the
+  area's weather; native rain hiding remains a separate developer option.
+
+Developer builds retain the detailed tuning controls.
+
 ## Repository layout
 
 - `src/`: project C++ sources, headers and same-translation-unit renderer modules.

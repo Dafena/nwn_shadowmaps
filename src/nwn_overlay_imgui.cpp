@@ -203,6 +203,7 @@ void nwn_overlay_render(int viewportW, int viewportH, const NwnOverlayState& st)
         }
 
 #endif   // !NWN_SHIP -- Sun shadows
+#if !NWN_SHIP
         if (st.wetFilmEnabled && ImGui::CollapsingHeader("Wet surface film")) {
             ImGui::Checkbox("Enable wet film", st.wetFilmEnabled);
             ImGui::TextWrapped("Full animated wet-surface detail. Rain particles and puddles have separate controls.");
@@ -246,6 +247,7 @@ void nwn_overlay_render(int viewportW, int viewportH, const NwnOverlayState& st)
             if (st.shaderRainWindY) ImGui::SliderFloat("Wind Y (manual)", st.shaderRainWindY, -8.0f, 8.0f, "%.1f m/s");
             if (st.shaderRainSplashes) ImGui::SliderFloat("Splash strength", st.shaderRainSplashes, 0.0f, 2.0f);
         }
+#endif
         if (st.heatEnabled && ImGui::CollapsingHeader("Heat haze")) {
             if (st.scriptOverrides && std::strcmp(st.scriptOverrides, "none") != 0)
                 ImGui::TextWrapped("Area script overrides (win over the controls below): %s",
@@ -269,6 +271,8 @@ void nwn_overlay_render(int viewportW, int viewportH, const NwnOverlayState& st)
                  "(torches, lava, braziers). Needs sun shadows on for scene depth. "
                  "Area scripts can switch it on for volcanoes and deserts.");
         }
+
+#if !NWN_SHIP
         if (st.godraysAvailable && ImGui::CollapsingHeader("Volumetric fog")) {
             if (st.scriptOverrides && std::strcmp(st.scriptOverrides, "none") != 0)
                 ImGui::TextWrapped("Area script overrides (win over the controls below): %s",
@@ -349,6 +353,8 @@ void nwn_overlay_render(int viewportW, int viewportH, const NwnOverlayState& st)
                  "block the shafts. More samples resolve thinner shafts but cost more "
                  "GPU time.");
         }
+#endif
+
 #if !NWN_SHIP
         if (ImGui::CollapsingHeader("Local light")) {
             if (st.localEnabled) {
@@ -550,6 +556,36 @@ void nwn_overlay_render(int viewportW, int viewportH, const NwnOverlayState& st)
 #endif   // !NWN_SHIP -- Local light
 
         if (ImGui::CollapsingHeader("Performance")) {
+#if NWN_SHIP
+            if (st.wetFilmEnabled && st.rainPuddles) {
+                const char* levels[] = {"Low (off)", "Medium (wetness)", "High (wetness and puddles)"};
+                int level = *st.rainPuddles ? 2 : (*st.wetFilmEnabled ? 1 : 0);
+                if (ImGui::Combo("Wetness", &level, levels, 3)) {
+                    *st.wetFilmEnabled = level >= 1;
+                    *st.rainPuddles = level == 2;
+                }
+            }
+            if (st.godraysAvailable && st.godraysEnabled && st.godraysResolution) {
+                const char* qualities[] = {"Off", "Quarter", "Half", "Full"};
+                int resolution = *st.godraysResolution;
+                if (resolution < 0) resolution = 0;
+                if (resolution > 2) resolution = 2;
+                int quality = *st.godraysEnabled ? resolution + 1 : 0;
+                if (ImGui::Combo("Volumetric fog", &quality, qualities, 4)) {
+                    *st.godraysEnabled = quality != 0;
+                    if (quality) *st.godraysResolution = quality - 1;
+                }
+            }
+            if (st.shaderRain) {
+                const char* choices[] = {"Off", "On"};
+                int rain = *st.shaderRain ? 1 : 0;
+                if (ImGui::Combo("3D Custom Rain", &rain, choices, 2))
+                    *st.shaderRain = rain != 0;
+            }
+            if (st.scriptOverrides && std::strcmp(st.scriptOverrides, "none") != 0)
+                ImGui::TextWrapped("Area script overrides: %s", st.scriptOverrides);
+            ImGui::Separator();
+#endif
             // Deliberately NOT exposed: the full-BSP caster submission, the
             // shadow receiver pass, the static cascade cache and the
             // world-anchored map. All four are required for correct, fast

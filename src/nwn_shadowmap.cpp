@@ -1001,7 +1001,7 @@ static float    g_areaShadowFadeSeconds   = 0.75f;
 // again in one place.
 static constexpr bool kGodraysFeatureAvailable = true;
 // Private precipitation preview; optional exact-resource native-rain hiding.
-static bool     g_shaderRainEnabled = false;
+static bool     g_shaderRainEnabled = NWN_SHIP != 0;
 static bool     g_shaderRainHideNative = false;
 namespace weather_particles {
 static void note_material_texture(const char* name);
