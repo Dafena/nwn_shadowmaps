@@ -13,7 +13,7 @@ jobs:
         with:
           submodules: recursive
       - name: Install build and software GL tools
-        run: sudo apt-get update && sudo apt-get install -y g++ make glslang-tools libegl1-mesa-dev libgl1-mesa-dev
+        run: sudo apt-get update && sudo apt-get install -y g++ make glslang-tools libegl1-mesa-dev libgl1-mesa-dev python3-numpy
       - name: Build development and shipping libraries
         run: make -j2 && make -j2 deploy
       - name: Shader, weather and rendering regressions
