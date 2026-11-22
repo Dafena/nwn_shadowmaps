@@ -87,7 +87,7 @@ static constexpr unsigned kSettingsMax = 128;
 // too. On an older file the keys listed in settings_retuned() are ignored and
 // the file is rewritten at the new version; everything else the user set is
 // preserved.
-static constexpr int kSettingsVersion = 20;
+static constexpr int kSettingsVersion = 21;
 
 // Keys whose defaults changed in a local-light tuning pass.  Version 5 also
 // makes these controls live on the cube receiver; reset the old 1-unit
@@ -100,6 +100,9 @@ static constexpr int kSettingsVersion = 20;
 // reach them; the compiled-in default IS the shipped behaviour, and a stale
 // file must not be allowed to pin the old one.
 static bool settings_retuned(const char* key, int fileVersion) {
+    // v21 enables private rain by default; keep all unrelated saved tuning.
+    if (std::strcmp(key, "shader_rain") == 0) return fileVersion < 21;
+    if (fileVersion >= 20) return false;
     // v20 changes only fog lamp glow; do not retune unrelated v19 settings.
     if(fileVersion >= 19) return std::strcmp(key, "fog_lamp_glow") == 0;
     if(std::strcmp(key, "fog_lamp_glow") == 0) return true;
@@ -321,7 +324,7 @@ static void settings_reset_defaults() {
     g_weatherShelterSize = 0;
     g_rainPuddlesEnabled = true;
     g_puddleReflectionQuality = 0;
-    g_shaderRainEnabled        = false;
+    g_shaderRainEnabled        = NWN_SHIP != 0;
     g_shaderRainHideNative     = false;
     g_shaderRainBudget         = 4352;
     g_shaderRainRadius         = 40.0f;

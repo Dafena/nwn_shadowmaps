@@ -11,7 +11,7 @@ static fog_lamp_fade::History g_fogLampHistory;
 // is diagnostic-only; normal rendering never clamps a source to a screen edge
 // or performs a radial image blur.
 //
-// The medium is the sum of two parts:
+// Developer builds can combine two parts; shipping defaults to authored fog:
 //   * the injector's own exponential height fog ("Atmospheric density",
 //     "Height falloff", "Fog base height"), which both scatters light toward
 //     the camera and attenuates the scene behind it (Beer-Lambert);
@@ -481,7 +481,7 @@ static void draw_godrays(void* scene) {
     }
     // Effective values: an area script's override, else the player's setting.
     using script_env::f;
-    const float fogDensity       = f(script_env::FogDensity,       g_atmosphereDensity);
+    const float fogDensity       = f(script_env::FogDensity,       NWN_SHIP ? 0.0f : g_atmosphereDensity);
     const float fogHeightFalloff = f(script_env::FogHeightFalloff, g_godraysHeightFalloff);
     const float fogHeightBase    = f(script_env::FogHeightBase,    g_godraysHeightBase);
     const float fogBrightness    = f(script_env::FogBrightness,    g_godraysAmbient);
@@ -704,8 +704,12 @@ static void draw_godrays(void* scene) {
     // ~78% over its authored span.
     constexpr float kDensityScale = 0.04f;
     location = gl::GetUniformLocation(g_godrayScatterProgram, "nwnMedium");
+    // NWN already applies the area's linear opacity to scene surfaces. Shipping
+    // defaults to lighting that medium without a second fixed haze. Explicit
+    // area-script density overrides still work; developers retain manual tuning.
+    const float atmosphereExtinction = std::max(0.0f, fogDensity) * kDensityScale;
     if (location >= 0) gl::Uniform4f(location,
-        std::max(0.0f, fogDensity) * kDensityScale,
+        atmosphereExtinction,
         std::max(0.0f, fogHeightFalloff),
         fogHeightBase,
         authoredFog ? 1.5f / authoredSpan : 0.0f);
@@ -929,7 +933,7 @@ static void draw_godrays(void* scene) {
         fprintf(stderr, "[shadowmap][godrays] draw mode=%d target=%dx%d projectedSun=(%.3f,%.3f) strength=%.2f g=%.2f density=%.2f falloff=%.3f base=%.1f ambient=%.2f fade=%.2f march=%.1f fog=%s %.1f..%.1f color=%s\n",
                 g_godraysDebug, targetW, targetH,
                 projectedSunU, projectedSunV, fogShafts,
-                fogAnisotropy, fogDensity,
+                fogAnisotropy, atmosphereExtinction / kDensityScale,
                 fogHeightFalloff, fogHeightBase, fogBrightness,
                 policyFade, marchFar,
                 authoredFog ? "area" : "clear", g_fogStartLive, g_fogEndLive,

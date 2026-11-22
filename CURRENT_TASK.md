@@ -247,3 +247,76 @@ same-translation-unit include order. Linux/Windows make rules, validators, test
 includes and root source-map documents follow the new paths. Build entry points
 and final artifact paths remain unchanged. Vendored dependencies, test fixtures
 and Windows proxy packaging remain in their existing directories.
+
+## Proton/Windows Balamb performance investigation (2026-11-22)
+
+Maintainer reports roughly 20 FPS on Proton and plans a native Windows test
+after reboot. Running process and installed DLL verified: root win/version.dll
+and game-directory DLL match c77fec608917fdda093ea773939e3872f2f4b2dfc88eb43f696aefd0f4f5c92e.
+Proton-GE Latest uses Wine OpenGL on RTX 3060 Ti/NVIDIA 620.73.04. A 15.23-second
+read-only sample showed main-thread CPU 98.2% of one core and whole-GPU use
+78–82%; this does not attribute cost to any specific pass. Current log reports
+8x MSAA, quarter fog target 480x252 and active identity census environment
+NWN_ALPHA_IDENTITY_CENSUS=1. Need matched census-OFF comparison before claiming
+it costs meaningful time. Stage-profile implementation is currently Linux-only.
+
+Windows shipping UI hides the master switch; the attempted live OFF comparison
+could not be performed. Next proposed baseline is a no-injector Proton restart,
+with the DLL temporarily moved aside only after the game is closed, then restored
+afterward. Maintainer then closed the game and authorized this baseline: DLL
+is temporarily preserved beside the game as version.dll.profiling-backup. Steam
+relaunch PID 30394 was verified to load only Proton built-in version.dll. Restore
+the original DLL after this baseline session closes, before native Windows tests.
+Preserve settings and
+keep native Windows results separate. Read-only baseline evidence/settings/log
+are saved locally under local-archive/2026-11-22/proton-balamb/. No renderer code
+has changed and no performance fix is claimed.
+
+No-injector Proton comparison: maintainer reports 185 FPS, versus initial
+20 FPS with injector. Baseline game closed; original version.dll restored from
+profiling backup, exact hash verified, and Steam relaunch requested for an
+injector-ON repeat at maintainer request. No settings or environment changed.
+
+Injector-ON repeat after Steam restart: maintainer reports 21 FPS. Running
+PID31406 verified to map the restored game-directory DLL. No backup DLL remains
+aside; normal version.dll has been restored. Approximate frame times are
+47.6ms ON vs5.4ms OFF (manual FPS/camera comparison, not exact per-pass cost).
+Native Windows comparison pending maintainer reboot. Next attribution needs
+Windows-compatible per-pass CPU/GPU probes and clean census-OFF baseline; Linux
+stage probes currently compile out on Windows. No renderer fix implemented.
+
+## Shipping interface simplification (2026-11-22)
+
+Maintainer confirms native Windows Balamb at58 FPS and explicitly stops Proton
+profiling. New request is shipping/non-developer UI only: Performance now holds
+Wetness Low(off)/Medium(film)/High(film+puddles), fog Off/Quarter/Half/Full, and
+a Rain checkbox. Shipping rain defaults ON; developer default remains OFF and
+all detailed developer controls remain available. Existing live settings/table
+keys back the grouped controls; advanced tuning remains persisted and available
+to scripts/environment. Settings v21 selectively adopts the new rain default
+from old files while preserving subsequent explicit OFF choices. Native rain
+hiding behavior is unchanged.
+
+Linux dev/shipping and Windows builds pass. Shipping/developer preprocessor UI
+separation and actual settings-retune function checks pass; fog, puddle/shelter
+and software-GL weather regressions pass. Windows proxy/game export checks pass.
+New win/version.dll SHA25667097d1b95fca8cfcf0668df4635d26ca617cc36a1740cc2c402ab41d69002c7.
+Artifact has not been copied over the installed game DLL, and interactive panel
+visual acceptance remains pending.
+
+## Shipping rain label and authored fog thickness (2026-11-22)
+
+Maintainer accepted simplified UI and requested 3D Custom Rain Off/On dropdown
+in place of Rain checkbox; developer interface remains unchanged. Shipping fog
+now uses zero independent atmospheric density by default, letting NWN's native
+area fog retain surface opacity while the authored fog range/colour drive volume
+lighting. Explicit area-script FogDensity overrides still win. Developer manual
+atmosphere settings remain active. Areas without valid native fog get no extra
+default shipping haze. Logs report effective density rather than hidden tuning.
+
+Linux dev/shipping and Windows builds, all shader compilation, fog math/depth/
+opacity regressions, and actual policy-expression checks pass. Policy checks
+cover shipping/developer defaults and script overrides. Windows proxy/game export
+verification passes. win/version.dll SHA256 0272a74ce76fc944d140485517eb689cd3a107eab3112fa4cf5613812334ef87.
+No deployment to the installed game DLL or native Windows visual test claimed;
+maintainer should compare a lightly fogged area and a dense-fog area.

@@ -1,6 +1,6 @@
 # Private shader rain — validation checkpoint
 
-This is an **opt-in preview**, not a fully accepted replacement for NWN weather.
+This is an **enabled-by-default preview in shipping builds** (opt-in in developer builds), not a fully accepted replacement for NWN weather.
 The user confirmed visible private rain on Windows and requested native rain
 hiding on 2026-10-11. This separate comparison checkpoint is reversible and
 retains engine weather authority, native lightning, snow and unrelated VFX.
@@ -35,8 +35,9 @@ retains engine weather authority, native lightning, snow and unrelated VFX.
 Build/install the normal artifact as described in BUILD.md. Restart the client
 after installing a DLL; never overwrite a running client's loaded proxy.
 
-Open the renderer ImGui panel, expand **Shader rain (preview)** and enable
-**Private rain and splashes**. Status reports why the pass is waiting.
+In shipping builds, open **Performance → 3D Custom Rain** (enabled by default).
+In developer builds, expand **Shader rain (preview)** and enable
+**Private rain and splashes**; its status reports why the pass is waiting.
 **Hide native rain (preview only)** defaults off. With both boxes checked,
 Windows suppresses matching native rain draws after the private pass is ready.
 The first frame remains native; missing prerequisites restore native rain.
@@ -50,7 +51,7 @@ Environment defaults (saved panel settings take precedence):
 
 | Variable | Default | Range |
 | --- | --- | --- |
-| NWN_SHADER_RAIN | 0 | 0 / 1 |
+| NWN_SHADER_RAIN | 1 shipping / 0 developer | 0 / 1 |
 | NWN_SHADER_RAIN_HIDE_NATIVE | 0 | 0 / 1; only active with preview |
 | NWN_SHADER_RAIN_BUDGET | 4352 | 256–262144 |
 | NWN_SHADER_RAIN_RADIUS | 40 | 8–64 world metres |
