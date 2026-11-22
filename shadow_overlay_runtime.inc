@@ -240,6 +240,11 @@ static void draw_shadow_overlay_imgui(void* scene) {
     st.shaderRainWindX = &g_shaderRainWindX;
     st.shaderRainWindY = &g_shaderRainWindY;
     st.shaderRainSplashes = &g_shaderRainSplashes;
+    st.wetFilmEnabled = &g_wetFilmEnabled;
+    st.weatherShelterSize = &g_weatherShelterSize;
+    st.weatherShelterActualSize = weather_runtime::g.precipitationOcclusionSize;
+    st.rainPuddles = &g_rainPuddlesEnabled;
+    st.puddleReflectionQuality = &g_puddleReflectionQuality;
     st.shaderRainStatus = weather_particles::status;
     st.csmStrength   = &g_cascadeCompositeStrength;
     st.csmBias       = &g_cascadeReceiverBias;
@@ -860,8 +865,10 @@ static void draw_static_receiver(void* scene, bool localOnly = false) {
         : ensure_scene_depth_texture(vp[2],vp[3]);
     const double tCopy0 = now_seconds();
     bool depthOk = copied;
-    if (copied)
+    if (copied) {
+        shadow_stage_profile::Timer timer(shadow_stage_profile::Depth);
         depthOk = localOnly ? capture_pre_dynamic_depth(vp) : capture_scene_depth(vp);
+    }
     if (localOnly && depthOk)
         g_preDynamicDepthFrame = g_shadowFrameContext.serial;
     if (!localOnly && depthOk)
@@ -872,7 +879,9 @@ static void draw_static_receiver(void* scene, bool localOnly = false) {
     // colour/weather publication because characters have not been drawn yet.
     gl::ActiveTexture(GL_TEXTURE0+kColorUnit);
     gl::GetIntegerv(GL_TEXTURE_BINDING_2D,&oldColorTex);
-    const bool colorOk = !localOnly && capture_scene_color(vp);
+    bool colorOk = false;
+    { shadow_stage_profile::Timer timer(shadow_stage_profile::Colour);
+      colorOk = !localOnly && capture_scene_color(vp); }
     if (!localOnly && depthOk && colorOk && g_sceneColorCapturedNow)
         weather_runtime::publish_framebuffer_capture(scene, g_sceneColorTex,
                                                      g_sceneDepthTex);
@@ -1320,7 +1329,8 @@ static void draw_static_receiver(void* scene, bool localOnly = false) {
         if (!g_nextDrawArrays)
             g_nextDrawArrays=(void(*)(GLenum,GLint,GLsizei))dlsym(RTLD_NEXT,"glDrawArrays");
         const bool priorOurPass=g_inOurPass; g_inOurPass=true;
-        if (g_nextDrawArrays) g_nextDrawArrays(0x0004,0,3);
+        { shadow_stage_profile::Timer timer(shadow_stage_profile::Composite);
+          if (g_nextDrawArrays) g_nextDrawArrays(0x0004,0,3); }
         g_inOurPass=priorOurPass;
         // "receiver drew" previously meant only "we called glDrawArrays", which
         // is NOT the same as "anything rendered": an invalid sampler binding

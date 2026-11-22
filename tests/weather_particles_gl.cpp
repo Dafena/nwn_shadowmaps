@@ -15,7 +15,11 @@
 #include "../shadow_math.h"
 #include "../nwn_overlay.h"
 #include "../nwn_hooks_core.h"
-namespace nwn_core { bool g_ownedPass=false; }
+namespace nwn_core {
+// Standalone pass fixture: no tag-buffer owner is installed.
+bool g_ownedPass=false;
+void (*g_beforeFramebufferStateCapture)()=nullptr;
+}
 using CreateShader_t=decltype(&glCreateShader);
 using CompileShader_t=decltype(&glCompileShader);
 using GetShaderiv_t=decltype(&glGetShaderiv);

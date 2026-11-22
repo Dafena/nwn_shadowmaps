@@ -203,6 +203,27 @@ void nwn_overlay_render(int viewportW, int viewportH, const NwnOverlayState& st)
         }
 
 #endif   // !NWN_SHIP -- Sun shadows
+        if (st.wetFilmEnabled && ImGui::CollapsingHeader("Wet surface film")) {
+            ImGui::Checkbox("Enable wet film", st.wetFilmEnabled);
+            ImGui::TextWrapped("Full animated wet-surface detail. Rain particles and puddles have separate controls.");
+            if (st.weatherShelterSize) {
+                const int sizes[] = {0, 4096, 2048, 1024};
+                const char* labels[] = {"Original", "4096", "2048", "1024"};
+                int selected = 0;
+                for (int i=1;i<4;++i) if (*st.weatherShelterSize == sizes[i]) selected=i;
+                if (ImGui::Combo("Rain/snow shelter map", &selected, labels, 4))
+                    *st.weatherShelterSize = sizes[selected];
+                ImGui::TextWrapped("Roof/blocker map precision. Lower sizes may widen wet/dry transitions near roof edges.");
+                if (st.weatherShelterActualSize > 0)
+                    ImGui::Text("Active shelter map: %d x %d", st.weatherShelterActualSize, st.weatherShelterActualSize);
+            }
+        }
+        if (st.puddleReflectionQuality && ImGui::CollapsingHeader("Puddle reflections")) {
+            if (st.rainPuddles) ImGui::Checkbox("Enable rain puddles and reflection/refraction", st.rainPuddles);
+            const char* choices[] = {"Full (10 steps)", "Reduced (5 steps)", "Minimal (3 steps)"};
+            ImGui::Combo("Reflection trace quality", st.puddleReflectionQuality, choices, 3);
+            ImGui::TextWrapped("Fewer ray-tracing steps reduce reflection work, but may miss or soften reflected details. Image resolution and puddle edges stay unchanged.");
+        }
         if (st.shaderRain && ImGui::CollapsingHeader("Shader rain (preview)")) {
             if (st.scriptOverrides && std::strcmp(st.scriptOverrides, "none") != 0)
                 ImGui::TextWrapped("Area script overrides (win over the controls below): %s",
@@ -317,8 +338,9 @@ void nwn_overlay_render(int viewportW, int viewportH, const NwnOverlayState& st)
                  "with the sun or moon when an area has one. Sun shaft intensity scales "
                  "the light scattered toward the camera; Scattering anisotropy "
                  "concentrates it around the sun (0 = even in all directions). "
-                 "Lamp glow lights the fog around the nearest eight torches and lamps; "
-                 "it needs some fog density to show and is not blocked by walls in the air. "
+                 "Lamp glow follows Lighting Max Lights for ordinary torches and lamps, separately from the shadow-casting budget; "
+                 "lights fade in and out gradually. It needs some fog density to show "
+                 "and is not blocked by walls in the air. "
                  "Atmospheric density thickens the fog and dims distant geometry; Fog "
                  "brightness sets how much of the area's fog colour the fog itself "
                  "shows. Height falloff thins the fog above the base height (0 = no "

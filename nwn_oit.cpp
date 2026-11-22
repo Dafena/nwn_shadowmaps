@@ -1112,6 +1112,7 @@ struct SavedState {
 };
 
 void save_state(SavedState& s) {
+    nwn_core::before_framebuffer_state_capture();
     g.GetIntegerv(GL_FRAMEBUFFER_BINDING, &s.fbo);
     g.GetIntegerv(GL_VIEWPORT,            s.viewport);
     g.GetIntegerv(GL_CURRENT_PROGRAM,     &s.program);

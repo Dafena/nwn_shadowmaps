@@ -14,3 +14,10 @@ nwn_shadowmap_settings.ini
 # Editor / OS
 *.swp
 .DS_Store
+
+# Python validation caches
+__pycache__/
+*.py[cod]
+
+# Opt-in diagnostic build directory
+build-tag-bench/

@@ -757,6 +757,7 @@ static void render_static_world_map(void* scene, int bucket) {
 // view/projection computed in capture_local_light_shadow(), the same layer per
 // light, the same receiver.
 static void replay_bucket_into_local_light_layers(void* scene, int bucket) {
+    if(!local_capture_demand::allow())return;
     // MASTER SWITCH. "Draw shadows at all" used to gate only the receiver draw,
     // so switching it off stopped the shadows appearing while every bucket was
     // still replayed into every layer -- the expensive half kept running and the

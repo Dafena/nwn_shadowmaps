@@ -477,8 +477,8 @@ static void draw(void* scene) {
     }
     lastSerial=camera.serial;
     if(clockArea!=w.weatherArea) { clockArea=w.weatherArea; clockStart=now_seconds(); }
-    const float radius=bounded(script_env::f(script_env::RainRadius,g_shaderRainRadius),8,64,28);
-    const float splashes=bounded(script_env::f(script_env::RainSplashes,g_shaderRainSplashes),0,2,1);
+    const float radius=bounded(script_env::f(script_env::RainRadius,g_shaderRainRadius),8,64,40);
+    const float splashes=bounded(script_env::f(script_env::RainSplashes,g_shaderRainSplashes),0,2,0.250f);
     const int budget=std::max(kNwnShaderRainMinBudget,std::min(g_shaderRainBudget,kNwnShaderRainMaxBudget));
     // Whole square grids avoid an uneven truncated row. Requested budget is a cap.
     const int side=(int)std::floor(std::sqrt((float)budget));

@@ -67,8 +67,8 @@ $(DEPLOY_DIR)/%.o: %.cpp | $(DEPLOY_DIR)
 # otherwise `make deploy` can silently reuse a stale object after an .inc-only
 # fix (as happened with the startup settings reconciliation).
 $(DEPLOY_DIR)/nwn_shadowmap.o: nwn_shadowmap.cpp shadow_drawing_probe.inc drawing_probe.h drawing_input_journal.h drawing_preview.h drawing_texture_upload.h drawing_canvas_quad.h drawing_world_canvas.h \
-	shadow_gl_api.inc shadow_engine_bindings.inc nwn_layer_stack.inc nwn_layer_stack_plan.h weather_runtime.inc weather_particles.inc \
-	shadow_targets.inc shadow_diagnostics_settings.inc shadow_replay.inc shadow_receiver_tags.inc \
+	shadow_gl_api.inc shadow_engine_bindings.inc nwn_layer_stack.inc nwn_layer_stack_plan.h weather_runtime.inc weather_particles.inc shadow_verified_gateway.h shadow_fog_lamp_fade.h shadow_native_gateways.inc shadow_caster_census.inc shadow_wet_film_profile.inc shadow_stage_profile.inc shadow_tag_benchmark.inc \
+	shadow_targets.inc shadow_local_capture_demand.inc shadow_diagnostics_settings.inc shadow_replay.inc shadow_receiver_tags.inc shadow_tag_work.inc shadow_tag_buffer_lease.h shadow_tag_buffer_lease.inc \
 	shadow_shader_interposition.inc shadow_fullscreen_receiver.inc godrays_runtime.inc \
 	shadow_script_env.inc shadow_heat_haze.inc \
 	shadow_overlay_runtime.inc shadow_trace_cascade.inc shadow_aabb_guard.inc shadow_local_lights.inc \
@@ -106,8 +106,8 @@ $(TARGET): $(OBJS)
 	$(CXX) -shared $^ -o $@ -ldl
 
 nwn_shadowmap.o: nwn_shadowmap.cpp shadow_drawing_probe.inc drawing_probe.h drawing_input_journal.h drawing_preview.h drawing_texture_upload.h drawing_canvas_quad.h drawing_world_canvas.h \
-	shadow_gl_api.inc shadow_engine_bindings.inc nwn_layer_stack.inc nwn_layer_stack_plan.h weather_runtime.inc weather_particles.inc \
-	shadow_targets.inc shadow_diagnostics_settings.inc shadow_replay.inc shadow_receiver_tags.inc \
+	shadow_gl_api.inc shadow_engine_bindings.inc nwn_layer_stack.inc nwn_layer_stack_plan.h weather_runtime.inc weather_particles.inc shadow_verified_gateway.h shadow_fog_lamp_fade.h shadow_native_gateways.inc shadow_caster_census.inc shadow_wet_film_profile.inc shadow_stage_profile.inc shadow_tag_benchmark.inc \
+	shadow_targets.inc shadow_local_capture_demand.inc shadow_diagnostics_settings.inc shadow_replay.inc shadow_receiver_tags.inc shadow_tag_work.inc shadow_tag_buffer_lease.h shadow_tag_buffer_lease.inc \
 	shadow_shader_interposition.inc shadow_fullscreen_receiver.inc godrays_runtime.inc \
 	shadow_script_env.inc shadow_heat_haze.inc \
 	shadow_overlay_runtime.inc shadow_trace_cascade.inc shadow_aabb_guard.inc shadow_local_lights.inc \
@@ -159,3 +159,22 @@ test-weather:
 	LIBGL_ALWAYS_SOFTWARE=1 "$$weather_test_path"; \
 	MESA_GL_VERSION_OVERRIDE=3.3 LIBGL_ALWAYS_SOFTWARE=1 "$$weather_test_path"
 .PHONY: test-weather
+
+# Explicit Linux diagnostic variant; normal development/shipping builds compile
+# the per-draw benchmark timers and experimental candidates out entirely.
+TAG_BENCH_TARGET = libnwn_shadowmap_tag_bench.so
+.PHONY: tag-bench
+tag-bench: $(TAG_BENCH_TARGET)
+
+build-tag-bench:
+	mkdir -p $@
+
+build-tag-bench/nwn_shadowmap.o: nwn_shadowmap.cpp $(wildcard *.inc) $(wildcard *.h) | build-tag-bench
+	$(CXX) $(CXXFLAGS) -DNWN_TAG_WORK_BENCH_DIAGNOSTIC -c $< -o $@
+
+build-tag-bench/nwn_oit.o: nwn_oit.cpp nwn_hooks_core.h nwn_platform.h | build-tag-bench
+	$(CXX) $(CXXFLAGS) -DNWN_TAG_WORK_BENCH_DIAGNOSTIC -c $< -o $@
+
+$(TAG_BENCH_TARGET): build-tag-bench/nwn_shadowmap.o build-tag-bench/nwn_oit.o $(filter-out nwn_shadowmap.o nwn_oit.o,$(OBJS))
+	$(CXX) -shared $^ -o $@.next -ldl
+	mv -f $@.next $@

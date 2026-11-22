@@ -44,6 +44,7 @@ typedef void          GLvoid;
 #define GL_SRC_ALPHA                    0x0302
 #define GL_ONE                          1
 #define GL_ONE_MINUS_SRC_ALPHA          0x0303
+#define GL_ONE_MINUS_DST_COLOR          0x0307
 #define GL_DEPTH_WRITEMASK             0x0B72
 #define GL_DEPTH_FUNC                  0x0B74
 #define GL_COLOR_WRITEMASK             0x0C23
@@ -168,6 +169,7 @@ namespace gl {
     void     (*ClearBufferuiv)(GLenum, GLint, const GLuint*) = nullptr;
     void     (*DrawBuffer)(GLenum)                                         = nullptr;
     void     (*ReadBuffer)(GLenum)                                         = nullptr;
+    GLboolean (*IsFramebuffer)(GLuint) = nullptr;
     void     (*GenFramebuffers)(GLsizei, GLuint*)                          = nullptr;
     void     (*DeleteFramebuffers)(GLsizei, const GLuint*)                 = nullptr;
     void     (*BindFramebuffer)(GLenum, GLuint)                            = nullptr;
@@ -273,7 +275,7 @@ static bool bind_gl() {
     GLBIND(TexImage2D);   GLBIND(TexImage3D);    GLBIND(TexSubImage2D); GLBIND(CopyTexSubImage2D); GLBIND(CopyTexSubImage3D); GLBIND(TexParameteri); GLBIND(TexParameterfv);
     GLBIND(GetTexImage);  GLBIND(DrawBuffer);    GLBIND(ReadBuffer);
     GLBIND(TexImage2DMultisample); GLBIND(DrawBuffers); GLBIND(ClearBufferuiv);
-    GLBIND(GenFramebuffers); GLBIND(DeleteFramebuffers);
+    GLBIND(IsFramebuffer); GLBIND(GenFramebuffers); GLBIND(DeleteFramebuffers);
     GLBIND(BindFramebuffer); GLBIND(FramebufferTexture2D); GLBIND(FramebufferTextureLayer);
     GLBIND(CheckFramebufferStatus);
     GLBIND(GetFramebufferAttachmentParameteriv);

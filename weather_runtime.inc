@@ -44,8 +44,18 @@ static constexpr int kWaterNoiseUnit = 15;
 static constexpr int kWeatherCaptureColorUnit = 23;
 static constexpr int kWeatherCaptureDepthUnit = 24;
 
+#ifndef _WIN32
+#ifdef NWN_TAG_WORK_BENCH_DIAGNOSTIC
+static bool inactiveUploadProbe=false;
+#else
+static constexpr bool inactiveUploadProbe=true;
+#endif
+#endif
 struct ProgramState {
     GLuint program = 0;
+#ifndef _WIN32
+    bool inactiveUploadPrimed=false;
+#endif
     GLint skinmesh = -1;
     GLint areaFlags = -1;
     int areaFlagsValue = 0;
@@ -65,6 +75,14 @@ struct ProgramState {
     GLint weatherFbProjInv = -1;
     GLint weatherNoiseTex = -1;
     GLint weatherNoiseReady = -1;
+    GLint wetFilmProbe = -1;
+    int uploadedWetFilmProbe = -1;
+    GLint wetFilmDisabled = -1;
+    int uploadedWetFilmDisabled = -1;
+    GLint disablePuddles = -1;
+    int uploadedDisablePuddles = -1;
+    GLint puddleTraceSteps = -1;
+    int uploadedPuddleTraceSteps = -1;
     GLint snowDeformationTex = -1;
     GLint snowDeformationTransform = -1;
     GLint snowAreaLight = -1;
@@ -235,6 +253,10 @@ static ProgramState* program_state(GLuint program) {
         gl::GetUniformLocation(program, "nwnWeatherFbProjInv");
     state.weatherNoiseTex = gl::GetUniformLocation(program, "nwnWeatherNoiseTex");
     state.weatherNoiseReady = gl::GetUniformLocation(program, "nwnWeatherNoiseReady");
+    state.puddleTraceSteps = gl::GetUniformLocation(program, "nwnPuddleTraceSteps");
+    state.disablePuddles = gl::GetUniformLocation(program, "nwnRainDisablePuddles");
+    state.wetFilmDisabled = gl::GetUniformLocation(program, "nwnWetFilmDisabled");
+    state.wetFilmProbe = gl::GetUniformLocation(program, "nwnWetFilmProbe");
     state.snowDeformationTex =
         gl::GetUniformLocation(program, "nwnWeatherSnowDeformationTex");
     state.snowDeformationTransform =
@@ -728,7 +750,11 @@ static void update_snow_light_data_texture() {
 }
 
 static bool ensure_precipitation_occlusion_target() {
-    const int wantedSize = g_staticWorldSize;
+    // Separate precipitation blocker precision from the sun shadow target.
+    // Zero preserves the original policy; explicit sizes only lower this map.
+    const int requested = g_weatherShelterSize;
+    const int wantedSize = requested == 1024 || requested == 2048 || requested == 4096
+        ? std::min(g_staticWorldSize, requested) : g_staticWorldSize;
     const float wantedExtent = g_staticWorldExtent;
     if (g.precipitationOcclusionFbo &&
         g.precipitationOcclusionSize == wantedSize) {
@@ -1095,11 +1121,42 @@ static void push_draw_state(ProgramState* state, float receiverClass) {
         gl::Uniform1f(state->rainAmount, g.rainAmount);
     if (state->snowAmount >= 0)
         gl::Uniform1f(state->snowAmount, g.snowAmount);
+#ifndef _WIN32
+    // Both shader effect branches are inactive at these exact thresholds.
+    // Eligibility and amounts above remain per-draw; sampler initialization
+    // must have completed once before skipping the inactive payload.
+    if(inactiveUploadProbe && state->inactiveUploadPrimed &&
+       g.rainAmount<=0.001f && g.snowAmount<=0.001f)return;
+#endif
     if (state->weatherTime >= 0) {
         const float t = (float)std::fmod(now_seconds(), 4096.0);
         gl::Uniform1f(state->weatherTime, t);
     }
     if (receiverClass > 0.5f) probe_framebuffer_reflection_inputs();
+    const int probeMode = g_wetFilmProfiling ? g_wetFilmProbeMode : 0;
+    if (state->wetFilmProbe >= 0 && gl::Uniform1i && state->uploadedWetFilmProbe != probeMode) {
+        gl::Uniform1i(state->wetFilmProbe, probeMode);
+        state->uploadedWetFilmProbe = probeMode;
+    }
+    const int filmDisabled = g_wetFilmEnabled && probeMode != 5 ? 0 : 1;
+    if (state->wetFilmDisabled >= 0 && gl::Uniform1i &&
+        state->uploadedWetFilmDisabled != filmDisabled) {
+        gl::Uniform1i(state->wetFilmDisabled, filmDisabled);
+        state->uploadedWetFilmDisabled = filmDisabled;
+    }
+    const int disablePuddles = g_rainPuddlesEnabled ? 0 : 1;
+    if (state->disablePuddles >= 0 && gl::Uniform1i &&
+        state->uploadedDisablePuddles != disablePuddles) {
+        gl::Uniform1i(state->disablePuddles, disablePuddles);
+        state->uploadedDisablePuddles = disablePuddles;
+    }
+    const int quality = std::max(0, std::min(2, g_puddleReflectionQuality));
+    const int traceSteps = quality == 0 ? 10 : quality == 1 ? 5 : 3;
+    if (state->puddleTraceSteps >= 0 && gl::Uniform1i &&
+        state->uploadedPuddleTraceSteps != traceSteps) {
+        gl::Uniform1i(state->puddleTraceSteps, traceSteps);
+        state->uploadedPuddleTraceSteps = traceSteps;
+    }
     if (state->weatherReflectionReady >= 0)
         gl::Uniform1f(state->weatherReflectionReady,
                       receiverClass > 0.5f && g.reflectionReady &&
@@ -1223,6 +1280,9 @@ static void push_draw_state(ProgramState* state, float receiverClass) {
         gl::BindTexture(GL_TEXTURE_2D, g.precipitationOcclusionTexture);
         gl::ActiveTexture((GLenum)oldActive);
     }
+#ifndef _WIN32
+    state->inactiveUploadPrimed=true;
+#endif
 }
 
 static void observe_engine_weather(void* area, int weather, float densityPercent) {
@@ -1492,6 +1552,10 @@ static bool patch_fragment_shader(std::string& source) {
         "uniform mat4 nwnWeatherFbProjInv;\n"
         "uniform sampler2D nwnWeatherNoiseTex;\n"
         "uniform float nwnWeatherNoiseReady;\n"
+        "uniform int nwnPuddleTraceSteps;\n"
+        "uniform int nwnRainDisablePuddles;\n"
+        "const int nwnWetFilmProbe = 0;\n"
+        "uniform int nwnWetFilmDisabled;\n"
         "uniform sampler2D nwnWeatherSnowDeformationTex;\n"
         "uniform vec4 nwnWeatherSnowDeformationTransform;\n"
         "uniform vec4 nwnWeatherSnowAreaLight;\n"
@@ -1541,40 +1605,25 @@ static bool patch_fragment_shader(std::string& source) {
         "    mat2 diskRotation = mat2(ca, sa, -sa, ca);\n"
         "    vec2 disk;\n"
         "    float exposed = 0.0;\n"
-        "    disk = diskRotation * vec2( 0.1768,  0.0000);\n"
+        // Eight equal-area disk samples retain the original filter footprint.
+        "    disk = diskRotation * vec2( 0.2500,  0.0000);\n"
         "    exposed += texture(nwnWeatherPrecipitationOcclusionTex, vec3(samplePos.xy + spreadX*disk.x + spreadY*disk.y, compareZ));\n"
-        "    disk = diskRotation * vec2(-0.2258,  0.2068);\n"
+        "    disk = diskRotation * vec2(-0.3193,  0.2925);\n"
         "    exposed += texture(nwnWeatherPrecipitationOcclusionTex, vec3(samplePos.xy + spreadX*disk.x + spreadY*disk.y, compareZ));\n"
-        "    disk = diskRotation * vec2( 0.0346, -0.3943);\n"
+        "    disk = diskRotation * vec2( 0.0489, -0.5569);\n"
         "    exposed += texture(nwnWeatherPrecipitationOcclusionTex, vec3(samplePos.xy + spreadX*disk.x + spreadY*disk.y, compareZ));\n"
-        "    disk = diskRotation * vec2( 0.2846,  0.3712);\n"
+        "    disk = diskRotation * vec2( 0.4024,  0.5249);\n"
         "    exposed += texture(nwnWeatherPrecipitationOcclusionTex, vec3(samplePos.xy + spreadX*disk.x + spreadY*disk.y, compareZ));\n"
-        "    disk = diskRotation * vec2(-0.5223, -0.0924);\n"
+        "    disk = diskRotation * vec2(-0.7385, -0.1306);\n"
         "    exposed += texture(nwnWeatherPrecipitationOcclusionTex, vec3(samplePos.xy + spreadX*disk.x + spreadY*disk.y, compareZ));\n"
-        "    disk = diskRotation * vec2( 0.4945, -0.3146);\n"
+        "    disk = diskRotation * vec2( 0.6996, -0.4450);\n"
         "    exposed += texture(nwnWeatherPrecipitationOcclusionTex, vec3(samplePos.xy + spreadX*disk.x + spreadY*disk.y, compareZ));\n"
-        "    disk = diskRotation * vec2(-0.1658,  0.6166);\n"
+        "    disk = diskRotation * vec2(-0.2340,  0.8705);\n"
         "    exposed += texture(nwnWeatherPrecipitationOcclusionTex, vec3(samplePos.xy + spreadX*disk.x + spreadY*disk.y, compareZ));\n"
-        "    disk = diskRotation * vec2(-0.3150, -0.6068);\n"
+        "    disk = diskRotation * vec2(-0.4463, -0.8593);\n"
         "    exposed += texture(nwnWeatherPrecipitationOcclusionTex, vec3(samplePos.xy + spreadX*disk.x + spreadY*disk.y, compareZ));\n"
-        "    disk = diskRotation * vec2( 0.6849,  0.2501);\n"
-        "    exposed += texture(nwnWeatherPrecipitationOcclusionTex, vec3(samplePos.xy + spreadX*disk.x + spreadY*disk.y, compareZ));\n"
-        "    disk = diskRotation * vec2(-0.7121,  0.2940);\n"
-        "    exposed += texture(nwnWeatherPrecipitationOcclusionTex, vec3(samplePos.xy + spreadX*disk.x + spreadY*disk.y, compareZ));\n"
-        "    disk = diskRotation * vec2( 0.3430, -0.7280);\n"
-        "    exposed += texture(nwnWeatherPrecipitationOcclusionTex, vec3(samplePos.xy + spreadX*disk.x + spreadY*disk.y, compareZ));\n"
-        "    disk = diskRotation * vec2( 0.2530,  0.7980);\n"
-        "    exposed += texture(nwnWeatherPrecipitationOcclusionTex, vec3(samplePos.xy + spreadX*disk.x + spreadY*disk.y, compareZ));\n"
-        "    disk = diskRotation * vec2(-0.7640, -0.4430);\n"
-        "    exposed += texture(nwnWeatherPrecipitationOcclusionTex, vec3(samplePos.xy + spreadX*disk.x + spreadY*disk.y, compareZ));\n"
-        "    disk = diskRotation * vec2( 0.8970, -0.1970);\n"
-        "    exposed += texture(nwnWeatherPrecipitationOcclusionTex, vec3(samplePos.xy + spreadX*disk.x + spreadY*disk.y, compareZ));\n"
-        "    disk = diskRotation * vec2(-0.5420,  0.8180);\n"
-        "    exposed += texture(nwnWeatherPrecipitationOcclusionTex, vec3(samplePos.xy + spreadX*disk.x + spreadY*disk.y, compareZ));\n"
-        "    disk = diskRotation * vec2(-0.1110, -0.9780);\n"
-        "    exposed += texture(nwnWeatherPrecipitationOcclusionTex, vec3(samplePos.xy + spreadX*disk.x + spreadY*disk.y, compareZ));\n"
-        "    exposed *= 0.0625;\n"
-        // Fine world-space dither hides the remaining 1/16 quantisation. It is
+        "    exposed *= 0.125;\n"
+        // Fine world-space dither hides the remaining 1/8 quantisation. It is
         // anchored to geometry, so camera motion cannot make it crawl.
         "    exposed += (nwnRainHash(floor(worldPos.xy * 48.0) + 73.1) - 0.5)\n"
         "             * 0.055;\n"
@@ -1610,8 +1659,7 @@ static bool patch_fragment_shader(std::string& source) {
         // namespaced for the injector. Its relative depth error is returned in
         // w and is used exactly as a confidence term instead of accepting a
         // stretched nearest sample.
-        "vec4 nwnRainTraceReflection(vec3 origin, vec3 ray) {\n"
-        "    const int iterations = 10;\n"
+        "vec4 nwnRainTraceReflectionBudget(vec3 origin, vec3 ray, int iterations) {\n"
         "    float maxDistance = clamp(abs(farClip + origin.z), 1.0, 30.0);\n"
         "    float angleFactor = mix(1.0, abs(ray.z), 0.9);\n"
         "    maxDistance *= angleFactor;\n"
@@ -1652,6 +1700,14 @@ static bool patch_fragment_shader(std::string& source) {
         "    float error = clamp(abs(minRelativeError) / 0.20, 0.0, 1.0);\n"
         "    return vec4(hitUv, -hitDepth, error);\n"
         "}\n"
+        // Literal budgets let the driver specialize each loop, rather than
+        // introducing a dynamic uniform test at every ray step. Full keeps
+        // the original ten-step path; an untouched uniform defaults to Full.
+        "vec4 nwnRainTraceReflection(vec3 origin, vec3 ray) {\n"
+        "    if (nwnPuddleTraceSteps == 3) return nwnRainTraceReflectionBudget(origin,ray,3);\n"
+        "    if (nwnPuddleTraceSteps == 5) return nwnRainTraceReflectionBudget(origin,ray,5);\n"
+        "    return nwnRainTraceReflectionBudget(origin,ray,10);\n"
+        "}\n"
         // Return scalar ripple height plus its analytic world-space gradient.
         // Reflection/refraction consume the gradient as a normal; no ring is
         // painted directly into the material colour.
@@ -1674,6 +1730,46 @@ static bool patch_fragment_shader(std::string& source) {
         "            float radius = fract(time * 0.72 + seed * 5.37) * maxRadius;\n"
         "            float dist = length(delta);\n"
         "            float q = (dist - radius) / safeScale;\n"
+        // Beyond this support the Gaussian is below exp(-29). Skipping it
+        // avoids exponentials/normalization for distant neighboring cells;
+        // the omitted analytic-gradient tail is far below float image error.
+        "            if (q*q > 0.5) continue;\n"
+        "            float fade = 1.0 - radius / maxRadius;\n"
+        "            float ringHeight = exp(-58.0 * q * q) * fade;\n"
+        "            height += ringHeight;\n"
+        "            if (dist > 0.0001) {\n"
+        "                float dHeight = -116.0 * q * ringHeight / safeScale;\n"
+        "                gradient += normalize(delta) * dHeight * 1.45;\n"
+        "            }\n"
+        "        }\n"
+        "    }\n"
+        "    gradient /= max(1.0, length(gradient) * 0.22);\n"
+        "    return vec3(clamp(height, 0.0, 1.0), gradient);\n"
+        "}\n"
+        // Film uses a fixed half-scale impact. Its maximum ring radius is
+        // 0.31 cells; truncating at |q|=0.375 adds 0.1875 cells of support.
+        // Their sum is below 0.5, so only the four cells beside the nearest
+        // grid corner can contribute. Preserve the nine-cell puddle kernel.
+        // The omitted Gaussian tails are <= exp(-8.15625); captured colour
+        // differences were at most 2/255, with all impact centres unchanged.
+        "vec3 nwnRainFilmRippleField(vec2 worldXY, float time) {\n"
+        "    vec2 grid = worldXY * 1.45;\n"
+        "    vec2 baseCell = floor(grid - 0.5);\n"
+        "    float height = 0.0;\n"
+        "    vec2 gradient = vec2(0.0);\n"
+        "    for (int y = 0; y <= 1; ++y) {\n"
+        "        for (int x = 0; x <= 1; ++x) {\n"
+        "            vec2 cell = baseCell + vec2(float(x), float(y));\n"
+        "            float seed = nwnRainHash(cell);\n"
+        "            vec2 center = cell + vec2(nwnRainHash(cell + 13.1),\n"
+        "                                      nwnRainHash(cell + 37.7));\n"
+        "            vec2 delta = grid - center;\n"
+        "            float safeScale = 0.50;\n"
+        "            float maxRadius = 0.62 * safeScale;\n"
+        "            float radius = fract(time * 0.72 + seed * 5.37) * maxRadius;\n"
+        "            float dist = length(delta);\n"
+        "            float q = (dist - radius) / safeScale;\n"
+        "            if (q*q > 0.140625) continue;\n"
         "            float fade = 1.0 - radius / maxRadius;\n"
         "            float ringHeight = exp(-58.0 * q * q) * fade;\n"
         "            height += ringHeight;\n"
@@ -1697,11 +1793,24 @@ static bool patch_fragment_shader(std::string& source) {
         "    return 0.62 * nwnRainNoise(p * 0.58 + time * 0.021)\n"
         "         + 0.38 * nwnRainNoise(p * 1.73 - time * 0.037);\n"
         "}\n"
-        "vec2 nwnRainGroundNoiseSlope(vec2 p, float time) {\n"
-        "    const float e = 0.035;\n"
-        "    float h = nwnRainGroundNoiseHeight(p, time);\n"
-        "    return vec2(nwnRainGroundNoiseHeight(p + vec2(e, 0.0), time) - h,\n"
-        "                nwnRainGroundNoiseHeight(p + vec2(0.0, e), time) - h) / e;\n"
+        "vec2 nwnRainFilmGradient(vec2 p, float height) {\n"
+        "    vec2 nwnRainCoordDx = dFdx(p);\n"
+        "    vec2 nwnRainCoordDy = dFdy(p);\n"
+        "    float nwnRainHeightDx = dFdx(height);\n"
+        "    float nwnRainHeightDy = dFdy(height);\n"
+        "    float nwnRainNoiseDet = nwnRainCoordDx.x * nwnRainCoordDy.y\n"
+        "                          - nwnRainCoordDx.y * nwnRainCoordDy.x;\n"
+        "    vec2 nwnRainGroundSlope = vec2(0.0);\n"
+        // Degenerate/edge-on projections have no invertible 2D footprint.
+        // Keep a flat micro-normal instead of creating infinities/NaNs.
+        "    if (abs(nwnRainNoiseDet) > 1e-10) {\n"
+        "        nwnRainGroundSlope = vec2(\n"
+        "            nwnRainHeightDx * nwnRainCoordDy.y\n"
+        "              - nwnRainHeightDy * nwnRainCoordDx.y,\n"
+        "            nwnRainCoordDx.x * nwnRainHeightDy\n"
+        "              - nwnRainCoordDy.x * nwnRainHeightDx) / nwnRainNoiseDet;\n"
+        "    }\n"
+        "    return nwnRainGroundSlope;\n"
         "}\n"
         "float nwnSnowHeight(vec2 p, float amount) {\n"
         "    float broad = 0.56 * nwnRainNoise(p * 0.92 + 41.7)\n"
@@ -1752,16 +1861,41 @@ static bool patch_fragment_shader(std::string& source) {
         "                              toLight * inversesqrt(max(d2, 0.0001))), 0.0);\n"
         "    return color.rgb * max(attenuation, 0.0) * diffuse;\n"
         "}\n";
-    source.insert(mainPos, kDeclarations);
+    std::string declarations(kDeclarations);
+    if (g_wetFilmProfiling) {
+        const char* marker = "const int nwnWetFilmProbe = 0;";
+        declarations.replace(declarations.find(marker), std::strlen(marker), "uniform int nwnWetFilmProbe;");
+    }
+    bool candidateShelter = false;
+    if (g_wetFilmProfiling && g_wetFilmCandidateProfile) {
+        const size_t begin = declarations.find("float nwnWeatherPrecipitationExposure(");
+        const size_t end = declarations.find("float nwnRainPuddle(", begin);
+        if (begin != std::string::npos && end != std::string::npos) {
+            std::string fast = declarations.substr(begin, end-begin);
+            auto replace = [](std::string& text, const std::string& from, const std::string& to) {
+                size_t at=0;while((at=text.find(from,at))!=std::string::npos){text.replace(at,from.size(),to);at+=to.size();}
+            };
+            replace(fast,"nwnWeatherPrecipitationExposure(","nwnWeatherPrecipitationExposureFast(");
+            // The producer allocates only level zero, with LINEAR min/mag.
+            // Explicit LOD avoids unnecessary implicit-derivative sampling.
+            replace(fast,"exposed += texture(nwnWeatherPrecipitationOcclusionTex,","exposed += textureLod(nwnWeatherPrecipitationOcclusionTex,");
+            replace(fast,"compareZ));","compareZ), 0.0);");
+            // Rotate the two spread vectors once, instead of rotating eight taps.
+            replace(fast,"mat2 diskRotation = mat2(ca, sa, -sa, ca);","vec2 filterX=spreadX*ca+spreadY*sa; vec2 filterY=spreadY*ca-spreadX*sa; spreadX=filterX;spreadY=filterY;");
+            replace(fast,"disk = diskRotation * vec2(","disk = vec2(");
+            declarations.insert(end,fast);candidateShelter=true;
+        }
+    }
+    source.insert(mainPos, declarations);
 
-    const size_t shiftedOutput = outputPos + std::strlen(kDeclarations);
+    const size_t shiftedOutput = outputPos + declarations.size();
     static const char* kBody =
         "// injector-owned procedural rain puddles\n"
         "#if POSITION_VIEW == 1 && VERTEX_NORMAL == 1\n"
         "if (nwnWeatherSurfaceClass > 0.5 && nwnWeatherRainAmount > 0.001 &&\n"
-        "    (areaFlags & 1) == 0) {\n"
+        "    (areaFlags & 1) == 0 && (nwnWetFilmDisabled == 0 || nwnRainDisablePuddles == 0)) {\n"
         "    vec3 nwnRainWorld = (m_view_inv * vec4(vPosView, 1.0)).xyz;\n"
-        "    float nwnRainExposure = nwnWeatherPrecipitationExposure(nwnRainWorld);\n"
+        "    float nwnRainExposure = nwnWetFilmProbe == 1 ? 1.0 : nwnWeatherPrecipitationExposure(nwnRainWorld);\n"
         // Material normals include normal maps and smoothed cliff normals, so
         // they cannot decide whether standing water is physically plausible.
         // Position derivatives recover the actual triangle plane instead.
@@ -1783,9 +1917,12 @@ static bool patch_fragment_shader(std::string& source) {
         // puddles remain governed by the stricter nwnRainFlat gate above.
         "    float nwnRainSlopeCoverage = smoothstep(0.06, 0.42, nwnRainGeomUp);\n"
         "    float nwnRainFacing = mix(0.20, 1.0, nwnRainSlopeCoverage);\n"
-        "    float nwnRainMask = nwnRainPuddle(nwnRainWorld.xy, nwnWeatherRainAmount)\n"
+        "    float nwnRainMask = 0.0;\n"
+        "    if (nwnRainDisablePuddles == 0) {\n"
+        "        nwnRainMask = nwnRainPuddle(nwnRainWorld.xy, nwnWeatherRainAmount)\n"
         "                      * nwnRainFlat * nwnWeatherRainAmount\n"
         "                      * (1.0 - nwnRainStaticAlpha);\n"
+        "    }\n"
         // This is perceived shallow depth only. It drives absorption and
         // refraction strength but never writes gl_FragDepth or moves geometry.
         "    float nwnRainOpticalDepth = smoothstep(0.08, 0.92, nwnRainMask);\n"
@@ -1817,6 +1954,11 @@ static bool patch_fragment_shader(std::string& source) {
         // flatness-driven standing-water branch used by opaque terrain.
         "    nwnRainGroundOnly = max(nwnRainGroundOnly,\n"
         "                             nwnRainStaticAlpha * nwnRainFacing);\n"
+        "    float nwnRainGroundNoise = 0.5;\n"
+        "    float nwnRainGroundSpec = 0.0;\n"
+        // This branch is uniform across the material draw. All derivative
+        // operations stay together in ON; OFF skips them entirely.
+        "    if (nwnWetFilmDisabled == 0 && nwnWetFilmProbe != 4) {\n"
         "    vec3 nwnRainAbsGeomNormal = abs(nwnRainGeomNormal);\n"
         "    vec2 nwnRainNoiseCoord = nwnRainWorld.xy;\n"
         "    vec3 nwnRainNoiseBaseN = vec3(0.0, 0.0, 1.0);\n"
@@ -1835,26 +1977,20 @@ static bool patch_fragment_shader(std::string& source) {
         "            nwnRainNoiseTangentV = vec3(0.0, 0.0, 1.0);\n"
         "        }\n"
         "    }\n"
-        "    float nwnRainGroundNoise = 0.5;\n"
-        "    float nwnRainGroundSpec = 0.0;\n"
+        // Sample the moving height field once per fragment. The quad already
+        // contains neighboring samples: recover the world/projected-plane
+        // gradient from screen derivatives instead of sampling two additional
+        // offset height fields (six noise-texture reads rather than two).
+        // Derivatives MUST stay outside the varying GroundOnly branch. This
+        // also filters micro-normal detail to the actual pixel footprint.
+        "    float nwnRainNoiseHeight = nwnWetFilmProbe == 2 ? 0.5 : nwnRainGroundNoiseHeight(\n"
+        "                                      nwnRainNoiseCoord, nwnWeatherTime);\n"
+        "    vec2 nwnRainGroundSlope = nwnRainFilmGradient(nwnRainNoiseCoord,nwnRainNoiseHeight);\n"
         "    if (nwnRainGroundOnly > 0.001) {\n"
-        "        nwnRainGroundNoise = nwnRainGroundNoiseHeight(\n"
-        "                                      nwnRainNoiseCoord, nwnWeatherTime);\n"
-        "        vec2 nwnRainGroundSlope = nwnRainGroundNoiseSlope(\n"
-        "                                      nwnRainNoiseCoord, nwnWeatherTime);\n"
-        // Ground drops temporarily erase the fine moving film beneath their
-        // contact wave. The wave then replaces that detail in the normal only:
-        // it breaks the noise optically without painting a ring into albedo.
-        "        vec3 nwnRainGroundImpact = nwnRainRippleField(\n"
-        "                                      nwnRainNoiseCoord * 0.95,\n"
-        "                                      nwnWeatherTime * 1.32, 0.50);\n"
-        "        float nwnRainGroundBreak = smoothstep(0.035, 0.30,\n"
-        "                                      nwnRainGroundImpact.x);\n"
-        "        nwnRainGroundNoise = mix(nwnRainGroundNoise, 0.5,\n"
-        "                                  nwnRainGroundBreak * 0.82);\n"
-        "        vec2 nwnRainGroundSurface = nwnRainGroundSlope * 0.050\n"
-        "                                  * (1.0 - nwnRainGroundBreak * 0.72)\n"
-        "                                  - nwnRainGroundImpact.yz * 0.032;\n"
+        "        nwnRainGroundNoise = nwnRainNoiseHeight;\n"
+        // Wet-film impact rings are intentionally absent. Keep the moving
+        // micro-normal sheen; particle rain supplies the visible impacts.
+        "        vec2 nwnRainGroundSurface = nwnRainGroundSlope * 0.050;\n"
         "        vec3 nwnRainGroundWorldN = normalize(nwnRainNoiseBaseN\n"
         "                                      - nwnRainGroundSurface.x\n"
         "                                        * nwnRainNoiseTangentU\n"
@@ -1872,6 +2008,8 @@ static bool patch_fragment_shader(std::string& source) {
         "                              * mix(0.45, 1.0, nwnRainGroundNoise)\n"
         "                              * nwnRainGroundOnly;\n"
         "    }\n"
+        "    }\n"
+        "    if (nwnWetFilmDisabled == 0) {\n"
         "    nwnRainFilm *= mix(1.0, mix(0.62, 1.42, nwnRainGroundNoise),\n"
         "                       nwnRainGroundOnly);\n"
         "    vec3 nwnRainFilmColor = FragmentColor.rgb * vec3(0.84, 0.87, 0.90);\n"
@@ -1887,6 +2025,8 @@ static bool patch_fragment_shader(std::string& source) {
         "    FragmentColor.rgb += vec3(0.11, 0.135, 0.17)\n"
         "                           * nwnRainGroundSpec * nwnWeatherRainAmount\n"
         "                           * nwnRainFogVisibility * nwnRainExposure;\n"
+        "    }\n"
+        "    if (nwnRainDisablePuddles == 0) {\n"
         "    vec3 nwnRainAbsorption = mix(vec3(0.74, 0.78, 0.83),\n"
         "                                 vec3(0.42, 0.49, 0.58),\n"
         "                                 nwnRainOpticalDepth);\n"
@@ -1935,14 +2075,14 @@ static bool patch_fragment_shader(std::string& source) {
         "            * mix(0.20, 0.62, nwnRainOpticalDepth);\n"
         "        nwnRainWetColor = mix(nwnRainWetColor, nwnRainRefracted,\n"
         "                              nwnRainRefractionMix);\n"
+        "        float nwnRainNdotV = clamp(dot(nwnRainWaterViewN,\n"
+        "                                      -nwnRainIncident), 0.0, 1.0);\n"
+        "        float nwnRainFresnel = 0.02 + 0.98 * pow(1.0 - nwnRainNdotV, 5.0);\n"
         "        vec4 nwnRainHit = nwnRainTraceReflection(nwnRainFbOrigin +\n"
         "            normalize(mat3(nwnWeatherFbView) * nwnRainWaterWorldN)\n"
         "            * 0.035, nwnRainFbRay);\n"
         "        vec3 nwnRainReflected = texture2D(nwnWeatherFbColor,\n"
         "                                      clamp(nwnRainHit.xy, 0.002, 0.998)).rgb;\n"
-        "        float nwnRainNdotV = clamp(dot(nwnRainWaterViewN,\n"
-        "                                      -nwnRainIncident), 0.0, 1.0);\n"
-        "        float nwnRainFresnel = 0.02 + 0.98 * pow(1.0 - nwnRainNdotV, 5.0);\n"
         "        float nwnRainHitValid = step(0.0, nwnRainHit.x) *\n"
         "            step(0.0, nwnRainHit.y) * step(nwnRainHit.x, 1.0) *\n"
         "            step(nwnRainHit.y, 1.0);\n"
@@ -1961,6 +2101,7 @@ static bool patch_fragment_shader(std::string& source) {
         "    }\n"
         "    FragmentColor.rgb = mix(FragmentColor.rgb, nwnRainWetColor,\n"
         "                            clamp(nwnRainMask * 0.86, 0.0, 0.86));\n"
+        "    }\n"
         "}\n"
         "if (nwnWeatherSurfaceClass > 0.5 && nwnWeatherSurfaceClass < 1.5 &&\n"
         "    nwnWeatherSnowAmount > 0.001 && (areaFlags & 1) == 0) {\n"
@@ -2047,7 +2188,13 @@ static bool patch_fragment_shader(std::string& source) {
         "}\n"
         "#endif\n"
         "    ";
-    source.insert(shiftedOutput, kBody);
+    std::string body(kBody);
+    if (candidateShelter) {
+        const std::string from="nwnWetFilmProbe == 1 ? 1.0 : nwnWeatherPrecipitationExposure(nwnRainWorld)";
+        const std::string to="nwnWetFilmProbe == 6 ? nwnWeatherPrecipitationExposureFast(nwnRainWorld) : (nwnWetFilmProbe == 1 ? 1.0 : nwnWeatherPrecipitationExposure(nwnRainWorld))";
+        const size_t at=body.find(from);if(at!=std::string::npos)body.replace(at,from.size(),to);
+    }
+    source.insert(shiftedOutput, body);
     return true;
 }
 

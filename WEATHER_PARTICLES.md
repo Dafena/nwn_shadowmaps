@@ -52,11 +52,11 @@ Environment defaults (saved panel settings take precedence):
 | --- | --- | --- |
 | NWN_SHADER_RAIN | 0 | 0 / 1 |
 | NWN_SHADER_RAIN_HIDE_NATIVE | 0 | 0 / 1; only active with preview |
-| NWN_SHADER_RAIN_BUDGET | 2048 | 256–262144 |
-| NWN_SHADER_RAIN_RADIUS | 28 | 8–64 world metres |
+| NWN_SHADER_RAIN_BUDGET | 4352 | 256–262144 |
+| NWN_SHADER_RAIN_RADIUS | 40 | 8–64 world metres |
 | NWN_SHADER_RAIN_WIND_X | 0 | -8–8 metres/second |
 | NWN_SHADER_RAIN_WIND_Y | 0 | -8–8 metres/second |
-| NWN_SHADER_RAIN_SPLASHES | 1 | 0–2 |
+| NWN_SHADER_RAIN_SPLASHES | 0.250 | 0–2 |
 
 Wind is manual, **not a decoded NWN wind vector**. Density remains
 NWN-authoritative. Budget is rounded down to a square grid, and density
@@ -64,7 +64,7 @@ selects a stable subset of its cells.
 The logarithmic slider and Exact drop budget input allow extreme storms without
 making low-budget tuning awkward. Try 32768 first and increase while checking
 frame times. Above 32768 the panel displays a GPU-cost warning. The ordinary
-default remains 2048; the cap is not a promise of acceptable FPS at maximum.
+default is 4352; the cap is not a promise of acceptable FPS at maximum.
 
 Open-air cells now retain falling streaks even when the static map contains no
 ground. This matters for Storm Crown's empty cc tileset and non-static
@@ -167,3 +167,116 @@ runs do not establish Windows precipitation or native-rain suppression parity.
 Earlier user-confirmed preview results do not replace this combined-version
 acceptance. High-budget, shelter/VFX, native Windows and crowded multiplayer
 checks above remain open; see docs/RELEASE_AUDIT.md.
+
+## Puddle reflection trace quality (2026-11-16)
+
+**Puddle reflections → Reflection trace quality** selects Full (10 steps),
+Reduced (5), or Minimal (3). `NWN_PUDDLE_REFLECTION_QUALITY=0/1/2` supplies the
+environment default; `puddle_reflection_quality` persists the panel choice.
+Full remains the default and Reset value. This changes the ray-walk budget,
+not image resolution, puddle masks, refraction, material alpha or geometry.
+Fewer steps may miss reflected details or lower hit confidence. A missing or
+invalid sample-budget uniform keeps the original ten steps. Uniform updates
+are cached per program and are refreshed when the live quality changes.
+
+A real half/quarter reflection-buffer experiment was tested on Linux Balamb
+with the RTX 3060 Ti / driver 620.70.06 at 1920×1006 and full-resolution volumetric
+fog. Its 480×252 Quarter target was confirmed active in the game log. The
+maintainer observed lower FPS at reduced reflection resolution, both with a
+four-tap depth-aware resolve/full-trace fallback and with a cheaper one-tap
+resolve that faded mismatches. That experiment was removed from active code;
+smaller targets do not establish lower total frame cost. There is no additional
+reflection target, pass, or upsampling cost in the trace-quality implementation.
+The old `puddle_reflection_resolution` key is ignored, rather than silently
+reinterpreted as trace quality.
+
+The preceding wet-film optimization replaces repeated offset noise-height
+samples with one height evaluation and a screen-derivative-to-world-gradient
+conversion, outside the varying ground/puddle branch. The maintainer observed
+about 4 FPS improvement in rainy Balamb with full-resolution volumetric fog.
+This was a wet-film optimization, not a reflection-resolution improvement.
+
+Validation: `tests/run-weather-surface-regression.sh` renders the injected
+material branch, tests known gradients and degenerate footprints, and counts
+the actual trace loop at 10/5/3 steps and at the default uniform value.
+`tests/run-puddle-trace-quality-regression.sh` checks the real per-material
+uniform upload and persistence registration. Balamb performance of the new
+trace budgets remains to be measured. Native Windows validation is not claimed.
+
+Runtime evidence for the rejected buffer experiment used `launch-linux.sh`
+→ `run-dev.sh` and the development library, including the launcher's cost,
+trace and depth-dump diagnostics. Native executable SHA256:
+`6d19c39bc646af5ddbc333ff31797a4acd9019506bcb45ef1b93b1bd5925e700`;
+the client shader build macro reports8193. Fog was Full resolution with32
+samples; private rain used4352 drops,40m radius and0.250 splashes. Adaptive
+VSync failed and the client retried full VSync. MSAA was not independently
+confirmed at the material target; this is not an uncapped throughput result.
+The final trace-budget shader fixture on NVIDIA measured representative Full
+at0.522ms versus Minimal at0.498ms in an adjacent pair. This excludes game
+geometry, the rest of the frame and all-map visual acceptance.
+
+The **Enable rain puddles and reflection/refraction** checkbox under Puddle
+reflections disables the entire standing-water branch, including its procedural
+mask, absorption, reflection ray walk and framebuffer refraction. Rain particles,
+splashes, wet film and snow remain independently available. The default is on;
+`NWN_RAIN_PUDDLES=0` supplies an off environment default and `rain_puddles`
+persists the live checkbox. No settings-version retune is needed for this new key.
+
+## Wet-film quality and Linux measurement (2026-11-16)
+
+**Wet surface film → Enable wet film** is ON/OFF. ON retains the full Detailed
+look. The default and Reset value are ON. `NWN_WET_FILM=0/1` supplies the
+environment default; `wet_film_enabled` persists the checkbox. Legacy Detailed
+(`wet_film_quality=0`) migrates to ON; legacy Simple/Off migrate to OFF. An
+explicit new boolean takes precedence regardless of file ordering. The legacy
+environment quality value is accepted only when the new environment variable
+is absent. Simple sheen was removed after the maintainer found no visible
+advantage over Off. With wet film and puddles OFF, the complete rain-surface
+shader branch is bypassed. Particles, splashes, precipitation authority, snow,
+alpha and depth remain independent.
+
+The Detailed ripple kernel ignores Gaussian contributions below exp(-29).
+GPU comparisons against the unbounded kernel found maximum field differences
+4.66e-10 on Mesa and2.87e-6 on NVIDIA; the latter includes compiler precision
+differences. Tests exercise the actual field functions, material branches,
+uniform uploads, wet/dry/interior eligibility, and disabled optical work.
+
+Maintainer's same-view rainy Balamb comparison, puddles disabled: Detailed50FPS,
+Simple56FPS, Off60FPS. Simple's visual difference was not apparent to the
+maintainer. The live log confirms an8-sample native material target; the game
+remains presentation capped. Disabling private rain/splashes had no observed
+FPS effect. These observations do not establish uncapped throughput.
+
+Further full-detail experiments were not incorporated: redundant-normal and
+integer-power rewrites, shared ripple distance, compact tangent basis, static
+ripple-seed caching, alternative integer seeds, conservative cell pruning,
+visibility gates and shader group voting. They did not show reliable wins on
+the RTX3060Ti/620.70.06; some were slower. Twelve interleaved compact-basis
+pairs split6/6, with median baseline0.306ms versus variant0.3105ms. Matching
+8×MSAA/alpha-coverage fixtures also showed no win for those candidates.
+Depth-only draws were0.004ms with Detailed or Off in the fixture, so no
+manual weather suppression was added to replay paths.
+
+These negative results are not a proof that Detailed cannot be improved.
+A real-frame GPU profile is needed before a larger Full-quality redesign;
+the isolated material fixtures do not reproduce all Balamb geometry, lighting,
+coverage and blend traffic. No new Full optimization is claimed from these
+experiments, and no additional render target or pass was retained.
+
+
+### Detailed wet-film compact impact candidate (2026-11-16)
+
+Native RenderDoc frames now validate the actual rainy Balamb material path. The first candidate retains nine-cell puddle impacts but evaluates wet-film half-scale impacts over four cells with bounded Gaussian tails. Impact centres and motion are unchanged. The captured film-only candidate differed by no more than2/255 per colour channel. A representative ground draw showed about10–11% lower clock-normalized GPU time; this is not a whole-frame FPS result. GPU clock changes and replay stalls are explicitly excluded from claims of a60FPS result. See [profiling evidence and limitations](docs/WET_FILM_OPTIMIZATION.md).
+
+Production shader/surface tests passed on Mesa and the RTX3060Ti, including four animation phases, shelter and alpha surfaces. Linux development and shipping builds are current. Normal gameplay performance and moving-camera visual validation remain pending.
+
+
+### Shelter-map performance follow-up (2026-11-16)
+
+The runtime conservative-bounds experiment was rejected after a52→48FPS gameplay regression and removed from active source. The normal launcher used an8192² precipitation shelter map, whereas earlier clean captures used4096²; component timing is therefore qualified by that difference. The captured engine noise texture is1024² BC4.
+
+Reducing only the shelter map to2048² produced55FPS in the maintainer’s rainy Balamb view, with detailed wet filmON, puddlesOFF and full-resolution fog. The60FPS target remains unmet. The new live **Wet surface film → Rain/snow shelter map** control offers Original,4096,2048,1024, and shows the actual active size. It preserves detailed film calculations and the sun-map size; lower shelter precision can widen transitions near roofs. The shared map affects rain and snow shelter. Environment `NWN_WEATHER_SHELTER_SIZE` and saved key `weather_shelter_size` use those pixel sizes or0 for Original. Reset/default is Original; the maintainer approved a1024 trial next.
+
+### Linux Balamb performance follow-up (2026-11-17)
+
+The rainy-view investigation isolated a major cost outside precipitation itself: receiver-tag render-target attachment changes during native geometry drawing. Linux now batches that reserved attachment across one native scene pass while restoring per-draw draw buffers and removing the attachment before postprocessing; tag contents, actual MSAA coverage and engine-derived classification are preserved. Windows retains its existing lifetime. State/GPU regression checks passed and the maintainer reports correct visuals. With full-resolution fog and both caster options restored, the heavy spot improved from the40s to72FPS. With detailed wet filmON and puddlesOFF, the former55FPS view reports80FPS and the heavy rainy spot69FPS. These are reported native gameplay results, not a universal performance guarantee. See `docs/WET_FILM_OPTIMIZATION.md` for matched GPU timing and rejected shelter experiments.

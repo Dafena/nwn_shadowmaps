@@ -222,6 +222,8 @@ static void update_local_join_fades(const EngineShadowLightEntry* cand, unsigned
 }
 
 static void capture_local_light_shadow(void* scene) {
+    draw_cpu_probe::Timer timing(draw_cpu_probe::LocalPrepare);
+    if(!local_capture_demand::allow())return;
     // Do NOT gate on g_usable here. That flag belongs to the legacy
     // single-map target created by create_target(), which is only ever called
     // on the NON-trace path -- and every launcher that enables this probe runs
