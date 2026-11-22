@@ -5,21 +5,21 @@ repository root; there is no nested checkout that should be built or deployed.
 
 ## Translation units
 
-`nwn_shadowmap.cpp` remains the root translation unit for renderer state and
+`src/nwn_shadowmap.cpp` remains the root translation unit for renderer state and
 hooks. The following files are included into it deliberately:
 
 | Module | Responsibility |
 | --- | --- |
-| `shadow_gl_api.inc` | OpenGL types, constants, function pointers, and binding |
-| `shadow_engine_bindings.inc` | NWN engine types, symbols, and resolver table |
-| `shadow_targets.inc` | Shadow texture/FBO allocation and target status |
-| `shadow_diagnostics_settings.inc` | Readback, dumps, settings load/save, defaults |
-| `shadow_replay.inc` | Matrix-stack replay for sun, world, and local targets |
-| `shadow_shader_interposition.inc` | Shader injection and draw interception |
-| `shadow_fullscreen_receiver.inc` | Receiver shader and scene-depth/color copies |
-| `shadow_overlay_runtime.inc` | Overlay lifecycle, input, and frame ordering |
-| `shadow_trace_cascade.inc` | Scene tracing, cascade setup, and bucket detours |
-| `shadow_local_lights.inc` | Engine-selected local-light state and capture setup |
+| `src/shadow_gl_api.inc` | OpenGL types, constants, function pointers, and binding |
+| `src/shadow_engine_bindings.inc` | NWN engine types, symbols, and resolver table |
+| `src/shadow_targets.inc` | Shadow texture/FBO allocation and target status |
+| `src/shadow_diagnostics_settings.inc` | Readback, dumps, settings load/save, defaults |
+| `src/shadow_replay.inc` | Matrix-stack replay for sun, world, and local targets |
+| `src/shadow_shader_interposition.inc` | Shader injection and draw interception |
+| `src/shadow_fullscreen_receiver.inc` | Receiver shader and scene-depth/color copies |
+| `src/shadow_overlay_runtime.inc` | Overlay lifecycle, input, and frame ordering |
+| `src/shadow_trace_cascade.inc` | Scene tracing, cascade setup, and bucket detours |
+| `src/shadow_local_lights.inc` | Engine-selected local-light state and capture setup |
 
 Private shared state is the reason these remain same-translation-unit modules.
 Do not move a module to a separate object merely to make the file tree look
@@ -30,11 +30,11 @@ code:
 
 - `shadow_config.{h,cpp}` — memoized environment lookup and shipping defaults;
 - `shadow_math.{h,cpp}` — pure vector/matrix/projection helpers;
-- `nwn_overlay_imgui.cpp` — the only file allowed to include Dear ImGui;
-- `nwn_oit.cpp` — opt-in transparency census, source/program classification,
+- `src/nwn_overlay_imgui.cpp` — the only file allowed to include Dear ImGui;
+- `src/nwn_oit.cpp` — opt-in transparency census, source/program classification,
   and experimental A2C/OIT mechanics; its accepted contract is documented in
   `TRANSPARENCY_MODES.md`;
-- `nwn_platform_win.cpp` — Windows proxy and platform mechanics.
+- `src/nwn_platform_win.cpp` — Windows proxy and platform mechanics.
 
 ## Build dependencies
 
@@ -50,8 +50,8 @@ glibc/glibc++ floor suitable for distribution.
 ## Refactor invariants
 
 - Preserve the exported Linux symbol surface unless an ABI change is intended.
-- Keep ImGui headers inside `nwn_overlay_imgui.cpp`.
-- Keep platform mechanics behind `nwn_platform.h`; keep shipping policy behind
+- Keep ImGui headers inside `src/nwn_overlay_imgui.cpp`.
+- Keep platform mechanics behind `src/nwn_platform.h`; keep shipping policy behind
   `NWN_SHIP`.
 - Keep Windows-only local-light mechanics behind
   `NWN_WIN_LOCAL_FASTPATH`.

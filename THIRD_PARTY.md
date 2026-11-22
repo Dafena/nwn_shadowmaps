@@ -5,8 +5,8 @@ Both are vendored in-tree so the project builds without fetching anything.
 ## Dear ImGui — `imgui/`
 
 <https://github.com/ocornut/imgui>, MIT licence. Used only for the in-game
-settings panel. `nwn_overlay_imgui.cpp` is the ONLY file permitted to include an
-ImGui header; everything else talks to it through `nwn_overlay.h`.
+settings panel. `src/nwn_overlay_imgui.cpp` is the ONLY file permitted to include an
+ImGui header; everything else talks to it through `src/nwn_overlay.h`.
 
 ## subhook — `subhook/`
 

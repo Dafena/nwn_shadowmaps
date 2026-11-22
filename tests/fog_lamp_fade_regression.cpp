@@ -1,4 +1,4 @@
-#include "shadow_fog_lamp_fade.h"
+#include "src/shadow_fog_lamp_fade.h"
 #include <cassert>
 #include <cmath>
 int main(){

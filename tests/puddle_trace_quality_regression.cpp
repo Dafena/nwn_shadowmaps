@@ -1,4 +1,4 @@
-#include "../nwn_shadowmap.cpp"
+#include "../src/nwn_shadowmap.cpp"
 #include <fstream>
 static int uploaded = -1, uploads = 0, disabled = -1, film = -1;
 static void uniform_int(GLint location, GLint value) {

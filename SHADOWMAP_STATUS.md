@@ -96,7 +96,7 @@ uses a blob fallback rather than meaning “no shadows”.
 ## Experimental transparency path
 
 The repository contains opt-in material transparency experiments in
-`nwn_oit.cpp`. They are not part of the accepted shipping shadow path. Explicit
+`src/nwn_oit.cpp`. They are not part of the accepted shipping shadow path. Explicit
 Mode 2 A2C is accepted on Linux and Windows, is camera-stable, preserves opaque
 depth intersections, and receives directional/local shadows, with 8x MSAA
 giving the preferred visual result.
@@ -178,17 +178,17 @@ The deploy path uses `nwn-shadows.sh` beside `nwmain-linux`.
 
 ## Source navigation
 
-The root flow is in `nwn_shadowmap.cpp`. The main implementation modules are:
+The root flow is in `src/nwn_shadowmap.cpp`. The main implementation modules are:
 
-- `shadow_trace_cascade.inc` — scene and bucket hooks;
-- `shadow_replay.inc` — cascade, world-map, and local bucket replay;
-- `shadow_local_lights.inc` — local source preparation and capture state;
-- `weather_runtime.inc` — shared rain/snow rendering, platform weather
+- `src/shadow_trace_cascade.inc` — scene and bucket hooks;
+- `src/shadow_replay.inc` — cascade, world-map, and local bucket replay;
+- `src/shadow_local_lights.inc` — local source preparation and capture state;
+- `src/weather_runtime.inc` — shared rain/snow rendering, platform weather
   authority, precipitation occlusion, and snow deformation;
-- `shadow_shader_interposition.inc` — shader/draw interception;
-- `shadow_overlay_runtime.inc` and `shadow_fullscreen_receiver.inc` — receiver,
+- `src/shadow_shader_interposition.inc` — shader/draw interception;
+- `src/shadow_overlay_runtime.inc` and `src/shadow_fullscreen_receiver.inc` — receiver,
   overlay, and frame ordering;
-- `shadow_diagnostics_settings.inc` — settings and diagnostics.
+- `src/shadow_diagnostics_settings.inc` — settings and diagnostics.
 
 See [CURRENT_TASK.md](CURRENT_TASK.md) for the active blocker,
 [TRANSPARENCY_MODES.md](TRANSPARENCY_MODES.md) for transparency evidence, and

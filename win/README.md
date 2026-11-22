@@ -22,7 +22,7 @@ code only discovers client weather state and interposes OpenGL calls.
 
 If a behaviour works on Linux and fails on Windows, repair it in a Windows-only
 path. Do not change shared C++ or GLSL to solve a Windows-only symptom. The
-platform mechanics live in `nwn_platform.h` and the Windows local-light
+platform mechanics live in `src/nwn_platform.h` and the Windows local-light
 mechanics are isolated behind `NWN_WIN_LOCAL_FASTPATH`.
 
 ## Build

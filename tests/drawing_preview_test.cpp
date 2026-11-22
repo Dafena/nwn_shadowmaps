@@ -1,6 +1,6 @@
-#include "../drawing_preview.h"
-#include "../drawing_texture_upload.h"
-#include "../drawing_pad_marker.h"
+#include "../src/drawing_preview.h"
+#include "../src/drawing_texture_upload.h"
+#include "../src/drawing_pad_marker.h"
 #include <cassert>
 #include <map>
 #include <string>

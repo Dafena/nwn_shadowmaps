@@ -12,9 +12,9 @@
 #include <cstdlib>
 #include <cstring>
 #include <vector>
-#include "../shadow_math.h"
-#include "../nwn_overlay.h"
-#include "../nwn_hooks_core.h"
+#include "../src/shadow_math.h"
+#include "../src/nwn_overlay.h"
+#include "../src/nwn_hooks_core.h"
 namespace nwn_core {
 // Standalone pass fixture: no tag-buffer owner is installed.
 bool g_ownedPass=false;
@@ -98,7 +98,7 @@ enum Id { RainOn, RainWindX, RainWindY, RainSplashes, RainRadius };
 static float f(Id,float user){return user;}
 static bool b(Id,bool user){return user;}
 }
-#include "../weather_particles.inc"
+#include "../src/weather_particles.inc"
 static void require(bool value,const char* name) {
     if(!value) { fprintf(stderr,"FAIL: %s (GL error 0x%x)\n",name,glGetError()); exit(1); }
 }

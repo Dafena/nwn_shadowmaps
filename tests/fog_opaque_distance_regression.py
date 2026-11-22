@@ -4,7 +4,7 @@ import sys
 from pathlib import Path
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]))
 import check_shaders
-shader=check_shaders.named_string('godrays_runtime.inc','scatterFragment')
+shader=check_shaders.named_string('src/godrays_runtime.inc','scatterFragment')
 import re
 match=re.search(r'float nwnFogMarchEnd\([^)]*\)\{return ([^;]+);\}',shader)
 assert match, 'Volume continues to hidden surface depth after native fog is fully opaque'

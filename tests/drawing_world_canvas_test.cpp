@@ -1,5 +1,5 @@
-#include "../drawing_world_canvas.h"
-#include "../drawing_preview.h"
+#include "../src/drawing_world_canvas.h"
+#include "../src/drawing_preview.h"
 #include <cassert>
 using namespace drawing_probe;
 int main() {

@@ -1,7 +1,7 @@
 #include <windows.h>
 #include <cassert>
 #include <cstring>
-#include "../drawing_probe.h"
+#include "../src/drawing_probe.h"
 int main() {
     auto code=static_cast<unsigned char*>(VirtualAlloc(nullptr,128,MEM_COMMIT|MEM_RESERVE,PAGE_READWRITE));
     assert(code);

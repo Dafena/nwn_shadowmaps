@@ -1,5 +1,5 @@
 // Exercise the real capture helpers with distinct engine READ/DRAW bindings.
-#include "../nwn_shadowmap.cpp"
+#include "../src/nwn_shadowmap.cpp"
 static GLint drawFbo = 4, readFbo = 0;
 static GLint copiedFrom = -1;
 static void get_int(GLenum key, GLint* value) {

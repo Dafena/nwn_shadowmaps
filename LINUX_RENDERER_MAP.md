@@ -2,7 +2,7 @@
 
 This is the current renderer-facing map for the Linux NWN:EE executable. It
 records engine boundaries used by the injector, not a historical phase plan.
-Exact addresses and mangled names belong in `shadow_engine_bindings.inc`; this
+Exact addresses and mangled names belong in `src/shadow_engine_bindings.inc`; this
 file explains ownership and safe timing.
 
 ## Engine boundaries used by the injector
@@ -111,11 +111,11 @@ windows around symbols:
 
 ```bash
 rg -n "SceneRender_detour|SceneRenderDrawBucket_trace_detour" \
-  nwn_shadowmap.cpp shadow_trace_cascade.inc
+  src/nwn_shadowmap.cpp src/shadow_trace_cascade.inc
 rg -n "LightGetShadowLights|GetShadowLights|UpdateShadowingLights" \
-  nwn_shadowmap.cpp shadow_engine_bindings.inc shadow_trace_cascade.inc
+  src/nwn_shadowmap.cpp src/shadow_engine_bindings.inc src/shadow_trace_cascade.inc
 rg -n "mtx_entry|SetMatrixMode|FlagDirty|savedView|savedProj" \
-  nwn_shadowmap.cpp shadow_replay.inc shadow_shader_interposition.inc
+  src/nwn_shadowmap.cpp src/shadow_replay.inc src/shadow_shader_interposition.inc
 ```
 
 ## What this map does not claim

@@ -4,8 +4,8 @@ import re,sys
 from pathlib import Path
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]))
 import check_shaders
-scatter=check_shaders.named_string('godrays_runtime.inc','scatterFragment')
-composite=check_shaders.named_string('godrays_runtime.inc','compositeFragment')
+scatter=check_shaders.named_string('src/godrays_runtime.inc','scatterFragment')
+composite=check_shaders.named_string('src/godrays_runtime.inc','compositeFragment')
 pattern=r'bool nwnFogDepthMatch\(float a,float b\)\{return ([^;]+);\}'
 a=re.search(pattern,scatter);b=re.search(pattern,composite)
 assert a and b, 'No matched-depth/refinement contract: background always blends onto thin foreground'

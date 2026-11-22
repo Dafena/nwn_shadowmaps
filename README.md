@@ -10,6 +10,17 @@ The Linux target is `libnwn_shadowmap.so`, loaded with `LD_PRELOAD`. The
 Windows target is `win/version.dll`, a proxy DLL loaded beside `nwmain.exe`.
 Both targets are built from the same renderer source.
 
+## Repository layout
+
+- `src/`: project C++ sources, headers and same-translation-unit renderer modules.
+- `tests/`: regression fixtures and validation scripts.
+- `win/`: Windows proxy, export definitions and cross-build packaging.
+- `imgui/` and `subhook/`: bundled dependencies.
+- `docs/`: design notes, investigations and historical evidence.
+
+Run builds from the repository root. Linux library outputs remain at the root;
+the Windows DLL remains at `win/version.dll`, so existing launchers still work.
+
 ## Current state
 
 As of 2026-09-03:
@@ -37,12 +48,12 @@ As of 2026-09-03:
   `NWN_SHADOWMAP_GODRAYS=1`). The pass ray-marches a height fog plus the
   area's authored fog against the directional cascade maps. It builds and its
   shaders compile offline, but the 2026-11-10 rewrite has NOT yet been
-  verified in a running client. See `godrays_runtime.inc`.
-- Heat haze (opt-in, `shadow_heat_haze.inc`) bends the view through hot air:
+  verified in a running client. See `src/godrays_runtime.inc`.
+- Heat haze (opt-in, `src/shadow_heat_haze.inc`) bends the view through hot air:
   distant views over hot ground and the air above warm lights (torches, lava)
   shimmer. Runtime verification pending.
 - Area scripts can override the look of rain, fog and heat haze per player via
-  the NWNX per-player custom token 910010 (`shadow_script_env.inc`; message
+  the NWNX per-player custom token 910010 (`src/shadow_script_env.inc`; message
   format documented there, parser test in `tests/script_env_test.cpp`). Quality
   settings stay the player's. `NWN_SHADOWMAP_SCRIPT_CONTROL=0` disables it.
 - Linux and Windows automatically observe NWN clear/rain/snow area weather
@@ -112,32 +123,32 @@ path, and regression matrix are in
 
 ## Repository map
 
-`nwn_shadowmap.cpp` is the root translation unit. It includes the renderer
+`src/nwn_shadowmap.cpp` is the root translation unit. It includes the renderer
 modules below so they can share private state without exporting an internal
 ABI:
 
 | File | Responsibility |
 | --- | --- |
 | `shadow_config.{h,cpp}` | Memoized environment lookup and shipping defaults |
-| `shadow_engine_bindings.inc` | NWN symbol declarations and resolution |
-| `shadow_gl_api.inc` | OpenGL ABI declarations and entry points |
-| `shadow_targets.inc` | Texture/FBO allocation and validation |
-| `shadow_replay.inc` | Sun, static-world, and local bucket replay |
-| `shadow_local_lights.inc` | Engine-selected local-light state and capture setup |
-| `weather_runtime.inc` | Shared rain/snow rendering, platform weather authority, precipitation occlusion, and snow trails |
-| `shadow_shader_interposition.inc` | Shader interception and draw wrappers |
-| `shadow_fullscreen_receiver.inc` | Receiver shader construction and scene copies |
-| `godrays_runtime.inc` | Opt-in shadow-aware volumetric fog and sun shafts (runtime verification pending) |
-| `shadow_overlay_runtime.inc` | Overlay runtime, input, and frame ordering |
-| `shadow_diagnostics_settings.inc` | Diagnostics and persisted settings |
-| `shadow_trace_cascade.inc` | Scene tracing, cascade setup, and hooks |
+| `src/shadow_engine_bindings.inc` | NWN symbol declarations and resolution |
+| `src/shadow_gl_api.inc` | OpenGL ABI declarations and entry points |
+| `src/shadow_targets.inc` | Texture/FBO allocation and validation |
+| `src/shadow_replay.inc` | Sun, static-world, and local bucket replay |
+| `src/shadow_local_lights.inc` | Engine-selected local-light state and capture setup |
+| `src/weather_runtime.inc` | Shared rain/snow rendering, platform weather authority, precipitation occlusion, and snow trails |
+| `src/shadow_shader_interposition.inc` | Shader interception and draw wrappers |
+| `src/shadow_fullscreen_receiver.inc` | Receiver shader construction and scene copies |
+| `src/godrays_runtime.inc` | Opt-in shadow-aware volumetric fog and sun shafts (runtime verification pending) |
+| `src/shadow_overlay_runtime.inc` | Overlay runtime, input, and frame ordering |
+| `src/shadow_diagnostics_settings.inc` | Diagnostics and persisted settings |
+| `src/shadow_trace_cascade.inc` | Scene tracing, cascade setup, and hooks |
 | `shadow_math.{h,cpp}` | Pure matrix, vector, and projection helpers |
 | `nwn_overlay.{h,cpp}` | Overlay contract and Dear ImGui implementation |
 | `nwn_platform.{h,cpp}` | Linux/Windows platform mechanics |
-| `nwn_oit.cpp` | Opt-in transparency census and experimental A2C/OIT mechanics |
+| `src/nwn_oit.cpp` | Opt-in transparency census and experimental A2C/OIT mechanics |
 
 The source is the authority for supported diagnostics and exact environment
-keys. Use `rg -n 'shadow_getenv|NWN_SHADOWMAP_' nwn_shadowmap.cpp shadow_*.inc`
+keys. Use `rg -n 'shadow_getenv|NWN_SHADOWMAP_' src/nwn_shadowmap.cpp shadow_*.inc`
 before documenting a new switch.
 
 ## Build

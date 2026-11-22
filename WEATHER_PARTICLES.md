@@ -86,7 +86,7 @@ map. Missing prerequisites leave native rain intact.
     make -C win -B -j4 CXX=x86_64-w64-mingw32-g++-posix CC=x86_64-w64-mingw32-gcc-posix
 
 test-weather requires Mesa/EGL and GL development headers. It compiles the
-actual weather_particles.inc against a small authoritative-state fixture,
+actual src/weather_particles.inc against a small authoritative-state fixture,
 links its shaders in a real software GL context, draws/readbacks pixels,
 checks depth/alpha preservation, compares touched GL state, and exercises
 weather/area/viewport/fog/void/wind/roof gates. It runs normally and with

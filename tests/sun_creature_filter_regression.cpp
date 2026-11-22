@@ -1,4 +1,4 @@
-#include "../nwn_shadowmap.cpp"
+#include "../src/nwn_shadowmap.cpp"
 
 static GLuint boundFbo = 42;
 static void bind_fbo(GLenum, GLuint fbo) { boundFbo = fbo; }

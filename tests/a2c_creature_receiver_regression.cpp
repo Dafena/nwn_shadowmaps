@@ -1,5 +1,5 @@
 // Exercise the real A2C receiver upload, including authoritative owner type.
-#include "../nwn_shadowmap.cpp"
+#include "../src/nwn_shadowmap.cpp"
 
 static float uploadedStrength = -1.0f;
 static GLint uniform_location(GLuint, const char* name) {

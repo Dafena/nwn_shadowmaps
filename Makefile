@@ -2,13 +2,13 @@
 # subhook/ (bundled) is compiled as C; the hook is compiled as C++.
 #
 # nwn_alphasort.cpp is retained for reference (its ELF .symtab resolver is the
-# basis for the one in nwn_shadowmap.cpp) but is no longer built or injected:
+# basis for the one in src/nwn_shadowmap.cpp) but is no longer built or injected:
 # per-triangle sorting did not fix the transparency it was written for, and it
 # detours RenderFlat, which the shadow pass replays through.
 #
 # imgui/ (vendored, MIT, see imgui/LICENSE.txt) backs the settings overlay. It
 # is the project's only external dependency and is deliberately confined to
-# nwn_overlay_imgui.cpp -- no ImGui header reaches nwn_shadowmap.cpp. Only the
+# src/nwn_overlay_imgui.cpp -- no ImGui header reaches nwn_shadowmap.cpp. Only the
 # OpenGL3 backend is vendored: there is no platform backend, because input is
 # polled from statically-linked SDL rather than taken from NWN's event queue.
 # ImGui's own sources are compiled without -Wall -Wextra; they are upstream
@@ -18,6 +18,7 @@ CC  ?= gcc
 CXX ?= g++
 CFLAGS   ?= -O2 -fPIC -I$(SUBHOOK)
 CXXFLAGS ?= -O2 -std=c++17 -fPIC -Wall -Wextra -I$(SUBHOOK)
+CPPFLAGS += -I. -Isrc
 IMGUI_DIR  = imgui
 # -fvisibility=hidden matters here: this is an LD_PRELOAD library, so anything
 # it exports interposes on the whole process. ImGui's ~900 symbols have no
@@ -32,7 +33,8 @@ OBJS = nwn_shadowmap.o shadow_config.o shadow_math.o nwn_oit.o nwn_overlay_imgui
 
 all: $(TARGET)
 
-drawing_texture_probe.o: drawing_texture_probe.cpp drawing_pad_marker.h drawing_canvas_quad.h drawing_probe.h nwn_platform.h
+drawing_texture_probe.o: src/drawing_texture_probe.cpp src/drawing_pad_marker.h src/drawing_canvas_quad.h src/drawing_probe.h src/nwn_platform.h
+	$(CXX) $(CPPFLAGS) $(CXXFLAGS) -c $< -o $@
 
 
 # ---------------------------------------------------------------------------
@@ -40,7 +42,7 @@ drawing_texture_probe.o: drawing_texture_probe.cpp drawing_pad_marker.h drawing_
 # ---------------------------------------------------------------------------
 # Same source, -DNWN_SHADOWMAP_SHIPPING, into a SEPARATE object dir so the two
 # builds can coexist without a stale-object trap. See NWN_SHIP in
-# nwn_platform.h for what the flag changes. In short: it carries its own
+# src/nwn_platform.h for what the flag changes. In short: it carries its own
 # defaults (no launcher script needed -- plain LD_PRELOAD works), hides every
 # control that REMOVES shadows, writes no .pgm dumps, and runs no frame-cost
 # instrumentation (which costs a glFinish per reporting frame).
@@ -48,7 +50,7 @@ DEPLOY_TARGET = libnwn_shadowmap_deploy.so
 DEPLOY_DIR    = build-deploy
 DEPLOY_OBJS   = $(addprefix $(DEPLOY_DIR)/,$(OBJS))
 
-$(DEPLOY_DIR)/drawing_texture_probe.o: drawing_texture_probe.cpp drawing_pad_marker.h drawing_canvas_quad.h drawing_probe.h nwn_platform.h
+$(DEPLOY_DIR)/drawing_texture_probe.o: src/drawing_texture_probe.cpp src/drawing_pad_marker.h src/drawing_canvas_quad.h src/drawing_probe.h src/nwn_platform.h
 
 deploy: $(DEPLOY_TARGET)
 
@@ -59,33 +61,33 @@ $(DEPLOY_TARGET): $(DEPLOY_OBJS)
 $(DEPLOY_DIR):
 	mkdir -p $(DEPLOY_DIR)
 
-$(DEPLOY_DIR)/%.o: %.cpp | $(DEPLOY_DIR)
-	$(CXX) $(CXXFLAGS) -DNWN_SHADOWMAP_SHIPPING -c $< -o $@
+$(DEPLOY_DIR)/%.o: src/%.cpp | $(DEPLOY_DIR)
+	$(CXX) $(CPPFLAGS) $(CXXFLAGS) -DNWN_SHADOWMAP_SHIPPING -c $< -o $@
 
-# nwn_shadowmap.cpp is split into same-translation-unit .inc modules.  Keep the
+# src/nwn_shadowmap.cpp is split into same-translation-unit .inc modules.  Keep the
 # shipping object on the same dependency graph as the development object;
 # otherwise `make deploy` can silently reuse a stale object after an .inc-only
 # fix (as happened with the startup settings reconciliation).
-$(DEPLOY_DIR)/nwn_shadowmap.o: nwn_shadowmap.cpp shadow_drawing_probe.inc drawing_probe.h drawing_input_journal.h drawing_preview.h drawing_texture_upload.h drawing_canvas_quad.h drawing_world_canvas.h \
-	shadow_gl_api.inc shadow_engine_bindings.inc nwn_layer_stack.inc nwn_layer_stack_plan.h weather_runtime.inc weather_particles.inc shadow_verified_gateway.h shadow_fog_lamp_fade.h shadow_native_gateways.inc shadow_caster_census.inc shadow_wet_film_profile.inc shadow_stage_profile.inc shadow_tag_benchmark.inc \
-	shadow_targets.inc shadow_local_capture_demand.inc shadow_diagnostics_settings.inc shadow_replay.inc shadow_receiver_tags.inc shadow_tag_work.inc shadow_tag_buffer_lease.h shadow_tag_buffer_lease.inc \
-	shadow_shader_interposition.inc shadow_fullscreen_receiver.inc godrays_runtime.inc \
-	shadow_script_env.inc shadow_heat_haze.inc \
-	shadow_overlay_runtime.inc shadow_trace_cascade.inc shadow_aabb_guard.inc shadow_local_lights.inc \
-	nwn_overlay.h nwn_hooks_core.h nwn_platform.h shadow_config.h shadow_math.h \
+$(DEPLOY_DIR)/nwn_shadowmap.o: src/nwn_shadowmap.cpp src/shadow_drawing_probe.inc src/drawing_probe.h src/drawing_input_journal.h src/drawing_preview.h src/drawing_texture_upload.h src/drawing_canvas_quad.h src/drawing_world_canvas.h \
+	src/shadow_gl_api.inc src/shadow_engine_bindings.inc src/nwn_layer_stack.inc src/nwn_layer_stack_plan.h src/weather_runtime.inc src/weather_particles.inc src/shadow_verified_gateway.h src/shadow_fog_lamp_fade.h src/shadow_native_gateways.inc src/shadow_caster_census.inc src/shadow_wet_film_profile.inc src/shadow_stage_profile.inc src/shadow_tag_benchmark.inc \
+	src/shadow_targets.inc src/shadow_local_capture_demand.inc src/shadow_diagnostics_settings.inc src/shadow_replay.inc src/shadow_receiver_tags.inc src/shadow_tag_work.inc src/shadow_tag_buffer_lease.h src/shadow_tag_buffer_lease.inc \
+	src/shadow_shader_interposition.inc src/shadow_fullscreen_receiver.inc src/godrays_runtime.inc \
+	src/shadow_script_env.inc src/shadow_heat_haze.inc \
+	src/shadow_overlay_runtime.inc src/shadow_trace_cascade.inc src/shadow_aabb_guard.inc src/shadow_local_lights.inc \
+	src/nwn_overlay.h src/nwn_hooks_core.h src/nwn_platform.h src/shadow_config.h src/shadow_math.h \
 	| $(DEPLOY_DIR)
-	$(CXX) $(CXXFLAGS) -DNWN_SHADOWMAP_SHIPPING -c $< -o $@
+	$(CXX) $(CPPFLAGS) $(CXXFLAGS) -DNWN_SHADOWMAP_SHIPPING -c $< -o $@
 
 # The overlay needs the ImGui include paths and the hidden-visibility flags,
 # exactly as the normal build's rule does -- the generic rule above does not
 # carry them, which is why this one is spelled out.
-$(DEPLOY_DIR)/nwn_overlay_imgui.o: nwn_overlay_imgui.cpp nwn_overlay.h | $(DEPLOY_DIR)
-	$(CXX) $(CXXFLAGS) -DNWN_SHADOWMAP_SHIPPING \
+$(DEPLOY_DIR)/nwn_overlay_imgui.o: src/nwn_overlay_imgui.cpp src/nwn_overlay.h | $(DEPLOY_DIR)
+	$(CXX) $(CPPFLAGS) $(CXXFLAGS) -DNWN_SHADOWMAP_SHIPPING \
 	    -fvisibility=hidden -fvisibility-inlines-hidden \
 	    -I$(IMGUI_DIR) -I$(IMGUI_DIR)/backends -c $< -o $@
 
 $(DEPLOY_DIR)/subhook.o: $(SUBHOOK)/subhook.c | $(DEPLOY_DIR)
-	$(CC) $(CFLAGS) -c $< -o $@
+	$(CC) $(CPPFLAGS) $(CFLAGS) -c $< -o $@
 
 # Explicit, not a %-rule: a pattern stem cannot be empty, so imgui%.o never
 # matched imgui.o and make reported "no rule to make target".
@@ -105,31 +107,31 @@ $(DEPLOY_DIR)/imgui_impl_opengl3.o: $(IMGUI_DIR)/backends/imgui_impl_opengl3.cpp
 $(TARGET): $(OBJS)
 	$(CXX) -shared $^ -o $@ -ldl
 
-nwn_shadowmap.o: nwn_shadowmap.cpp shadow_drawing_probe.inc drawing_probe.h drawing_input_journal.h drawing_preview.h drawing_texture_upload.h drawing_canvas_quad.h drawing_world_canvas.h \
-	shadow_gl_api.inc shadow_engine_bindings.inc nwn_layer_stack.inc nwn_layer_stack_plan.h weather_runtime.inc weather_particles.inc shadow_verified_gateway.h shadow_fog_lamp_fade.h shadow_native_gateways.inc shadow_caster_census.inc shadow_wet_film_profile.inc shadow_stage_profile.inc shadow_tag_benchmark.inc \
-	shadow_targets.inc shadow_local_capture_demand.inc shadow_diagnostics_settings.inc shadow_replay.inc shadow_receiver_tags.inc shadow_tag_work.inc shadow_tag_buffer_lease.h shadow_tag_buffer_lease.inc \
-	shadow_shader_interposition.inc shadow_fullscreen_receiver.inc godrays_runtime.inc \
-	shadow_script_env.inc shadow_heat_haze.inc \
-	shadow_overlay_runtime.inc shadow_trace_cascade.inc shadow_aabb_guard.inc shadow_local_lights.inc \
-	nwn_overlay.h nwn_hooks_core.h nwn_platform.h shadow_config.h shadow_math.h
-	$(CXX) $(CXXFLAGS) -c $< -o $@
+nwn_shadowmap.o: src/nwn_shadowmap.cpp src/shadow_drawing_probe.inc src/drawing_probe.h src/drawing_input_journal.h src/drawing_preview.h src/drawing_texture_upload.h src/drawing_canvas_quad.h src/drawing_world_canvas.h \
+	src/shadow_gl_api.inc src/shadow_engine_bindings.inc src/nwn_layer_stack.inc src/nwn_layer_stack_plan.h src/weather_runtime.inc src/weather_particles.inc src/shadow_verified_gateway.h src/shadow_fog_lamp_fade.h src/shadow_native_gateways.inc src/shadow_caster_census.inc src/shadow_wet_film_profile.inc src/shadow_stage_profile.inc src/shadow_tag_benchmark.inc \
+	src/shadow_targets.inc src/shadow_local_capture_demand.inc src/shadow_diagnostics_settings.inc src/shadow_replay.inc src/shadow_receiver_tags.inc src/shadow_tag_work.inc src/shadow_tag_buffer_lease.h src/shadow_tag_buffer_lease.inc \
+	src/shadow_shader_interposition.inc src/shadow_fullscreen_receiver.inc src/godrays_runtime.inc \
+	src/shadow_script_env.inc src/shadow_heat_haze.inc \
+	src/shadow_overlay_runtime.inc src/shadow_trace_cascade.inc src/shadow_aabb_guard.inc src/shadow_local_lights.inc \
+	src/nwn_overlay.h src/nwn_hooks_core.h src/nwn_platform.h src/shadow_config.h src/shadow_math.h
+	$(CXX) $(CPPFLAGS) $(CXXFLAGS) -c $< -o $@
 
-shadow_config.o: shadow_config.cpp shadow_config.h nwn_platform.h
-	$(CXX) $(CXXFLAGS) -c $< -o $@
+shadow_config.o: src/shadow_config.cpp src/shadow_config.h src/nwn_platform.h
+	$(CXX) $(CPPFLAGS) $(CXXFLAGS) -c $< -o $@
 
-shadow_math.o: shadow_math.cpp shadow_math.h
-	$(CXX) $(CXXFLAGS) -c $< -o $@
+shadow_math.o: src/shadow_math.cpp src/shadow_math.h
+	$(CXX) $(CPPFLAGS) $(CXXFLAGS) -c $< -o $@
 
 # Order-independent transparency, ported from the console renderer. Its own
 # module (own env vars, own launcher, own toggle) but deliberately the SAME .so:
 # two LD_PRELOADs would chain their interposers fine and still be wrong, because
 # each replays geometry through the other's per-draw hook and a re-entrancy flag
 # cannot be shared across two dlopen'd libraries. See nwn_hooks_core.h.
-nwn_oit.o: nwn_oit.cpp nwn_hooks_core.h nwn_platform.h
-	$(CXX) $(CXXFLAGS) -c $< -o $@
+nwn_oit.o: src/nwn_oit.cpp src/nwn_hooks_core.h src/nwn_platform.h
+	$(CXX) $(CPPFLAGS) $(CXXFLAGS) -c $< -o $@
 
-nwn_overlay_imgui.o: nwn_overlay_imgui.cpp nwn_overlay.h
-	$(CXX) $(CXXFLAGS) -fvisibility=hidden -fvisibility-inlines-hidden \
+nwn_overlay_imgui.o: src/nwn_overlay_imgui.cpp src/nwn_overlay.h
+	$(CXX) $(CPPFLAGS) $(CXXFLAGS) -fvisibility=hidden -fvisibility-inlines-hidden \
 	    -I$(IMGUI_DIR) -I$(IMGUI_DIR)/backends -c $< -o $@
 
 imgui.o: $(IMGUI_DIR)/imgui.cpp
@@ -144,7 +146,7 @@ imgui_impl_opengl3.o: $(IMGUI_DIR)/backends/imgui_impl_opengl3.cpp
 	$(CXX) $(IMGUI_FLAGS) -c $< -o $@
 
 subhook.o: $(SUBHOOK)/subhook.c
-	$(CC) $(CFLAGS) -c $< -o $@
+	$(CC) $(CPPFLAGS) $(CFLAGS) -c $< -o $@
 
 clean:
 	rm -f $(TARGET) $(OBJS)
@@ -154,7 +156,7 @@ clean:
 test-weather:
 	@set -eu; weather_test_path="$$(mktemp /tmp/nwn-weather-test.XXXXXX)"; \
 	trap 'rm -f "$$weather_test_path"' EXIT; \
-	$(CXX) $(CXXFLAGS) tests/weather_particles_gl.cpp shadow_math.cpp \
+	$(CXX) $(CPPFLAGS) $(CXXFLAGS) tests/weather_particles_gl.cpp src/shadow_math.cpp \
 	    -o "$$weather_test_path" -lEGL -lGL -ldl; \
 	LIBGL_ALWAYS_SOFTWARE=1 "$$weather_test_path"; \
 	MESA_GL_VERSION_OVERRIDE=3.3 LIBGL_ALWAYS_SOFTWARE=1 "$$weather_test_path"
@@ -169,11 +171,11 @@ tag-bench: $(TAG_BENCH_TARGET)
 build-tag-bench:
 	mkdir -p $@
 
-build-tag-bench/nwn_shadowmap.o: nwn_shadowmap.cpp $(wildcard *.inc) $(wildcard *.h) | build-tag-bench
-	$(CXX) $(CXXFLAGS) -DNWN_TAG_WORK_BENCH_DIAGNOSTIC -c $< -o $@
+build-tag-bench/nwn_shadowmap.o: src/nwn_shadowmap.cpp $(wildcard src/*.inc) $(wildcard src/*.h) | build-tag-bench
+	$(CXX) $(CPPFLAGS) $(CXXFLAGS) -DNWN_TAG_WORK_BENCH_DIAGNOSTIC -c $< -o $@
 
-build-tag-bench/nwn_oit.o: nwn_oit.cpp nwn_hooks_core.h nwn_platform.h | build-tag-bench
-	$(CXX) $(CXXFLAGS) -DNWN_TAG_WORK_BENCH_DIAGNOSTIC -c $< -o $@
+build-tag-bench/nwn_oit.o: src/nwn_oit.cpp src/nwn_hooks_core.h src/nwn_platform.h | build-tag-bench
+	$(CXX) $(CPPFLAGS) $(CXXFLAGS) -DNWN_TAG_WORK_BENCH_DIAGNOSTIC -c $< -o $@
 
 $(TAG_BENCH_TARGET): build-tag-bench/nwn_shadowmap.o build-tag-bench/nwn_oit.o $(filter-out nwn_shadowmap.o nwn_oit.o,$(OBJS))
 	$(CXX) -shared $^ -o $@.next -ldl

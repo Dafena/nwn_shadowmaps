@@ -22,7 +22,7 @@
 // hand-writing 17 exact signatures -- including GetFileVersionInfoByHandle,
 // which Microsoft does not document.
 //
-// The injector proper lives in nwn_shadowmap.cpp and starts from its
+// The injector proper lives in src/nwn_shadowmap.cpp and starts from its
 // __attribute__((constructor)), which mingw runs on DLL_PROCESS_ATTACH exactly
 // as the .so's runs on load. Keeping work out of DllMain also keeps us off the
 // loader lock.
@@ -71,7 +71,7 @@ void load_real_version() {
         g_real[i] = (GenericFn)(void*)GetProcAddress(g_realVersion, kExportNames[i]);
 }
 
-// NOTE: stderr redirection deliberately lives in nwn_platform_win.cpp as an
+// NOTE: stderr redirection deliberately lives in src/nwn_platform_win.cpp as an
 // early-priority constructor. Doing it here would be too late -- mingw runs
 // constructors before DllMain, so the injector's startup report would already
 // have been written to a dead stderr, and reopening with "w" here truncated

@@ -1,4 +1,4 @@
-// Offline test of the script-control message parser (shadow_script_env.inc).
+// Offline test of the script-control message parser (src/shadow_script_env.inc).
 // Builds the real module against a stub shadow_getenv; no game or GL needed.
 #include <algorithm>
 #include <cassert>
@@ -8,7 +8,7 @@
 #include <cstdlib>
 #include <cstring>
 static const char* shadow_getenv(const char* name) { return std::getenv(name); }
-#include "../shadow_script_env.inc"
+#include "../src/shadow_script_env.inc"
 
 using namespace script_env;
 
