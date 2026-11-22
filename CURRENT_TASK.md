@@ -227,3 +227,14 @@ fog depth/energy/opacity/fade, native gateway, buffer lease, local demand,
 inactive-weather and real weather-surface software-GL regressions passed.
 Windows rebuild and 17 proxy/60 game-export verification passed. PR targets main;
 no direct merge is requested or performed during preparation.
+
+## Repository evidence cleanup (2026-11-21)
+
+After PR #6 merged, maintainer requested further folder cleanup. Historical
+transparency census reports now live under docs/evidence/transparency with an
+index; all 18 files retain their exact contents. Transparency documentation links
+follow the move, and fresh capture examples write to /tmp to protect the archive.
+Old local test libraries and runtime logs/dumps were moved to ignored
+local-archive/2026-11-21; root intermediate object files were removed and can be
+rebuilt normally. Current Linux libraries, Windows DLL, settings and the local
+launcher were preserved. No renderer or build behavior changed.

@@ -21,3 +21,6 @@ __pycache__/
 
 # Opt-in diagnostic build directory
 build-tag-bench/
+
+# Local historical binaries and runtime diagnostics
+/local-archive/

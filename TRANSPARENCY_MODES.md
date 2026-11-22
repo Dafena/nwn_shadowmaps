@@ -71,7 +71,7 @@ now parked.
 Four one-material Linux runs were captured on 2026-08-21 with the ordinary OIT
 census only. Trace logs append rather than truncate, so use a fresh `/tmp` log
 name for each run. The original runs were preserved separately as
-`census-test1.txt` through `census-test4.txt`.
+[census-test1.txt](docs/evidence/transparency/census-test1.txt) through [census-test4.txt](docs/evidence/transparency/census-test4.txt).
 
 The common opaque programs in buckets 0 and 2 are scene context, not the test
 material. The relevant material results were:
@@ -136,13 +136,13 @@ native meanings. They are not surrogate selectors for injector modes.
 3. **A2C opt-in:** complete for the initial foliage proof. At 8x MSAA, mode 0
    and mode 3 remained native while mode 2 alone selected A2C, all on stock
    program 152. The live sample count must be at least 2 or the draw remains
-   native. Evidence is preserved in `census-mode-routing.txt`.
+   native. Evidence is preserved in [census-mode-routing.txt](docs/evidence/transparency/census-mode-routing.txt).
 4. **A2C shadows:** functionally complete. Directional and one-slot local-light
    receivers both activated on stock program 152, shadows were visible on
    mode-2 foliage, and source-classified alpha/card casters remained present.
    Dark shadows expose A2C's discrete sample mask; this is documented as a
    mode-2 limitation rather than treated as a shadow failure. Evidence:
-   `census-mode2-shadow-routing.txt` and the focused visual test.
+   [census-mode2-shadow-routing.txt](docs/evidence/transparency/census-mode2-shadow-routing.txt) and the focused visual test.
 5. **Emitter transmittance:** accepted compromise. Mode-2 foliage
    transmittance and opaque-occluded private emitter color were independently
    proven, then joined after the shadow receiver and before overlays. Do not
@@ -151,7 +151,7 @@ native meanings. They are not surrogate selectors for injector modes.
    The private product proof passed at 1920x1006: two mode-2 draws yielded
    59,273 covered pixels, 15,816 fractional pixels, and `minT=0`. Modes 0 and
    3 remained native and the screen was untouched. Evidence:
-   `census-mode2-transmittance.txt`. Exact source-over/additive separation and
+   [census-mode2-transmittance.txt](docs/evidence/transparency/census-mode2-transmittance.txt). Exact source-over/additive separation and
    many-layer emitter fidelity is a pinned Mode 2 TODO.
 6. **Weighted OIT opt-in:** parked after an accepted visual prototype. The
    dormant strict Mode 3 implementation uses a
@@ -193,6 +193,9 @@ env -u NWN_OIT \
   ./run-dev.sh
 ```
 
+Archived census reports live in [docs/evidence/transparency](docs/evidence/transparency/README.md).
+The examples below write fresh captures to `/tmp`; copy out anything worth keeping.
+
 `run-shadowmap-trace.sh` executes `: > "$LOG"` before launch, so
 `shadowmap-phase1.log` is overwritten each session. Preserve only the useful
 lines before the next launch:
@@ -200,7 +203,7 @@ lines before the next launch:
 ```bash
 rg '\[oit\]\[(foliage-)?census\]' shadowmap-phase1.log \
   | sort -u \
-  > census-testN.txt
+  > /tmp/census-testN.txt
 ```
 
 Run the custom material-mode census separately:
@@ -222,7 +225,7 @@ Extract only the result:
 ```bash
 rg '\[oit\]\[material-mode(-census)?\]' shadowmap-phase1.log \
   | sort -u \
-  > census-material-mode.txt
+  > /tmp/census-material-mode.txt
 ```
 
 Test one unmarked ordinary alpha material plus modes 2 and 3. A non-negative
@@ -321,7 +324,7 @@ Extract the bounded evidence before the next launch:
 ```bash
 rg '\[oit\]\[material-identity' shadowmap-phase1.log \
   | sort -u \
-  > census-material-identity.txt
+  > /tmp/census-material-identity.txt
 ```
 
 ### Strict mode-routing proof
@@ -358,7 +361,7 @@ unchanged. Preserve the decisions before another launch:
 ```bash
 rg '\[oit\]\[mode-route\]' shadowmap-phase1.log \
   | sort -u \
-  > census-mode-routing.txt
+  > /tmp/census-mode-routing.txt
 ```
 
 ### Mode-2 shadow checkpoint
@@ -383,7 +386,7 @@ After the run, preserve the relevant bounded log evidence:
 rg '\[a2c\]\[shadow\]|\[oit\]\[mode-route\]|\[shadowmap\]\[static\].*alpha' \
   shadowmap-phase1.log \
   | sort -u \
-  > census-mode2-shadow-runtime.txt
+  > /tmp/census-mode2-shadow-runtime.txt
 ```
 
 Directional success should include `direct per-fragment CSM receiver active`.
@@ -425,7 +428,7 @@ counts, `minT` below 1, `screen=untouched`, and `emitters=native`:
 rg '\[a2c\]\[transmittance\]|\[oit\]\[mode-route\]' \
   shadowmap-phase1.log \
   | sort -u \
-  > census-mode2-transmittance.txt
+  > /tmp/census-mode2-transmittance.txt
 ```
 
 ### Private emitter-color proof
@@ -472,7 +475,7 @@ reports at least one draw, a non-zero `lit` count, positive `maxRgb`,
 rg '\[a2c\]\[emitter-census\]|\[a2c\]\[transmittance\]|\[oit\]\[mode-route\]' \
   shadowmap-phase1.log \
   | sort -u \
-  > census-mode2-emitter-private.txt
+  > /tmp/census-mode2-emitter-private.txt
 ```
 
 Accepted Linux evidence refined the depth construction. Importing scene depth
@@ -610,7 +613,7 @@ The Linux proof passed on 2026-08-23 at 1920x1006. One mode-3 draw produced
 sum pixels, `maxSum=1.3721`, 56,198 fractional-transmittance pixels, and
 `minT=0.0983`. Mode 0 remained native, mode 2 remained A2C, and the visible
 mode-3 draw was retained. Evidence is preserved in
-`census-mode3-private.txt`.
+[census-mode3-private.txt](docs/evidence/transparency/census-mode3-private.txt).
 
 Private accumulation is therefore accepted. The next slice resolves these
 same buffers into an injector-owned texture and reads that texture back. It
@@ -622,7 +625,7 @@ The private resolve passed on 2026-08-23. It produced 55,756 resolved pixels,
 all fractional, with `resolvedMaxRgb=0.1025` and `resolvedMinT=0.4553`; that
 minimum exactly matched the accumulated transmittance. The screen remained
 untouched and the native mode-3 draw was retained. Evidence is preserved in
-`census-mode3-resolve.txt`.
+[census-mode3-resolve.txt](docs/evidence/transparency/census-mode3-resolve.txt).
 
 The next gate is a bounded private stability census while the camera rotates
 and zooms. It must report no sampled frame where an eligible mode-3 draw was
@@ -644,7 +647,7 @@ material remains visibly in frame is not. The census remains private:
 
 The stability gate passed on 2026-08-23: 24 samples across 120 eligible frames
 reported `disappeared=0`, coverage range 16,275–16,313, and non-zero resolved
-color throughout. Evidence is preserved in `census-mode3-stability.txt`.
+color throughout. Evidence is preserved in [census-mode3-stability.txt](docs/evidence/transparency/census-mode3-stability.txt).
 
 The next private gate reconstructs single-sample opaque depth by immediately
 duplicating only depth-writing, non-blended bucket-0 and bucket-2 draws into
@@ -673,7 +676,7 @@ The private-depth gate passed on Linux on 2026-08-23. The injector duplicated
 then produced 55,742 color pixels and 55,770 fractional alpha-sum,
 transmittance, and resolved pixels through `GL_LEQUAL`; `resolvedMinT=0.4468`
 matched the accumulated transmittance. The screen remained untouched and the
-native draw was retained. Evidence is preserved in `census-mode3-depth.txt`.
+native draw was retained. Evidence is preserved in [census-mode3-depth.txt](docs/evidence/transparency/census-mode3-depth.txt).
 
 Private opaque depth is therefore accepted. The next gate is ordering-only:
 prove from live state that the duplicated stock color already contains NWN's
@@ -704,7 +707,7 @@ color entered private accumulation. Numbered buckets rendered into FBO 2 and
 the shadow receiver produced FBO 0 before overlays. Bucket 6 remained
 ambiguous: its program exposed only fog uniforms, while prior evidence already
 places `sample_framebuffer 2` in the same bucket. Evidence and this unresolved
-qualification are preserved in `census-mode3-order.txt`.
+qualification are preserved in [census-mode3-order.txt](docs/evidence/transparency/census-mode3-order.txt).
 
 The follow-up build additionally emits `[oit][mode3-order] material` lines with
 the bound MTR name, mode, `sample_framebuffer`, `volumetric`, transparency, and
@@ -729,7 +732,7 @@ suppression is allowed only after this visible insertion point passes.
 The first visible run reached the correct FBO/timing but failed opacity. Its
 strongest pixel had `minT=0.4600`, so the private layer never exceeded roughly
 54% opacity; removing the retained native draw at that point would only make
-the failure more obvious. Evidence is preserved in `census-mode3-visible.txt`.
+the failure more obvious. Evidence is preserved in [census-mode3-visible.txt](docs/evidence/transparency/census-mode3-visible.txt).
 
 For cutout-authored foliage, enable `NWN_OIT_MODE3_ALPHA_NORMALIZE=1` for the
 next gate. The shader divides raw alpha by the material's live
@@ -784,7 +787,7 @@ No Mode 0/2 color is accumulated by Mode 3 and no visible mode routing changes.
 The Linux follow-up passed. Both native control modes emitted the bounded
 occluder-only proof, the visible Mode 3 path remained `core-plus-fringe`, and
 the intervening card-border artifact disappeared. The hybrid visual prototype
-is accepted; evidence is appended to `census-mode3-visible.txt`.
+is accepted; evidence is appended to [census-mode3-visible.txt](docs/evidence/transparency/census-mode3-visible.txt).
 
 Historical implementation note: the census path used eager private-depth
 reconstruction and bounded readbacks/order instrumentation. The former runtime
