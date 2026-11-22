@@ -24,13 +24,13 @@ import shutil
 # Files to scan. Every `static const char* <name> = "#version ...` in them is
 # found and compiled, so adding a shader needs no edit here.
 SOURCES = [
-    "weather_particles.inc",
-    "shadow_fullscreen_receiver.inc",
-    "godrays_runtime.inc",
-    "shadow_heat_haze.inc",
-    "shadow_overlay_runtime.inc",
-    "shadow_shader_interposition.inc",
-    "nwn_oit.cpp",
+    "src/weather_particles.inc",
+    "src/shadow_fullscreen_receiver.inc",
+    "src/godrays_runtime.inc",
+    "src/shadow_heat_haze.inc",
+    "src/shadow_overlay_runtime.inc",
+    "src/shadow_shader_interposition.inc",
+    "src/nwn_oit.cpp",
 ]
 
 
@@ -88,7 +88,7 @@ def named_string(path, name):
 
 
 def injected_foliage_shader():
-    path = "shadow_shader_interposition.inc"
+    path = "src/shadow_shader_interposition.inc"
     outputs = named_string(path, "kOutputs")
     helpers = named_string(path, "kA2cShadowHelpers")
     body = named_string(path, "kBody")
@@ -99,7 +99,7 @@ def injected_foliage_shader():
 
 
 def injected_compact_a2c_shader():
-    path = "shadow_shader_interposition.inc"
+    path = "src/shadow_shader_interposition.inc"
     declarations = named_string(path, "kA2cDeclarations")
     helpers = named_string(path, "kA2cShadowHelpers")
     body = named_string(path, "kA2cBody")
@@ -111,7 +111,7 @@ def injected_compact_a2c_shader():
 
 
 def injected_emitter_shader():
-    path = "shadow_shader_interposition.inc"
+    path = "src/shadow_shader_interposition.inc"
     declarations = named_string(path, "declarations")
     body = named_string(path, "body")
     return ("#version 330 compatibility\n" + declarations +
@@ -119,7 +119,7 @@ def injected_emitter_shader():
 
 
 def injected_material_mode_shader():
-    path = "shadow_shader_interposition.inc"
+    path = "src/shadow_shader_interposition.inc"
     declaration = named_string(path, "declaration")
     guard = named_string(path, "guard")
     return ("#version 330 compatibility\n" + declaration +
@@ -164,7 +164,7 @@ def main():
         if res.returncode == 0:
             print(f"ok    {'a2c foliage injection':22s} {len(src):6d} bytes")
         else:
-            print("FAIL  a2c foliage injection shadow_shader_interposition.inc")
+            print("FAIL  a2c foliage injection src/shadow_shader_interposition.inc")
             print(res.stdout.strip() or res.stderr.strip())
             failures += 1
     except Exception as exc:

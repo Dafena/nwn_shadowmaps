@@ -10,8 +10,8 @@ from types import SimpleNamespace
 import numpy as np
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import check_shaders
-source = Path('godrays_runtime.inc').read_text()
-shader = check_shaders.named_string('godrays_runtime.inc', 'scatterFragment')
+source = Path('src/godrays_runtime.inc').read_text()
+shader = check_shaders.named_string('src/godrays_runtime.inc', 'scatterFragment')
 expression = re.search(r'vec3 inscatter=([^;]+);', shader).group(1)
 factor = re.search(r'if \(g_godraysDebug == 0\)\s*gl::BlendFuncSeparate\((\w+), GL_SRC_ALPHA, GL_ZERO, GL_ONE\)', source).group(1)
 rng = np.random.default_rng(2718)

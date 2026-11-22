@@ -5,7 +5,7 @@ cd "$HERE"
 make -s
 TEST_DIR="$(mktemp -d /tmp/nwn-local-depth.XXXXXX)"
 trap 'rm -rf "$TEST_DIR"' EXIT
-"${CXX:-g++}" -O1 -std=c++17 -fPIC -I. -Isubhook \
+"${CXX:-g++}" -O1 -std=c++17 -fPIC -I. -Isrc -Isubhook \
     tests/local_contact_depth_regression.cpp \
     shadow_config.o shadow_math.o nwn_oit.o nwn_overlay_imgui.o drawing_texture_probe.o subhook.o \
     imgui.o imgui_draw.o imgui_tables.o imgui_widgets.o imgui_impl_opengl3.o \

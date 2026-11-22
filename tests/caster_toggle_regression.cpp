@@ -1,5 +1,5 @@
 // Exercise the actual replay function with a recording GL backend.
-#include "../nwn_shadowmap.cpp"
+#include "../src/nwn_shadowmap.cpp"
 #include <array>
 static int mutations = 0, drawFbo = 41, readFbo = 43, clears = 0;
 static GLint vpNow[4] = {17, 23, 1920, 1006};

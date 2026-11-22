@@ -1,5 +1,5 @@
-#include "../drawing_probe.h"
-#include "../drawing_input_journal.h"
+#include "../src/drawing_probe.h"
+#include "../src/drawing_input_journal.h"
 #include <cassert>
 #include <string>
 int main() {

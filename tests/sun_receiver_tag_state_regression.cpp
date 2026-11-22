@@ -1,4 +1,4 @@
-#include "../nwn_shadowmap.cpp"
+#include "../src/nwn_shadowmap.cpp"
 static GLint nativeFbo = 42, attachmentType = GL_NONE, maxBuffers = 8;
 static GLint currentProgram=9;static bool knownProgram=true,depthWrite=true;
 static unsigned bufferChanges=0;

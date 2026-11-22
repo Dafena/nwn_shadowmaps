@@ -5,13 +5,13 @@ only checkout that should be built or deployed.
 
 Read this file, then [CURRENT_TASK.md](CURRENT_TASK.md), before editing. Use
 [SYMBOL_INDEX.md](SYMBOL_INDEX.md) for narrow source inspection. Do not dump
-the large root translation unit broadly.
+the large renderer translation unit broadly.
 
 ## Current baseline
 
 The clean baseline is the `main` branch at the latest repository commit. The
 renderer is split into same-translation-unit `.inc` modules included by
-`nwn_shadowmap.cpp`; only the pure configuration and math helpers are separate
+`src/nwn_shadowmap.cpp`; only the pure configuration and math helpers are separate
 translation units. Linux development and shipping builds, and the Windows
 proxy build, come from this tree.
 
@@ -201,36 +201,36 @@ Other known limitations:
 
 | File | Scope |
 | --- | --- |
-| `nwn_shadowmap.cpp` | Root state, hooks, startup, scene flow |
-| `shadow_engine_bindings.inc` | Engine bindings and symbol resolution |
-| `shadow_gl_api.inc` | GL declarations and resolver surface |
-| `shadow_targets.inc` | FBO/texture lifecycle and target state |
-| `shadow_replay.inc` | Sun/static-world/local replay implementation |
-| `shadow_local_lights.inc` | Local selection, matrices, preparation, capture |
-| `weather_runtime.inc` | Shared weather rendering plus Linux/Windows authority adapters, precipitation occlusion, and snow trails |
-| `weather_particles.inc` | Opt-in GL3.3 rain/splash preview; reversible exact-resource native rain hiding with fallback |
-| `shadow_shader_interposition.inc` | Shader and draw interception |
-| `shadow_fullscreen_receiver.inc` | Receiver programs and scene copies |
-| `shadow_overlay_runtime.inc` | Overlay lifecycle and frame ordering |
-| `shadow_diagnostics_settings.inc` | Settings, logging, readback, dumps |
-| `shadow_trace_cascade.inc` | Trace hooks, cascade state, bucket hook |
+| `src/nwn_shadowmap.cpp` | Root state, hooks, startup, scene flow |
+| `src/shadow_engine_bindings.inc` | Engine bindings and symbol resolution |
+| `src/shadow_gl_api.inc` | GL declarations and resolver surface |
+| `src/shadow_targets.inc` | FBO/texture lifecycle and target state |
+| `src/shadow_replay.inc` | Sun/static-world/local replay implementation |
+| `src/shadow_local_lights.inc` | Local selection, matrices, preparation, capture |
+| `src/weather_runtime.inc` | Shared weather rendering plus Linux/Windows authority adapters, precipitation occlusion, and snow trails |
+| `src/weather_particles.inc` | Opt-in GL3.3 rain/splash preview; reversible exact-resource native rain hiding with fallback |
+| `src/shadow_shader_interposition.inc` | Shader and draw interception |
+| `src/shadow_fullscreen_receiver.inc` | Receiver programs and scene copies |
+| `src/shadow_overlay_runtime.inc` | Overlay lifecycle and frame ordering |
+| `src/shadow_diagnostics_settings.inc` | Settings, logging, readback, dumps |
+| `src/shadow_trace_cascade.inc` | Trace hooks, cascade state, bucket hook |
 | `shadow_config.{h,cpp}` | Environment lookup and shipping defaults |
 | `shadow_math.{h,cpp}` | Pure math helpers |
 | `nwn_platform.{h,cpp}` | Platform-specific mechanics |
-| `nwn_oit.cpp` | Transparency census and experimental A2C/OIT mechanics |
-| `nwn_layer_stack.inc` / `nwn_layer_stack_plan.h` | Explicit continuous-alpha priority scheduling and platform adapters |
+| `src/nwn_oit.cpp` | Transparency census and experimental A2C/OIT mechanics |
+| `src/nwn_layer_stack.inc` / `src/nwn_layer_stack_plan.h` | Explicit continuous-alpha priority scheduling and platform adapters |
 
 Useful narrow searches:
 
 ```bash
 rg -n "SceneRender_detour|SceneRenderDrawBucket_trace_detour" \
-  nwn_shadowmap.cpp shadow_trace_cascade.inc
+  src/nwn_shadowmap.cpp src/shadow_trace_cascade.inc
 rg -n "replay_bucket_into_|capture_local_light_shadow" \
-  shadow_replay.inc shadow_local_lights.inc
+  src/shadow_replay.inc src/shadow_local_lights.inc
 rg -n "GetShadowLights|EngineShadowLight|g_localPriorityOffset" \
-  nwn_shadowmap.cpp shadow_local_lights.inc shadow_trace_cascade.inc
+  src/nwn_shadowmap.cpp src/shadow_local_lights.inc src/shadow_trace_cascade.inc
 rg -n "draw_static_receiver|capture_scene_depth|local" \
-  shadow_overlay_runtime.inc shadow_fullscreen_receiver.inc
+  src/shadow_overlay_runtime.inc src/shadow_fullscreen_receiver.inc
 ```
 
 ## Verification

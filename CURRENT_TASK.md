@@ -146,7 +146,7 @@ acceptance. Preview4restored, normal concern remains pending controlled isolatio
 
 Maintainer prioritized daytime volumetric whiteout over local-light profiling.
 Combined-scatter shoulder plus destination-headroom LDR blend implemented in
- godrays_runtime.inc; no settings/default changes or added rendering pass.
+ src/godrays_runtime.inc; no settings/default changes or added rendering pass.
 Numeric composition regression fails old/pass new; shader checks and builds
 pass. Actual normal Linux NVIDIA runtime daylight test2 default camera shows
 improved contrast and retained haze. Exact user-adjusted low-angle/night visual
@@ -227,3 +227,23 @@ fog depth/energy/opacity/fade, native gateway, buffer lease, local demand,
 inactive-weather and real weather-surface software-GL regressions passed.
 Windows rebuild and 17 proxy/60 game-export verification passed. PR targets main;
 no direct merge is requested or performed during preparation.
+
+## Repository evidence cleanup (2026-11-21)
+
+After PR #6 merged, maintainer requested further folder cleanup. Historical
+transparency census reports now live under docs/evidence/transparency with an
+index; all 18 files retain their exact contents. Transparency documentation links
+follow the move, and fresh capture examples write to /tmp to protect the archive.
+Old local test libraries and runtime logs/dumps were moved to ignored
+local-archive/2026-11-21; root intermediate object files were removed and can be
+rebuilt normally. Current Linux libraries, Windows DLL, settings and the local
+launcher were preserved. No renderer or build behavior changed.
+
+## Source layout cleanup (2026-11-21)
+
+Maintainer requested organization of .cpp, .h and .inc files. All 51 project
+source files now live together in src/, preserving their exact contents and
+same-translation-unit include order. Linux/Windows make rules, validators, test
+includes and root source-map documents follow the new paths. Build entry points
+and final artifact paths remain unchanged. Vendored dependencies, test fixtures
+and Windows proxy packaging remain in their existing directories.

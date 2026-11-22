@@ -15,7 +15,7 @@ one-directional:
 
 This exists because it was learned the hard way. A shared receiver-shader
 expression was "fixed" for a Windows symptom and broke Linux, which had been
-confirmed working the same day. `nwn_platform.h` carries the two macros that
+confirmed working the same day. `src/nwn_platform.h` carries the two macros that
 express the split:
 
 - `NWN_SHIP` — *is this a build handed to someone else?* Windows is always one;
@@ -31,7 +31,7 @@ See `BUILD.md`. In short: `make` for the development build (panel, diagnostics,
 launcher scripts), `make deploy` for the shipping build, and `win/` cross-builds
 the Windows DLL with mingw-w64.
 
-`nwn_shadowmap.cpp` is split into same-translation-unit `.inc` modules. Both
+`src/nwn_shadowmap.cpp` is split into same-translation-unit `.inc` modules. Both
 Makefiles list them as dependencies — if you add a new `.inc`, make sure it is
 covered, or an `.inc`-only edit silently reuses a stale object.
 
@@ -44,7 +44,7 @@ python3 check_shaders.py
 ## Transparency changes
 
 Read [TRANSPARENCY_MODES.md](TRANSPARENCY_MODES.md) before changing
-`nwn_oit.cpp` or alpha-related shader injection. Transparency modes are
+`src/nwn_oit.cpp` or alpha-related shader injection. Transparency modes are
 material opt-ins, not bucket-wide policies. Preserve framebuffer-sampling,
 volumetric, emitter, water, UI, replay, injector-owned, and unmarked draws.
 Program IDs are process-local and cannot identify a material across runs.

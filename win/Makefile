@@ -20,7 +20,7 @@ IMGUI = $(ROOT)/imgui
 # -DSUBHOOK_STATIC keeps subhook's symbols internal; -D_WIN32_WINNT for the
 # Win32 APIs used by the platform shim.
 COMMON = -O2 -fPIC -D_WIN32_WINNT=0x0601 -DSUBHOOK_STATIC \
-         -I$(ROOT) -I$(ROOT)/subhook -I$(IMGUI) -I$(IMGUI)/backends
+         -I$(ROOT) -I$(ROOT)/src -I$(ROOT)/subhook -I$(IMGUI) -I$(IMGUI)/backends
 CXXFLAGS = $(COMMON) -std=c++17 -Wall -Wextra
 IMGUIFLAGS = $(COMMON) -std=c++17 -fvisibility=hidden -fvisibility-inlines-hidden
 
@@ -36,10 +36,10 @@ OBJS = nwn_win_proxy.o nwn_shadowmap.o shadow_config.o shadow_math.o \
 
 all: $(TARGET)
 
-drawing_win_probe.o: $(ROOT)/drawing_win_probe.cpp $(ROOT)/drawing_probe.h
+drawing_win_probe.o: $(ROOT)/src/drawing_win_probe.cpp $(ROOT)/src/drawing_probe.h
 	$(CXX) $(CXXFLAGS) -c $< -o $@
 
-drawing_texture_probe.o: $(ROOT)/drawing_texture_probe.cpp $(ROOT)/drawing_pad_marker.h $(ROOT)/drawing_canvas_quad.h $(ROOT)/drawing_probe.h $(ROOT)/nwn_platform.h
+drawing_texture_probe.o: $(ROOT)/src/drawing_texture_probe.cpp $(ROOT)/src/drawing_pad_marker.h $(ROOT)/src/drawing_canvas_quad.h $(ROOT)/src/drawing_probe.h $(ROOT)/src/nwn_platform.h
 	$(CXX) $(CXXFLAGS) -c $< -o $@
 
 verify: $(TARGET)
@@ -56,21 +56,21 @@ nwn_win_proxy.o: nwn_win_proxy.cpp
 # dependencies too. Without them a Linux-side change compiles into the .so and
 # silently does NOT reach the DLL -- the exact trap that left version.dll a day
 # stale before.
-INC_MODULES = $(wildcard $(ROOT)/shadow_*.inc) $(ROOT)/weather_runtime.inc $(ROOT)/weather_particles.inc $(ROOT)/godrays_runtime.inc $(ROOT)/nwn_layer_stack.inc $(ROOT)/nwn_layer_stack_plan.h $(ROOT)/shadow_fog_lamp_fade.h $(ROOT)/shadow_verified_gateway.h
+INC_MODULES = $(wildcard $(ROOT)/src/shadow_*.inc) $(ROOT)/src/weather_runtime.inc $(ROOT)/src/weather_particles.inc $(ROOT)/src/godrays_runtime.inc $(ROOT)/src/nwn_layer_stack.inc $(ROOT)/src/nwn_layer_stack_plan.h $(ROOT)/src/shadow_fog_lamp_fade.h $(ROOT)/src/shadow_verified_gateway.h
 
-nwn_shadowmap.o: $(ROOT)/nwn_shadowmap.cpp $(ROOT)/drawing_probe.h $(ROOT)/drawing_input_journal.h $(ROOT)/drawing_preview.h $(ROOT)/drawing_texture_upload.h $(ROOT)/drawing_canvas_quad.h $(ROOT)/drawing_world_canvas.h $(ROOT)/nwn_platform.h $(ROOT)/nwn_hooks_core.h \
-                 $(ROOT)/shadow_config.h $(ROOT)/shadow_math.h $(INC_MODULES) nwn_win_symbols.h
+nwn_shadowmap.o: $(ROOT)/src/nwn_shadowmap.cpp $(ROOT)/src/drawing_probe.h $(ROOT)/src/drawing_input_journal.h $(ROOT)/src/drawing_preview.h $(ROOT)/src/drawing_texture_upload.h $(ROOT)/src/drawing_canvas_quad.h $(ROOT)/src/drawing_world_canvas.h $(ROOT)/src/nwn_platform.h $(ROOT)/src/nwn_hooks_core.h \
+                 $(ROOT)/src/shadow_config.h $(ROOT)/src/shadow_math.h $(INC_MODULES) nwn_win_symbols.h
 	$(CXX) $(CXXFLAGS) -c $< -o $@
 # Shares nwn_oit.cpp with the .so exactly as nwn_shadowmap.cpp is shared: the
 # module resolves its own GL through the nwn_platform.h dlsym shim, so it needs
 # no #ifdef of its own.
-nwn_oit.o: $(ROOT)/nwn_oit.cpp $(ROOT)/nwn_hooks_core.h $(ROOT)/nwn_platform.h
+nwn_oit.o: $(ROOT)/src/nwn_oit.cpp $(ROOT)/src/nwn_hooks_core.h $(ROOT)/src/nwn_platform.h
 	$(CXX) $(CXXFLAGS) -c $< -o $@
 # Separate objects since the refactor: pure helpers with no renderer state.
-shadow_config.o: $(ROOT)/shadow_config.cpp $(ROOT)/shadow_config.h $(ROOT)/nwn_platform.h
+shadow_config.o: $(ROOT)/src/shadow_config.cpp $(ROOT)/src/shadow_config.h $(ROOT)/src/nwn_platform.h
 	$(CXX) $(CXXFLAGS) -c $< -o $@
 
-shadow_math.o: $(ROOT)/shadow_math.cpp $(ROOT)/shadow_math.h
+shadow_math.o: $(ROOT)/src/shadow_math.cpp $(ROOT)/src/shadow_math.h
 	$(CXX) $(CXXFLAGS) -c $< -o $@
 
 # THIS OBJECT CARRIES THE BUILD STAMP (__DATE__/__TIME__ in the log banner), so
@@ -78,14 +78,14 @@ shadow_math.o: $(ROOT)/shadow_math.cpp $(ROOT)/shadow_math.h
 # last time this one file changed, not the build, and a tester's log reports a
 # stale build date. That happened on 2026-08-15 and sent us reading a log
 # against the wrong source.
-nwn_platform_win.o: $(ROOT)/nwn_platform_win.cpp $(ROOT)/drawing_probe.h $(ROOT)/nwn_platform.h \
-                    $(ROOT)/drawing_texture_probe.cpp $(ROOT)/drawing_pad_marker.h \
-                    $(ROOT)/drawing_preview.h $(ROOT)/drawing_canvas_quad.h $(ROOT)/drawing_texture_upload.h $(ROOT)/drawing_world_canvas.h \
-                    $(ROOT)/nwn_shadowmap.cpp $(INC_MODULES) \
-                    $(ROOT)/nwn_overlay_imgui.cpp $(ROOT)/shadow_config.cpp \
-                    $(ROOT)/shadow_math.cpp nwn_win_symbols.h
+nwn_platform_win.o: $(ROOT)/src/nwn_platform_win.cpp $(ROOT)/src/drawing_probe.h $(ROOT)/src/nwn_platform.h \
+                    $(ROOT)/src/drawing_texture_probe.cpp $(ROOT)/src/drawing_pad_marker.h \
+                    $(ROOT)/src/drawing_preview.h $(ROOT)/src/drawing_canvas_quad.h $(ROOT)/src/drawing_texture_upload.h $(ROOT)/src/drawing_world_canvas.h \
+                    $(ROOT)/src/nwn_shadowmap.cpp $(INC_MODULES) \
+                    $(ROOT)/src/nwn_overlay_imgui.cpp $(ROOT)/src/shadow_config.cpp \
+                    $(ROOT)/src/shadow_math.cpp nwn_win_symbols.h
 	$(CXX) $(CXXFLAGS) -c $< -o $@
-nwn_overlay_imgui.o: $(ROOT)/nwn_overlay_imgui.cpp $(ROOT)/nwn_overlay.h
+nwn_overlay_imgui.o: $(ROOT)/src/nwn_overlay_imgui.cpp $(ROOT)/src/nwn_overlay.h
 	$(CXX) $(IMGUIFLAGS) -Wall -c $< -o $@
 subhook.o: $(ROOT)/subhook/subhook.c
 	$(CC) $(COMMON) -c $< -o $@

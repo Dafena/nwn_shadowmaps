@@ -9,43 +9,43 @@ modules. Use `rg -n` to locate the current definition.
 | Symbol | File | Purpose |
 | --- | --- | --- |
 | `tag_buffer_lease::install` / `release` | `shadow_tag_buffer_lease.{h,inc}` | Linux draw-buffer selection ownership, native/injector fences and conservative fallback |
-| `tag_work_benchmark::Scope` / `tag_work::Timer` | `shadow_tag_benchmark.inc` / `shadow_tag_work.inc` | Opt-in matched frame-time benchmark and sampled per-draw CPU attribution |
-| `shadow_stage_profile::Scope` / `Timer` | `shadow_stage_profile.inc` | Opt-in asynchronous GPU/CPU timing of selected world scene, final receiver copies and composite |
-| `wet_film_profile::Scope` | `shadow_wet_film_profile.inc` | Opt-in native-scene GPU timestamps and automated wet-film component ablation |
-| `SceneRender_detour` | `nwn_shadowmap.cpp` | Top-level scene entry, receiver, overlay, and post-scene work |
-| `trace_scene_enter` / `trace_scene_exit` | `shadow_trace_cascade.inc` | Selected-area frame context and lifecycle |
-| `SceneRenderDrawBucket_trace_detour` | `shadow_trace_cascade.inc` | Original bucket draw followed by sun/local replay |
-| `SceneRenderDynamicGeometry_detour` | `shadow_trace_cascade.inc` | Dynamic-stage observation and local completion bookkeeping |
-| `SceneRenderShadows_detour` | `nwn_shadowmap.cpp` | Native stencil-shadow observation/suppression |
-| `LightGetShadowLights_trace_detour` | `shadow_trace_cascade.inc` | Captures NWN's authoritative local source list |
+| `tag_work_benchmark::Scope` / `tag_work::Timer` | `src/shadow_tag_benchmark.inc` / `src/shadow_tag_work.inc` | Opt-in matched frame-time benchmark and sampled per-draw CPU attribution |
+| `shadow_stage_profile::Scope` / `Timer` | `src/shadow_stage_profile.inc` | Opt-in asynchronous GPU/CPU timing of selected world scene, final receiver copies and composite |
+| `wet_film_profile::Scope` | `src/shadow_wet_film_profile.inc` | Opt-in native-scene GPU timestamps and automated wet-film component ablation |
+| `SceneRender_detour` | `src/nwn_shadowmap.cpp` | Top-level scene entry, receiver, overlay, and post-scene work |
+| `trace_scene_enter` / `trace_scene_exit` | `src/shadow_trace_cascade.inc` | Selected-area frame context and lifecycle |
+| `SceneRenderDrawBucket_trace_detour` | `src/shadow_trace_cascade.inc` | Original bucket draw followed by sun/local replay |
+| `SceneRenderDynamicGeometry_detour` | `src/shadow_trace_cascade.inc` | Dynamic-stage observation and local completion bookkeeping |
+| `SceneRenderShadows_detour` | `src/nwn_shadowmap.cpp` | Native stencil-shadow observation/suppression |
+| `LightGetShadowLights_trace_detour` | `src/shadow_trace_cascade.inc` | Captures NWN's authoritative local source list |
 
 ## Targets and replay
 
 | Symbol | File | Purpose |
 | --- | --- | --- |
-| `create_cascade_targets` | `shadow_targets.inc` | Static/dynamic cascade arrays and FBOs |
-| `create_static_world_target` | `shadow_replay.inc` | World-anchored static depth target |
-| `create_local_light_target` | `shadow_local_lights.inc` | Per-source local depth array and FBO |
-| `replay_bucket_into_cascade_layers` | `shadow_replay.inc` | Sun cascade bucket replay |
-| `render_static_world_map` | `shadow_replay.inc` | One-shot/static-cache world fill |
-| `replay_bucket_into_local_light_layers` | `shadow_replay.inc` | Local bucket replay after NWN's original bucket |
-| `guarded_render_bucket` | `shadow_replay.inc` | Re-entry/fault-guarded call to NWN's bucket renderer |
-| `SavedState`, `bind_target`, `restore_state` | `shadow_replay.inc` | GL state preservation around private passes |
+| `create_cascade_targets` | `src/shadow_targets.inc` | Static/dynamic cascade arrays and FBOs |
+| `create_static_world_target` | `src/shadow_replay.inc` | World-anchored static depth target |
+| `create_local_light_target` | `src/shadow_local_lights.inc` | Per-source local depth array and FBO |
+| `replay_bucket_into_cascade_layers` | `src/shadow_replay.inc` | Sun cascade bucket replay |
+| `render_static_world_map` | `src/shadow_replay.inc` | One-shot/static-cache world fill |
+| `replay_bucket_into_local_light_layers` | `src/shadow_replay.inc` | Local bucket replay after NWN's original bucket |
+| `guarded_render_bucket` | `src/shadow_replay.inc` | Re-entry/fault-guarded call to NWN's bucket renderer |
+| `SavedState`, `bind_target`, `restore_state` | `src/shadow_replay.inc` | GL state preservation around private passes |
 
 ## Local-light state
 
 | Symbol | File | Purpose |
 | --- | --- | --- |
-| `capture_local_light_shadow` | `shadow_local_lights.inc` | Prepares selected sources and schedules local capture state |
-| `g_engineShadowLights` | `nwn_shadowmap.cpp` / trace module | NWN-selected source records in engine order |
-| `g_localCubeSourceBudget` | `nwn_shadowmap.cpp` | Configured local source budget; “cube” is historical naming |
-| `g_localLightFaceVP` | `nwn_shadowmap.cpp` | Per-slot downward perspective matrices |
-| `g_localLightSlotCount` | `nwn_shadowmap.cpp` | Receiver-ready local slot count |
-| `g_localLightPassActive` | `nwn_shadowmap.cpp` | Prevents local replay recursion |
-| `local_layer_accepts_caster` | `shadow_shader_interposition.inc` | Windows-only optional local caster cull |
-| `local_visible_begin_draw` | `shadow_shader_interposition.inc` | Visible local draw admission and transform setup |
-| `classify_current_draw_item` | `shadow_trace_cascade.inc` | Uses NWN's object type and shared external-data owner pointer for exact local self rejection |
-| `DrawBucketGetFirstItem_detour` / `DrawBucketGetNextItem_detour` | `shadow_trace_cascade.inc` | Tracks each draw owner; Windows observes both independent iterator paths |
+| `capture_local_light_shadow` | `src/shadow_local_lights.inc` | Prepares selected sources and schedules local capture state |
+| `g_engineShadowLights` | `src/nwn_shadowmap.cpp` / trace module | NWN-selected source records in engine order |
+| `g_localCubeSourceBudget` | `src/nwn_shadowmap.cpp` | Configured local source budget; “cube” is historical naming |
+| `g_localLightFaceVP` | `src/nwn_shadowmap.cpp` | Per-slot downward perspective matrices |
+| `g_localLightSlotCount` | `src/nwn_shadowmap.cpp` | Receiver-ready local slot count |
+| `g_localLightPassActive` | `src/nwn_shadowmap.cpp` | Prevents local replay recursion |
+| `local_layer_accepts_caster` | `src/shadow_shader_interposition.inc` | Windows-only optional local caster cull |
+| `local_visible_begin_draw` | `src/shadow_shader_interposition.inc` | Visible local draw admission and transform setup |
+| `classify_current_draw_item` | `src/shadow_trace_cascade.inc` | Uses NWN's object type and shared external-data owner pointer for exact local self rejection |
+| `DrawBucketGetFirstItem_detour` / `DrawBucketGetNextItem_detour` | `src/shadow_trace_cascade.inc` | Tracks each draw owner; Windows observes both independent iterator paths |
 
 The source-selection rule is simple: `GetShadowLights()` decides which lights
 are eligible and in what order. The `SetLightGL` census is for ordinary lighting
@@ -56,41 +56,41 @@ field offset is verified.
 
 | Symbol | File | Purpose |
 | --- | --- | --- |
-| `draw_static_receiver` | `shadow_overlay_runtime.inc` | Main fullscreen composite and receiver gating |
-| `inject_sun_receiver_tag` / `begin_sun_receiver_tag` / `end_sun_receiver_tag` | `shadow_receiver_tags.inc` | Native-draw receiver classification with exact coverage, primitive depth span and reversible MRT attachment |
-| `current_draw_is_highlighted` | `nwn_shadowmap.cpp` | Reads the verified native Linux Scene highlight list and inherited owner identity; no Windows offset assumption |
-| `draw_weather_particles` | `weather_particles.inc` | Post-area rain/splash preview, gated by weather and completed shelter depth |
-| `build_static_receiver_program` | `shadow_fullscreen_receiver.inc` | Builds the current receiver GLSL |
-| `capture_scene_depth` / `capture_scene_color` | `shadow_fullscreen_receiver.inc` | Copies completed scene buffers for reconstruction/composite |
+| `draw_static_receiver` | `src/shadow_overlay_runtime.inc` | Main fullscreen composite and receiver gating |
+| `inject_sun_receiver_tag` / `begin_sun_receiver_tag` / `end_sun_receiver_tag` | `src/shadow_receiver_tags.inc` | Native-draw receiver classification with exact coverage, primitive depth span and reversible MRT attachment |
+| `current_draw_is_highlighted` | `src/nwn_shadowmap.cpp` | Reads the verified native Linux Scene highlight list and inherited owner identity; no Windows offset assumption |
+| `draw_weather_particles` | `src/weather_particles.inc` | Post-area rain/splash preview, gated by weather and completed shelter depth |
+| `build_static_receiver_program` | `src/shadow_fullscreen_receiver.inc` | Builds the current receiver GLSL |
+| `capture_scene_depth` / `capture_scene_color` | `src/shadow_fullscreen_receiver.inc` | Copies completed scene buffers for reconstruction/composite |
 | `nwnLayerLit` | receiver GLSL string | Directional cascade visibility test |
 | `nwnLocalShadeCov` | receiver GLSL string | Local contact-shadow visibility and coverage |
-| `my_shader_source` | `shadow_shader_interposition.inc` | Runtime shader-source interception/injection |
-| `my_uniform_matrix4fv` | `shadow_shader_interposition.inc` | Matrix upload observation/bridge |
-| draw wrappers | `shadow_shader_interposition.inc` | GL draw interception and pass classification |
+| `my_shader_source` | `src/shadow_shader_interposition.inc` | Runtime shader-source interception/injection |
+| `my_uniform_matrix4fv` | `src/shadow_shader_interposition.inc` | Matrix upload observation/bridge |
+| draw wrappers | `src/shadow_shader_interposition.inc` | GL draw interception and pass classification |
 
 ## Configuration and platform
 
 | Symbol | File | Purpose |
 | --- | --- | --- |
-| `settings_table` / `settings_reset_defaults` | `shadow_diagnostics_settings.inc` | Persisted settings registry and reset values |
-| `apply_resolution_change` | `shadow_replay.inc` | GL-context-safe staged target reallocation |
-| `shadow_getenv` | `shadow_config.cpp` | Memoized environment/default lookup |
-| `NWN_SHIP` | `nwn_platform.h` | Shipping policy, independent of platform mechanics |
-| `NWN_WIN_LOCAL_FASTPATH` | `nwn_platform.h` | Windows-only local-light mechanics |
-| `nwn_overlay_render` | `nwn_overlay_imgui.cpp` | Dear ImGui panel rendering |
+| `settings_table` / `settings_reset_defaults` | `src/shadow_diagnostics_settings.inc` | Persisted settings registry and reset values |
+| `apply_resolution_change` | `src/shadow_replay.inc` | GL-context-safe staged target reallocation |
+| `shadow_getenv` | `src/shadow_config.cpp` | Memoized environment/default lookup |
+| `NWN_SHIP` | `src/nwn_platform.h` | Shipping policy, independent of platform mechanics |
+| `NWN_WIN_LOCAL_FASTPATH` | `src/nwn_platform.h` | Windows-only local-light mechanics |
+| `nwn_overlay_render` | `src/nwn_overlay_imgui.cpp` | Dear ImGui panel rendering |
 
 ## Transparency experiment
 
 | Symbol | File | Purpose |
 | --- | --- | --- |
-| `read_settings` | `nwn_oit.cpp` | Reads opt-in transparency experiment switches |
-| `census_observe_draw` / `census_observe_draw_after` | `nwn_oit.cpp` | Reports live program, blend, depth, and cull state |
-| `foliage_program` | `nwn_oit.cpp` | Joins a live program to the source-classified foliage registry |
-| `nwn_oit_needs_shader_sources` | `nwn_oit.cpp` | Requests shader-source observation only when required |
-| `nwn_oit_needs_draw_observer` | `nwn_oit.cpp` | Gates per-draw observation |
-| `nwn_oit_bucket_begin` / `nwn_oit_bucket_complete` | `nwn_oit.cpp` | Experimental bucket lifecycle |
-| `nwn_oit_prepare` / `nwn_oit_frame` | `nwn_oit.cpp` | Experimental target/frame lifecycle |
-| `private_foliage_replay` | `nwn_oit.cpp` | Earlier weighted-OIT replay; not the accepted A2C baseline |
+| `read_settings` | `src/nwn_oit.cpp` | Reads opt-in transparency experiment switches |
+| `census_observe_draw` / `census_observe_draw_after` | `src/nwn_oit.cpp` | Reports live program, blend, depth, and cull state |
+| `foliage_program` | `src/nwn_oit.cpp` | Joins a live program to the source-classified foliage registry |
+| `nwn_oit_needs_shader_sources` | `src/nwn_oit.cpp` | Requests shader-source observation only when required |
+| `nwn_oit_needs_draw_observer` | `src/nwn_oit.cpp` | Gates per-draw observation |
+| `nwn_oit_bucket_begin` / `nwn_oit_bucket_complete` | `src/nwn_oit.cpp` | Experimental bucket lifecycle |
+| `nwn_oit_prepare` / `nwn_oit_frame` | `src/nwn_oit.cpp` | Experimental target/frame lifecycle |
+| `private_foliage_replay` | `src/nwn_oit.cpp` | Earlier weighted-OIT replay; not the accepted A2C baseline |
 
 Program and shader object IDs are process-local. Material-mode ownership and
 the verified Linux bucket census are documented in
@@ -100,16 +100,16 @@ the verified Linux bucket census are documented in
 
 ```bash
 rg -n "SceneRender_detour|SceneRenderDrawBucket_trace_detour" \
-  nwn_shadowmap.cpp shadow_trace_cascade.inc
+  src/nwn_shadowmap.cpp src/shadow_trace_cascade.inc
 rg -n "replay_bucket_into_|render_static_world_map|guarded_render_bucket" \
-  shadow_replay.inc
+  src/shadow_replay.inc
 rg -n "capture_local_light_shadow|g_localLight|g_engineShadow" \
-  shadow_local_lights.inc nwn_shadowmap.cpp shadow_trace_cascade.inc
+  src/shadow_local_lights.inc src/nwn_shadowmap.cpp src/shadow_trace_cascade.inc
 rg -n "draw_static_receiver|build_static_receiver_program|nwnLocalShadeCov" \
-  shadow_overlay_runtime.inc shadow_fullscreen_receiver.inc
+  src/shadow_overlay_runtime.inc src/shadow_fullscreen_receiver.inc
 rg -n "settings_table|settings_reset_defaults|kSettingsMax" \
-  shadow_diagnostics_settings.inc
-rg -n "nwn_oit_needs_|nwn_oit_bucket_|census_observe_draw" nwn_oit.cpp
+  src/shadow_diagnostics_settings.inc
+rg -n "nwn_oit_needs_|nwn_oit_bucket_|census_observe_draw" src/nwn_oit.cpp
 ```
 
 If a symbol moves, update this file's ownership table only; do not add brittle
@@ -119,17 +119,17 @@ line numbers back.
 
 | Symbol | File | Purpose |
 | --- | --- | --- |
-| `layer_stack::BucketScope` / `iterator` | `nwn_layer_stack.inc` | Native bucket context and opted-in priority scheduling |
-| `layer_stack::part_draw_detour` | `nwn_layer_stack.inc` | Preserve actual Part identity and submitted alpha pass |
-| `layer_stack::before_draw` / `after_draw` | `nwn_layer_stack.inc` | Apply and restore alpha-pass uniform and depth-write mask |
-| `nwn_layer_stack::plan` | `nwn_layer_stack_plan.h` | Pure complete-hint scheduling; native equal ties |
+| `layer_stack::BucketScope` / `iterator` | `src/nwn_layer_stack.inc` | Native bucket context and opted-in priority scheduling |
+| `layer_stack::part_draw_detour` | `src/nwn_layer_stack.inc` | Preserve actual Part identity and submitted alpha pass |
+| `layer_stack::before_draw` / `after_draw` | `src/nwn_layer_stack.inc` | Apply and restore alpha-pass uniform and depth-write mask |
+| `nwn_layer_stack::plan` | `src/nwn_layer_stack_plan.h` | Pure complete-hint scheduling; native equal ties |
 
 
 ## Verified Linux native-call gateways
 
 `native_hook_gateway::prepare_part` / `prepare_next` in
-`shadow_native_gateways.inc` prepare exact-prefix gateways before detour install.
-`verified_gateway::make_part` / `make_next` in `shadow_verified_gateway.h` preserve
+`src/shadow_native_gateways.inc` prepare exact-prefix gateways before detour install.
+`verified_gateway::make_part` / `make_next` in `src/shadow_verified_gateway.h` preserve
 original native code; unsupported instruction patterns retain hook fallback.
 `tests/run-native-gateway-regression.sh` executes installed-hook fixture checks.
 Normal Linux enables verified dispatch; diagnostic benchmarking can alternate it.

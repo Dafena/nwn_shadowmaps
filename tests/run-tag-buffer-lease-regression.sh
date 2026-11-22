@@ -6,7 +6,7 @@ cd "$HERE"
 make -s tag-bench
 TEST_DIR="$(mktemp -d /tmp/nwn-tag-buffer-lease.XXXXXX)"
 trap 'rm -rf "$TEST_DIR"' EXIT
-"${CXX:-g++}" -O1 -std=c++17 -fPIC -DNWN_TAG_WORK_BENCH_DIAGNOSTIC -I. -Isubhook \
+"${CXX:-g++}" -O1 -std=c++17 -fPIC -DNWN_TAG_WORK_BENCH_DIAGNOSTIC -I. -Isrc -Isubhook \
  tests/tag_buffer_lease_regression.cpp shadow_config.o shadow_math.o build-tag-bench/nwn_oit.o \
  nwn_overlay_imgui.o drawing_texture_probe.o subhook.o imgui.o imgui_draw.o imgui_tables.o \
  imgui_widgets.o imgui_impl_opengl3.o -ldl -o "$TEST_DIR/lease"

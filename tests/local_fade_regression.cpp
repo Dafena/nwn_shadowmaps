@@ -1,4 +1,4 @@
-#include "../nwn_shadowmap.cpp"
+#include "../src/nwn_shadowmap.cpp"
 #include <cassert>
 int main() {
     EngineShadowLightEntry e{};

@@ -1,5 +1,5 @@
 #include <cstdint>
-#include "nwn_layer_stack_plan.h"
+#include "src/nwn_layer_stack_plan.h"
 #include <cassert>
 #include <iostream>
 #include <tuple>

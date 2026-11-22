@@ -5,7 +5,7 @@ HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$HERE"
 TEST_DIR="$(mktemp -d /tmp/nwn-weather-surface.XXXXXX)"
 trap 'rm -rf "$TEST_DIR"' EXIT
-python3 tests/extract_weather_surface.py weather_runtime.inc "$TEST_DIR/surface.frag"
+python3 tests/extract_weather_surface.py src/weather_runtime.inc "$TEST_DIR/surface.frag"
 "${CXX:-g++}" -O2 -std=c++17 tests/weather_surface_gpu.cpp -lEGL -lGL -o "$TEST_DIR/gpu"
 for shader in surface degenerate gradient gradient-degenerate trace10 trace5 trace3 trace-default surface-puddles-off optics-on optics-puddles-off surface-film-off-puddles-off surface-film-off film-fields-puddles-off film-fields-film-off-puddles-off; do
     LIBGL_ALWAYS_SOFTWARE=1 EGL_PLATFORM=surfaceless "$TEST_DIR/gpu" "$TEST_DIR/$shader.frag"
