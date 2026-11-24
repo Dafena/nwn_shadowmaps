@@ -2506,6 +2506,25 @@ static bool suppress_native_rain_draw() {
         !g_inOurPass && !g_overlayPassActive && !g_inStencilShadow &&
         !g_cascadeReplayActive && !g_localLightPassActive && !nwn_core::g_ownedPass);
 }
+static bool native_area_draw() {
+    return g_traceFrameActive && g_traceCurrentScene == g_areaScene &&
+        !g_inOurPass && !g_overlayPassActive && !g_inStencilShadow &&
+        !g_cascadeReplayActive && !g_localLightPassActive && !nwn_core::g_ownedPass;
+}
+// EOM lightning strips: true when the strip was captured for the private
+// procedural beam pass and the native draw must be skipped.
+static bool suppress_native_lightning_elements(GLsizei count, GLenum type,
+                                               const void* indices, GLint baseVertex) {
+    lightning_beams::DrawRef draw;
+    draw.elements = true; draw.count = count; draw.type = type;
+    draw.indices = indices; draw.baseVertex = baseVertex;
+    return lightning_beams::capture_native_draw(native_area_draw(), draw);
+}
+static bool suppress_native_lightning_arrays(GLint first, GLsizei count) {
+    lightning_beams::DrawRef draw;
+    draw.first = first; draw.count = count;
+    return lightning_beams::capture_native_draw(native_area_draw(), draw);
+}
 static void (*g_nextDrawElements)(GLenum, GLsizei, GLenum, const void*) = nullptr;
 // The normal call is always issued before this macro.  It redirects only the
 // duplicate into our depth layer and restores the two original uniforms before
@@ -2687,6 +2706,7 @@ extern "C" void NWN_GL_INTERPOSE(glDrawElements)(GLenum mode, GLsizei count, GLe
     shadow_before_draw();
     trace_normal_geometry_draw(count, true);
     if (suppress_native_rain_draw()) { finish_observed_engine_draw(); return; }
+    if (suppress_native_lightning_elements(count, type, indices, 0)) { finish_observed_engine_draw(); return; }
     const bool suppressNative = nwn_oit_suppress_current_draw();
     if (g_nextDrawElements && !suppressNative)
         caster_census::submit([&](){g_nextDrawElements(mode, count, type, indices);});
@@ -2737,6 +2757,7 @@ extern "C" void NWN_GL_INTERPOSE(glDrawArrays)(GLenum mode, GLint first, GLsizei
     shadow_before_draw();
     trace_normal_geometry_draw(count, false);
     if (suppress_native_rain_draw()) { finish_observed_engine_draw(); return; }
+    if (suppress_native_lightning_arrays(first, count)) { finish_observed_engine_draw(); return; }
     const bool suppressNative = nwn_oit_suppress_current_draw();
     if (g_nextDrawArrays && !suppressNative)
         caster_census::submit([&](){g_nextDrawArrays(mode, first, count);});
@@ -2817,6 +2838,7 @@ extern "C" void my_draw_range_elements(GLenum mode, GLuint start, GLuint end,
 #endif
     trace_normal_geometry_draw(count, true);
     if (suppress_native_rain_draw()) { finish_observed_engine_draw(); return; }
+    if (suppress_native_lightning_elements(count, type, indices, 0)) { finish_observed_engine_draw(); return; }
     const bool suppressNative = nwn_oit_suppress_current_draw();
     if (g_realDrawRangeElements && !suppressNative)
         caster_census::submit([&](){g_realDrawRangeElements(mode, start, end, count, type, indices);});
@@ -2969,6 +2991,7 @@ extern "C" void my_draw_elements_base_vertex(GLenum mode, GLsizei count,
 #endif
     trace_normal_geometry_draw(count, true);
     if (suppress_native_rain_draw()) { finish_observed_engine_draw(); return; }
+    if (suppress_native_lightning_elements(count, type, indices, basevertex)) { finish_observed_engine_draw(); return; }
     const bool suppressNative = nwn_oit_suppress_current_draw();
     if (g_realDrawElementsBaseVertex && !suppressNative)
         caster_census::submit([&](){g_realDrawElementsBaseVertex(mode, count, type, indices, basevertex);});
@@ -3022,6 +3045,7 @@ extern "C" void my_draw_range_elements_base_vertex(GLenum mode, GLuint start,
 #endif
     trace_normal_geometry_draw(count, true);
     if (suppress_native_rain_draw()) { finish_observed_engine_draw(); return; }
+    if (suppress_native_lightning_elements(count, type, indices, basevertex)) { finish_observed_engine_draw(); return; }
     const bool suppressNative = nwn_oit_suppress_current_draw();
     if (g_realDrawRangeElementsBaseVertex && !suppressNative)
         caster_census::submit([&](){g_realDrawRangeElementsBaseVertex(mode, start, end, count, type,

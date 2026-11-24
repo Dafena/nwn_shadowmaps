@@ -766,6 +766,13 @@ static void draw_godrays(void* scene) {
     for(const auto& slot:g_fogLampHistory.slots){
         if(!slot.light.key || slot.weight<=0)continue;
         for(int c=0;c<3;++c){lampPos[lampCount*4+c]=slot.light.pos[c];lampColor[lampCount*4+c]=slot.light.color[c];}
+        // Fires glow orange in the fog (with firelight on), at the engine
+        // light's own brightness, instead of its sometimes yellow-green colour.
+        float fire[3];
+        if(g_fireLightEnabled && lamp_is_fire(slot.light.color,fire)){
+            const float peak=std::max(slot.light.color[0],std::max(slot.light.color[1],slot.light.color[2]));
+            for(int c=0;c<3;++c) lampColor[lampCount*4+c]=fire[c]*peak;
+        }
         lampPos[lampCount*4+3]=slot.light.radius;
         lampColor[lampCount*4+3]=slot.weight;
         ++lampCount;

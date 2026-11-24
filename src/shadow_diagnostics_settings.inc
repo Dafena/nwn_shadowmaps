@@ -209,6 +209,11 @@ static unsigned settings_table(SettingRef* out, unsigned max) {
     addf("shader_rain_wind_x", &g_shaderRainWindX);
     addf("shader_rain_wind_y", &g_shaderRainWindY);
     addf("shader_rain_splashes", &g_shaderRainSplashes);
+    addb("lightning_enabled",  &g_lightningEnabled);
+    addf("lightning_intensity", &g_lightningIntensity);
+    addf("lightning_light",    &g_lightningLight);
+    addb("fire_light_enabled", &g_fireLightEnabled);
+    addf("fire_light_strength", &g_fireLightStrength);
     addb("heat_enabled",       &g_heatEnabled);
     addf("heat_strength",      &g_heatStrength);
     addf("heat_scale",         &g_heatScale);
@@ -331,6 +336,11 @@ static void settings_reset_defaults() {
     g_shaderRainWindX          = 0.0f;
     g_shaderRainWindY          = 0.0f;
     g_shaderRainSplashes       = 0.250f;
+    g_lightningEnabled         = true;
+    g_lightningIntensity       = 1.0f;
+    g_lightningLight           = 1.0f;
+    g_fireLightEnabled         = true;
+    g_fireLightStrength        = 1.0f;
     g_heatEnabled              = false;
     g_heatStrength             = 1.0f;
     g_heatScale                = 1.0f;

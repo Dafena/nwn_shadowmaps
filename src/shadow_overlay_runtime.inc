@@ -257,6 +257,14 @@ static void draw_shadow_overlay_imgui(void* scene) {
     static char scriptSummary[640];
     script_env::summary(scriptSummary, sizeof(scriptSummary));
     st.scriptOverrides = scriptSummary;
+    st.lightningEnabled   = &g_lightningEnabled;
+    st.lightningIntensity = &g_lightningIntensity;
+    st.lightningLight     = &g_lightningLight;
+    st.fireLightEnabled   = &g_fireLightEnabled;
+    st.fireLightStrength  = &g_fireLightStrength;
+    st.fireLightStatus    = fire_light::status;
+    st.fireLightCount     = fire_light::lastCount;
+    st.lightningStatus    = lightning_beams::status;
     st.heatEnabled  = &g_heatEnabled;
     st.heatStrength = &g_heatStrength;
     st.heatScale    = &g_heatScale;

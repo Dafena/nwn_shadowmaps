@@ -425,6 +425,28 @@ static unsigned  g_lampBuildCount = 0;
 static LampEntry g_lampLights[kLampPool];
 static unsigned  g_lampLightCount = 0;
 
+// FIRE-COLOURED LIGHT. Orange through yellow flame lights (torches, candles,
+// campfires, braziers) count; white, blue, green and warm-white electric
+// lamps do not: red leads, green is between 0.2 and 1.05 of red, blue is at
+// most 0.6 of red, and the colour is clearly saturated. Used by the firelight
+// pass and to warm the fog glow around fires. On success `fire` receives the
+// colour the effects should use: a true flame orange, nudged a quarter of the
+// way toward the light's own hue so a yellow candle stays a little yellower
+// than a red brazier.
+static bool lamp_is_fire(const float* c, float* fire = nullptr) {
+    const float r = c[0], g = c[1], b = c[2];
+    if (!std::isfinite(r) || !std::isfinite(g) || !std::isfinite(b) || !(r > 0.05f)) return false;
+    if (g < 0.2f * r || g > 1.05f * r || b > 0.6f * r) return false;
+    const float peak = std::max(r, g), low = std::max(0.0f, std::min(g, b));
+    if ((peak - low) / peak < 0.4f) return false;
+    if (fire) {
+        static const float kFlame[3] = {1.0f, 0.52f, 0.18f};
+        for (int k = 0; k < 3; ++k)
+            fire[k] = 0.75f * kFlame[k] + 0.25f * std::max(0.0f, c[k]) / peak;
+    }
+    return true;
+}
+
 static void lamp_list_begin() {
     // Publish what was collected, then start a fresh build -- but ONLY if
     // anything was collected.
@@ -1006,6 +1028,27 @@ static bool     g_shaderRainHideNative = false;
 namespace weather_particles {
 static void note_material_texture(const char* name);
 static bool suppress_native_draw(bool nativeAreaDraw);
+}
+// Procedural lightning beams (lightning_beams.inc): replaces the strips of
+// EOM's eom_lbolt01 beam texture. Default on; intensity scales the whole beam.
+static bool     g_lightningEnabled = true;
+static float    g_lightningIntensity = 1.0f;
+static float    g_lightningLight = 1.0f;     // beam light on the surroundings, 0..3
+// Firelight (fire_light.inc): flickering per-pixel light around the engine's
+// orange (fire-coloured) lights. Default on; strength 0..3.
+static bool     g_fireLightEnabled = true;
+static float    g_fireLightStrength = 1.0f;
+namespace lightning_beams {
+struct DrawRef {
+    bool elements = false;
+    int first = 0;          // arrays
+    int count = 0;
+    unsigned type = 0;      // elements
+    const void* indices = nullptr;
+    int baseVertex = 0;
+};
+static void note_material_texture(const char* name);
+static bool capture_native_draw(bool nativeAreaDraw, const DrawRef& draw);
 }
 // Reflection ray budget: original 10 steps, reduced 5, or minimal 3.
 static bool     g_wetFilmEnabled = true; // full detailed effect / off
@@ -1894,8 +1937,10 @@ extern "C" void SharedMaterialBindRain_detour(void* sharedMaterial) {
     void* texture = nullptr;
     if (sharedMaterial) std::memcpy(&texture,
         static_cast<const unsigned char*>(sharedMaterial) + 0x50, sizeof(texture));
-    weather_particles::note_material_texture(
-        texture && eng::AurTextureGetName ? eng::AurTextureGetName(texture) : nullptr);
+    const char* textureName =
+        texture && eng::AurTextureGetName ? eng::AurTextureGetName(texture) : nullptr;
+    weather_particles::note_material_texture(textureName);
+    lightning_beams::note_material_texture(textureName);
 }
 #endif
 extern "C" void MaterialBindAllStandardTextures_detour(void* material) {
@@ -1938,6 +1983,7 @@ extern "C" void MaterialBindAllStandardTextures_detour(void* material) {
     if (g_materialBindTrampoline) g_materialBindTrampoline(material);
     drawing_probe_note_world_material(material); // explicit local-test texture5 only
     weather_particles::note_material_texture(texture0Name);
+    lightning_beams::note_material_texture(texture0Name);
 #ifdef _WIN32
     if (report) fprintf(stderr, "[oit][win-material] BindAll original returned\n");
 #endif
@@ -2306,6 +2352,8 @@ static void after_draw();
 #include "godrays_runtime.inc"
 #include "shadow_heat_haze.inc"
 #include "weather_particles.inc"
+#include "lightning_beams.inc"
+#include "fire_light.inc"
 #include "shadow_stage_profile.inc"
 #include "shadow_tag_benchmark.inc"
 #include "shadow_overlay_runtime.inc"
@@ -3003,6 +3051,8 @@ extern "C" void SceneRender_detour(void* self) {
         // to 1-0.65^5 = 0.88 -- and it ran over the Load Game menu, where there
         // is no area at all. Same gate as the receiver and the overlay.
         if (self == g_areaScene) nwn_oit_frame(self);
+        draw_fire_light(self);
+        draw_lightning_beams(self);
         draw_weather_particles(self);
         // The overlay is intentionally later than the receiver so it is never
         // copied into the scene-depth texture or interpreted as a shadow
@@ -3503,6 +3553,22 @@ static void shadowmap_init() {
     }
     if (const char* s = shadow_getenv("NWN_SHADOWMAP_HEAT"))
         g_heatEnabled = (atoi(s) != 0);
+    if (const char* s = shadow_getenv("NWN_SHADER_LIGHTNING"))
+        g_lightningEnabled = (atoi(s) != 0);
+    if (const char* s = shadow_getenv("NWN_SHADER_LIGHTNING_INTENSITY")) {
+        const float v = strtof(s, nullptr);
+        if (std::isfinite(v) && v >= 0.0f && v <= 4.0f) g_lightningIntensity = v;
+    }
+    if (const char* s = shadow_getenv("NWN_SHADER_FIRE_LIGHT"))
+        g_fireLightEnabled = (atoi(s) != 0);
+    if (const char* s = shadow_getenv("NWN_SHADER_FIRE_LIGHT_STRENGTH")) {
+        const float v = strtof(s, nullptr);
+        if (std::isfinite(v) && v >= 0.0f && v <= 3.0f) g_fireLightStrength = v;
+    }
+    if (const char* s = shadow_getenv("NWN_SHADER_LIGHTNING_LIGHT")) {
+        const float v = strtof(s, nullptr);
+        if (std::isfinite(v) && v >= 0.0f && v <= 3.0f) g_lightningLight = v;
+    }
     {
         auto heatEnv = [](const char* key, float& out, float lo, float hi) {
             if (const char* s = shadow_getenv(key)) {
