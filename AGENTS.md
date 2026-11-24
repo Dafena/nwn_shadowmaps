@@ -209,6 +209,8 @@ Other known limitations:
 | `src/shadow_local_lights.inc` | Local selection, matrices, preparation, capture |
 | `src/weather_runtime.inc` | Shared weather rendering plus Linux/Windows authority adapters, precipitation occlusion, and snow trails |
 | `src/weather_particles.inc` | Opt-in GL3.3 rain/splash preview; reversible exact-resource native rain hiding with fallback |
+| `src/fire_light.inc` | Flickering per-pixel firelight around the engine's fire-coloured census lights; see [fire](docs/FIRE_LIGHT.md) |
+| `src/lightning_beams.inc` | EOM lightning beam strips replaced by a procedural braided beam; see [lightning](docs/LIGHTNING_BEAMS.md) |
 | `src/shadow_shader_interposition.inc` | Shader and draw interception |
 | `src/shadow_fullscreen_receiver.inc` | Receiver programs and scene copies |
 | `src/shadow_overlay_runtime.inc` | Overlay lifecycle and frame ordering |

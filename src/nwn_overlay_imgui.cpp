@@ -248,6 +248,21 @@ void nwn_overlay_render(int viewportW, int viewportH, const NwnOverlayState& st)
             if (st.shaderRainSplashes) ImGui::SliderFloat("Splash strength", st.shaderRainSplashes, 0.0f, 2.0f);
         }
 #endif
+        if (st.lightningEnabled && ImGui::CollapsingHeader("Lightning beams")) {
+            ImGui::Checkbox("Procedural lightning", st.lightningEnabled);
+            ImGui::Text("Pass: %s", st.lightningStatus ? st.lightningStatus : "off");
+            if (st.lightningIntensity)
+                ImGui::SliderFloat("Lightning brightness", st.lightningIntensity, 0.0f, 4.0f, "%.2f");
+            if (st.lightningLight)
+                ImGui::SliderFloat("Light on surroundings", st.lightningLight, 0.0f, 3.0f, "%.2f");
+        }
+        if (st.fireLightEnabled && ImGui::CollapsingHeader("Firelight")) {
+            ImGui::Checkbox("Flickering firelight", st.fireLightEnabled);
+            ImGui::Text("Pass: %s (%d fire light%s)", st.fireLightStatus ? st.fireLightStatus : "off",
+                        st.fireLightCount, st.fireLightCount == 1 ? "" : "s");
+            if (st.fireLightStrength)
+                ImGui::SliderFloat("Firelight strength", st.fireLightStrength, 0.0f, 3.0f, "%.2f");
+        }
         if (st.heatEnabled && ImGui::CollapsingHeader("Heat haze")) {
             if (st.scriptOverrides && std::strcmp(st.scriptOverrides, "none") != 0)
                 ImGui::TextWrapped("Area script overrides (win over the controls below): %s",

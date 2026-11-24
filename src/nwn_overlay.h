@@ -39,6 +39,14 @@ struct NwnOverlayState {
     const char* godraysStatus = "off";
     // Area script overrides (shadow_script_env.inc), "none" when there are none.
     const char* scriptOverrides = "none";
+    bool*  lightningEnabled = nullptr;
+    float* lightningIntensity = nullptr;
+    float* lightningLight = nullptr;
+    bool*  fireLightEnabled = nullptr;
+    float* fireLightStrength = nullptr;
+    const char* fireLightStatus = "off";
+    int    fireLightCount = 0;
+    const char* lightningStatus = "off";
     bool*  heatEnabled = nullptr;
     float* heatStrength = nullptr;
     float* heatScale = nullptr;

@@ -274,24 +274,12 @@ static void load_environment() {
     envf("NWN_SHADER_RAIN_WIND_Y",g_shaderRainWindY,-8,8);
     envf("NWN_SHADER_RAIN_SPLASHES",g_shaderRainSplashes,0,2);
 }
-static bool ensure_program() {
-    if (program && vao && depthSampler && lightSampler) return true;
-    if (failed) return false;
-    auto create=(CreateShader_t)glew_or_dlsym(eng::GlewCreateShader,"glCreateShader");
-    auto compile=(CompileShader_t)glew_or_dlsym(eng::GlewCompileShader,"glCompileShader");
-    auto shaderStatus=(GetShaderiv_t)glew_or_dlsym(eng::GlewGetShaderiv,"glGetShaderiv");
-    auto createProgram=(CreateProgram_t)glew_or_dlsym(eng::GlewCreateProgram,"glCreateProgram");
-    auto attach=(AttachShader_t)glew_or_dlsym(eng::GlewAttachShader,"glAttachShader");
-    auto link=(LinkProgram_t)glew_or_dlsym(eng::GlewLinkProgram,"glLinkProgram");
-    auto programStatus=(GetProgramiv_t)glew_or_dlsym(eng::GlewGetProgramiv,"glGetProgramiv");
-    auto source=g_realShaderSource ? g_realShaderSource :
-        (ShaderSource_t)dlsym(RTLD_NEXT,"glShaderSource");
-    using DeleteObject=void (*)(GLuint);
-    using InfoLog=void (*)(GLuint,GLsizei,GLsizei*,char*);
-    auto deleteShader=(DeleteObject)dlsym(RTLD_NEXT,"glDeleteShader");
-    auto deleteProgram=(DeleteObject)dlsym(RTLD_NEXT,"glDeleteProgram");
-    auto shaderLog=(InfoLog)dlsym(RTLD_NEXT,"glGetShaderInfoLog");
-    auto programLog=(InfoLog)dlsym(RTLD_NEXT,"glGetProgramInfoLog");
+// Entry points for the pass itself and for StateGuard. Shared with the
+// lightning pass (lightning_beams.inc), which may run while rain is off.
+static bool entryPointsResolved=false, entryPointsOkay=false;
+static bool ensure_entry_points() {
+    if(entryPointsResolved) return entryPointsOkay;
+    entryPointsResolved=true;
     genVaos=(GenObjects)dlsym(RTLD_NEXT,"glGenVertexArrays");
     genSamplers=(GenObjects)dlsym(RTLD_NEXT,"glGenSamplers");
     bindVao=(BindVao)dlsym(RTLD_NEXT,"glBindVertexArray");
@@ -327,11 +315,32 @@ static bool ensure_program() {
         }
     }
     if(!indexedBlending) { blendIndexed=nullptr; equationIndexed=nullptr; }
+    entryPointsOkay=genVaos && genSamplers && bindVao && bindSampler && samplerParam &&
+        drawArrays && useProgram && enableIndexed && disableIndexed &&
+        isEnabledIndexed && getBooleanIndexed && colorMaskIndexed;
+    return entryPointsOkay;
+}
+static bool ensure_program() {
+    if (program && vao && depthSampler && lightSampler) return true;
+    if (failed) return false;
+    auto create=(CreateShader_t)glew_or_dlsym(eng::GlewCreateShader,"glCreateShader");
+    auto compile=(CompileShader_t)glew_or_dlsym(eng::GlewCompileShader,"glCompileShader");
+    auto shaderStatus=(GetShaderiv_t)glew_or_dlsym(eng::GlewGetShaderiv,"glGetShaderiv");
+    auto createProgram=(CreateProgram_t)glew_or_dlsym(eng::GlewCreateProgram,"glCreateProgram");
+    auto attach=(AttachShader_t)glew_or_dlsym(eng::GlewAttachShader,"glAttachShader");
+    auto link=(LinkProgram_t)glew_or_dlsym(eng::GlewLinkProgram,"glLinkProgram");
+    auto programStatus=(GetProgramiv_t)glew_or_dlsym(eng::GlewGetProgramiv,"glGetProgramiv");
+    auto source=g_realShaderSource ? g_realShaderSource :
+        (ShaderSource_t)dlsym(RTLD_NEXT,"glShaderSource");
+    using DeleteObject=void (*)(GLuint);
+    using InfoLog=void (*)(GLuint,GLsizei,GLsizei*,char*);
+    auto deleteShader=(DeleteObject)dlsym(RTLD_NEXT,"glDeleteShader");
+    auto deleteProgram=(DeleteObject)dlsym(RTLD_NEXT,"glDeleteProgram");
+    auto shaderLog=(InfoLog)dlsym(RTLD_NEXT,"glGetShaderInfoLog");
+    auto programLog=(InfoLog)dlsym(RTLD_NEXT,"glGetProgramInfoLog");
+    const bool entryPoints=ensure_entry_points();
     if (!create || !compile || !shaderStatus || !createProgram || !attach || !link ||
-        !programStatus || !source || !deleteShader || !deleteProgram ||
-        !genVaos || !genSamplers || !bindVao || !bindSampler || !samplerParam ||
-        !drawArrays || !useProgram || !enableIndexed || !disableIndexed ||
-        !isEnabledIndexed || !getBooleanIndexed || !colorMaskIndexed) {
+        !programStatus || !source || !deleteShader || !deleteProgram || !entryPoints) {
         failed=true;
         fprintf(stderr,"[shadowmap][rain-particles] GL 3.3 entry points unavailable; native rain retained\n");
         return false;
