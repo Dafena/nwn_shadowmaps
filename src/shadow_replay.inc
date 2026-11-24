@@ -624,6 +624,7 @@ static bool static_world_needs_refresh(const ShadowFrameContext& ctx) {
 // previously this block ended in a bare return and owned the whole static
 // path, which made near-field crispness impossible.
 static void render_static_world_map(void* scene, int bucket) {
+    draw_cpu_probe::Timer worldTiming(draw_cpu_probe::StaticWorld);
 // World-anchored static: render the whole static set ONCE into a
 // world-space map instead of once per cascade layer per frame. Everything
 // below (the cascade fan-out) is then skipped for static buckets entirely.
@@ -712,7 +713,7 @@ static void render_static_world_map(void* scene, int bucket) {
     g_cascadeReplayActive = true;
     g_cascadeReplayLayer = 0;
     const double tWorld0 = now_seconds();
-    guarded_render_bucket(scene, bucket);
+    { draw_cpu_probe::Timer timing(draw_cpu_probe::WorldBucket); guarded_render_bucket(scene, bucket); }
     g_msWorldMap += (now_seconds() - tWorld0) * 1000.0;
     g_cascadeReplayActive = false;
 
@@ -797,7 +798,7 @@ static void replay_bucket_into_local_light_layers(void* scene, int bucket) {
     // Query the outer (real scene) state ONCE for the whole bucket, not per
     // layer, and restore it once at the end.
     SavedState outer;
-    save_state(outer);
+    { draw_cpu_probe::Timer timing(draw_cpu_probe::LocalStateSave); save_state(outer); }
     // Character back-face capture is enforced inside the draw wrapper, after
     // NWN has applied each material's state. Preserve the scene's cull mode
     // separately because SavedState is shared by passes that do not touch it.
@@ -846,6 +847,8 @@ static void replay_bucket_into_local_light_layers(void* scene, int bucket) {
     g_localLightPassActive = true;
 
     for (unsigned layer = 0; layer < slots && layer < (unsigned)kLocalLightFaces; ++layer) {
+        {
+        draw_cpu_probe::Timer timing(draw_cpu_probe::LocalLayerSetup);
         gl::FramebufferTextureLayer(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT,
                                     g_localLightWriteDepthTex, 0, (int)layer);
         // Clear ONCE per frame, on the first bucket that touches this layer --
@@ -878,15 +881,18 @@ static void replay_bucket_into_local_light_layers(void* scene, int bucket) {
         if (eng::FlagDirty)     eng::FlagDirty();
         if (eng::SetMatrixMode) eng::SetMatrixMode(oldMode);
 
+        }
         g_localLightCurrentBucket = bucket;
         g_localObjectCaptureLayer = (int)layer;
         g_localObjectCaptureActive = captureFilteredDepth;
-        if (guarded_render_bucket(scene, bucket)) ++g_localInlineDraws[layer];
+        { draw_cpu_probe::Timer timing(draw_cpu_probe::LocalBucket);
+            if (guarded_render_bucket(scene, bucket)) ++g_localInlineDraws[layer]; }
         g_localObjectCaptureActive = false;
         g_localObjectCaptureLayer = -1;
         g_localLightCurrentBucket = -1;
     }
 
+    draw_cpu_probe::Timer restoreTiming(draw_cpu_probe::LocalRestore);
     g_localLightPassActive = priorPass;
 
     if (eng::SetMatrixMode) eng::SetMatrixMode(MTX_VIEW);
@@ -1006,7 +1012,7 @@ static void replay_bucket_into_cascade_layers(void* scene, int bucket, bool stat
     // Query the "outer" (real scene) state ONCE for this whole bucket replay
     // -- not once per draw per layer -- and restore it once at the end.
     SavedState outer;
-    save_state(outer);
+    { draw_cpu_probe::Timer timing(draw_cpu_probe::SunStateSave); save_state(outer); }
 
     gl::BindFramebuffer(GL_FRAMEBUFFER, fbo);
     gl::Viewport(0, 0, g_size, g_size);
@@ -1049,6 +1055,8 @@ static void replay_bucket_into_cascade_layers(void* scene, int bucket, bool stat
         }
     }
     for (int layer = 0; layer < activeLayers; ++layer) {
+        {
+        draw_cpu_probe::Timer timing(draw_cpu_probe::SunLayerSetup);
         // Parallel caster set for creature receivers. Clear it even when it
         // receives no eligible draws; an empty map is a complete generation.
         if (!staticTarget && g_sunObjectTex && g_sunObjectFbo) {
@@ -1078,6 +1086,7 @@ static void replay_bucket_into_cascade_layers(void* scene, int bucket, bool stat
         if (eng::FlagDirty)     eng::FlagDirty();
         if (eng::SetMatrixMode) eng::SetMatrixMode(oldMode);
 
+        }
         unsigned& targetFrame = staticTarget ? g_cascadeStaticCaptureFrameLayer[layer]
                                               : g_cascadeDynamicCaptureFrameLayer[layer];
         unsigned& targetDraws = staticTarget ? g_cascadeStaticCaptureDrawsLayer[layer]
@@ -1126,7 +1135,8 @@ static void replay_bucket_into_cascade_layers(void* scene, int bucket, bool stat
         ++g_replayCallsFrame;
         g_cascadeReplayBucket = bucket;
         const double tReplay0 = now_seconds();
-        guarded_render_bucket(scene, bucket);
+        { draw_cpu_probe::Timer timing(draw_cpu_probe::SunBucket);
+            guarded_render_bucket(scene, bucket); }
         g_sunObjectCaptureActive = false;
         if (g_costFinishThisFrame && gl::Finish) gl::Finish();
         g_msReplay += (now_seconds() - tReplay0) * 1000.0;
@@ -1146,6 +1156,7 @@ static void replay_bucket_into_cascade_layers(void* scene, int bucket, bool stat
         }
     }
 
+    draw_cpu_probe::Timer restoreTiming(draw_cpu_probe::SunRestore);
     // Byte-exact restore of the real camera matrices, then flag dirty so the
     // engine's next ordinary draw recomputes from them rather than from the
     // last cascade's light transform.

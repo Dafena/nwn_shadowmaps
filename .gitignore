@@ -24,3 +24,6 @@ build-tag-bench/
 
 # Local historical binaries and runtime diagnostics
 /local-archive/
+
+# Linux shipping weather A/B objects
+/build-weather-ab/

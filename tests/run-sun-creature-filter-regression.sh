@@ -30,3 +30,4 @@ open(sys.argv[1],'w').write(max(shaders,key=len))
 PYSHADER
 "${CXX:-g++}" -O1 -std=c++17 tests/sun_filter_gpu.cpp -lEGL -lGL -o "$TEST_DIR/gpu"
 LIBGL_ALWAYS_SOFTWARE=1 EGL_PLATFORM=surfaceless "$TEST_DIR/gpu" "$TEST_DIR/receiver.frag" "$TEST_DIR/tag.frag"
+LIBGL_ALWAYS_SOFTWARE=1 EGL_PLATFORM=surfaceless "$TEST_DIR/gpu" "$TEST_DIR/receiver.frag" "$TEST_DIR/tag.frag" no-tags

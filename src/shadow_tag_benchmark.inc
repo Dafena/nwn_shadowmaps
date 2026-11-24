@@ -178,7 +178,7 @@ struct Scope {
     Record* record=nullptr;bool owns=false,world=false,nativeEnded=false;double start=0;
     ShadowFrameContext frame;
     explicit Scope(void* scene){
-        if(!enabled() || inside || !g_glBound || !g_shadowFrameContext.valid || scene!=g_areaScene || scene!=g_shadowFrameContext.scene || g_shadowFrameContext.viewport[2]<g_maxVpWidth*9/10 || !initialize())return;
+        if(!kReceiverTagsEnabled || !enabled() || inside || !g_glBound || !g_shadowFrameContext.valid || scene!=g_areaScene || scene!=g_shadowFrameContext.scene || g_shadowFrameContext.viewport[2]<g_maxVpWidth*9/10 || !initialize())return;
         frame=g_shadowFrameContext;owns=true;inside=true;
         // Secondary views must not drive the controller. Eligibility is known
         // only after native rendering, when mark_world receives the draw census.

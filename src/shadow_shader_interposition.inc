@@ -234,7 +234,7 @@ extern "C" GLuint my_create_program() {
 
 extern "C" void my_delete_program(GLuint program) {
 #ifndef _WIN32
-    if(auto* state=weather_runtime::find_program_state(program))state->inactiveUploadPrimed=false;
+    weather_runtime::forget_program(program);
 #endif
     sun_tag_forget_program(program);
     if (g_realDeleteProgram) g_realDeleteProgram(program);
@@ -327,7 +327,7 @@ extern "C" void my_attach_shader(GLuint program, GLuint shader) {
 
 extern "C" void my_link_program(GLuint program) {
 #ifndef _WIN32
-    if(auto* state=weather_runtime::find_program_state(program))state->inactiveUploadPrimed=false;
+    weather_runtime::forget_program(program);
 #endif
     if (!g_realLinkProgram) return;
     g_realLinkProgram(program);
@@ -553,9 +553,9 @@ static bool inject_marker(std::string& source) {
 // anchors. nwnOitPass defaults to zero in OpenGL, so every ordinary camera and
 // shadow draw remains byte-for-byte equivalent until the future late replay
 // explicitly sets the uniform.
-static bool inject_oit_foliage_branch(std::string& source) {
-    if (!nwn_oit_wants_foliage_shader_branch()) return false;
-    const bool compactMode2 = nwn_oit_wants_compact_mode2_shader_branch();
+static bool inject_oit_foliage_branch(std::string& source, bool materialPreview=false) {
+    if (!materialPreview && !nwn_oit_wants_foliage_shader_branch()) return false;
+    const bool compactMode2 = materialPreview || nwn_oit_wants_compact_mode2_shader_branch();
     std::string patched = source;
     const bool explicitContinuousAlpha =
         patched.find("#define NWN_CONTINUOUS_ALPHA_SHADER 1") !=
@@ -674,7 +674,7 @@ static bool inject_oit_foliage_branch(std::string& source) {
     const char* replacementDiscard = compactMode2 ? kA2cDiscard : kOitDiscard;
     size_t searchAt = 0;
     unsigned discardDefinitions = 0;
-    while ((searchAt = patched.find(kDiscard, searchAt)) != std::string::npos) {
+    while (!materialPreview && (searchAt = patched.find(kDiscard, searchAt)) != std::string::npos) {
         patched.replace(searchAt, std::strlen(kDiscard), replacementDiscard);
         searchAt += std::strlen(replacementDiscard);
         ++discardDefinitions;
@@ -683,7 +683,7 @@ static bool inject_oit_foliage_branch(std::string& source) {
     // inc_standard's ALPHA_DISCARD_VALUE path. Their final gl_FragColor alpha
     // is authoritative, so the injected tail remains valid even when there is
     // no stock discard macro to rewrite.
-    if (!discardDefinitions && !explicitContinuousAlpha) return false;
+    if (!materialPreview && !discardDefinitions && !explicitContinuousAlpha) return false;
 
     const size_t mainAt = patched.rfind("void main");
     if (mainAt == std::string::npos) return false;
@@ -748,7 +748,16 @@ static bool inject_oit_foliage_branch(std::string& source) {
         "        }\n"
         "        gl_FragColor.rgb *= min(nwnDirLit, nwnA2cLocalShadow());\n"
         "    }\n";
-    patched.insert(close, compactMode2 ? kA2cBody : kBody);
+    if (materialPreview) {
+        // Run after native colour is produced, including native early returns.
+        // A native discard still terminates the fragment.
+        patched.replace(mainAt+5,4,"nwnMaterialNativeMain");
+        patched += "\nvoid main(){nwnMaterialNativeMain();";
+        patched += kA2cBody;
+        patched += "}\n";
+    } else {
+        patched.insert(close, compactMode2 ? kA2cBody : kBody);
+    }
 
     static const char* kA2cShadowHelpers =
         "float nwnA2cLayerLit(int layer, vec4 worldPos) {\n"
@@ -1065,16 +1074,32 @@ extern "C" void my_shader_source(GLuint shader, GLsizei count,
             }
         }
     }
+    if (material_receiver_preview() && !stockAlphaVariant && !customContinuousAlphaVariant &&
+        !oitFoliageInjected && !a2cEmitterInjected &&
+        combined.find("#define NO_DISCARD 1")!=std::string::npos &&
+        combined.find("gl_FragDepth")==std::string::npos)
+        oitFoliageInjected=inject_oit_foliage_branch(combined,true);
     bool sunTagInjected = false;
-    if (sunReceiverProbe) {
+    if (kReceiverTagsEnabled && sunReceiverProbe && !material_receiver_preview()) {
         auto getShader = (GetShaderiv_t)glew_or_dlsym(eng::GlewGetShaderiv, "glGetShaderiv");
         GLint stage = 0;
         if (getShader) getShader(shader, 0x8B4F /* GL_SHADER_TYPE */, &stage);
         if (stage == GL_FRAGMENT_SHADER) sunTagInjected = inject_sun_receiver_tag(combined);
     }
+    bool creatureCoverageInjected=false;
+#if defined(NWN_TAG_WORK_BENCH_DIAGNOSTIC) && !defined(_WIN32)
+    // Wrapping the resulting entry point preserves native and Mode 2 discard.
+    // The tint uniform stays zero outside the isolated replay.
+    if (creature_coverage::shade_preview() && !oitFoliageInjected && !a2cEmitterInjected &&
+        !stockAlphaVariant && !customContinuousAlphaVariant &&
+        combined.find("out vec4 compat_glFragColor;")!=std::string::npos &&
+        combined.find("gl_FragDepth")==std::string::npos)
+        oitFoliageInjected=inject_oit_foliage_branch(combined,true);
+    creatureCoverageInjected=creature_coverage::inject(combined);
+#endif
     const bool markerInjected = inject_marker(combined);
     if (!weatherInjected && !materialModeInjected && !oitFoliageInjected &&
-        !a2cEmitterInjected && !markerInjected && !sunTagInjected) {
+        !a2cEmitterInjected && !markerInjected && !sunTagInjected && !creatureCoverageInjected) {
         g_patchedRuntimeShaders.erase(shader);
         g_realShaderSource(shader, count, string, length);
         return;
@@ -2057,6 +2082,11 @@ extern "C" void my_use_program(GLuint prog) {
     if (g_realUseProgram) g_realUseProgram(prog);
     g_curProgram = prog;
     ++g_useProgramCalls;
+#if defined(NWN_TAG_WORK_BENCH_DIAGNOSTIC) && !defined(_WIN32)
+    // Coverage redraw uses camera materials. Do not switch them into the
+    // legacy caster mode or mute their colour outputs.
+    if (creature_coverage::active) return;
+#endif
     // On Windows this wrapper starts receiving calls before bind_gl() can
     // succeed (no GL context at DLL attach), so every gl:: pointer below is
     // still null. Forward and return until the render path binds them.
@@ -2209,8 +2239,23 @@ static void dump_quad_program_source(unsigned prog, int bucket) {
 // material variant.  During Phase 3e we only count the original calls made
 // inside one native RenderDrawBucket invocation; the call below still reaches
 // NWN exactly once and with its unmodified state.
+#if defined(NWN_TAG_WORK_BENCH_DIAGNOSTIC) && !defined(_WIN32)
+static void begin_material_receiver_preview();
+static void end_material_receiver_preview();
+#endif
+
 static void trace_normal_geometry_draw(GLsizei count, bool indexed) {
     caster_census::observe(count,indexed);
+#if defined(NWN_TAG_WORK_BENCH_DIAGNOSTIC) && !defined(_WIN32)
+    if (stencil_receiver_audit::active && count>0 && g_traceFrameActive &&
+        g_traceCurrentScene==g_areaScene && nwn_core::g_currentBucket>=0 &&
+        !g_inOurPass && !nwn_core::g_ownedPass && !g_overlayPassActive &&
+        !g_cascadeReplayActive && !g_localLightPassActive && gl::GetIntegerv) {
+        GLint drawFbo=0;
+        gl::GetIntegerv(GL_DRAW_FRAMEBUFFER_BINDING,&drawFbo);
+        stencil_receiver_audit::observe(false,drawFbo);
+    }
+#endif
     draw_cpu_probe::Timer traceTiming(draw_cpu_probe::TraceDraw);
     if (g_overlayPassActive) return;   // UI draws are not scene geometry
     // NWN applies culling while preparing each material, after the local replay
@@ -2304,7 +2349,12 @@ static void trace_normal_geometry_draw(GLsizei count, bool indexed) {
     if (nwn_core::g_drawObserver &&
         (!nwn_core::g_ownedPass || nwn_oit_observes_owned_draws()) && !g_inOurPass)
         { draw_cpu_probe::Timer timing(draw_cpu_probe::ObserverBefore); nwn_core::g_drawObserver(); }
-    { draw_cpu_probe::Timer timing(draw_cpu_probe::TagBegin); begin_sun_receiver_tag(); }
+#if defined(NWN_TAG_WORK_BENCH_DIAGNOSTIC) && !defined(_WIN32)
+    stencil_receiver_audit::observe_creature_draw();
+    creature_coverage::begin_native_tint();
+    if (material_receiver_preview()) begin_material_receiver_preview();
+#endif
+    if constexpr (kReceiverTagsEnabled) { draw_cpu_probe::Timer timing(draw_cpu_probe::TagBegin); begin_sun_receiver_tag(); }
     if (!g_cascadeGeometryTrace || !g_traceGeometryActive ||
         !g_traceFrameActive || g_traceGeometryBuckets >= g_traceGeometryMaxBuckets ||
         count <= 0 || !gl::GetIntegerv) return;
@@ -2347,8 +2397,12 @@ static void trace_normal_geometry_draw(GLsizei count, bool indexed) {
 
 static inline void finish_observed_engine_draw() {
     draw_cpu_probe::Timer finishTiming(draw_cpu_probe::FinishDraw);
+#if defined(NWN_TAG_WORK_BENCH_DIAGNOSTIC) && !defined(_WIN32)
+    creature_coverage::end_native_tint();
+    end_material_receiver_preview();
+#endif
     layer_stack::after_draw();
-    { draw_cpu_probe::Timer timing(draw_cpu_probe::TagEnd); end_sun_receiver_tag(); }
+    if constexpr (kReceiverTagsEnabled) { draw_cpu_probe::Timer timing(draw_cpu_probe::TagEnd); end_sun_receiver_tag(); }
     if (nwn_core::g_drawObserverAfter &&
         (!nwn_core::g_ownedPass || nwn_oit_observes_owned_draws()) && !g_inOurPass)
         { draw_cpu_probe::Timer timing(draw_cpu_probe::ObserverAfter); nwn_core::g_drawObserverAfter(); }
@@ -2614,10 +2668,22 @@ static bool local_cube_visible_dynamic_draw() {
 
 extern "C" void NWN_GL_INTERPOSE(glDrawElements)(GLenum mode, GLsizei count, GLenum type,
                                 const void* indices) {
+#if defined(NWN_TAG_WORK_BENCH_DIAGNOSTIC) && !defined(_WIN32)
+    draw_cpu_probe::Timer replayDraw(
+        g_localLightPassActive ? draw_cpu_probe::LocalDrawWrapper : draw_cpu_probe::SunDrawWrapper,
+        g_localLightPassActive || g_cascadeReplayActive);
+#endif
     nwn_drawing_probe_draw(mode,count,type,indices); // exact tagged native NUI image, read-only
     if (!g_nextDrawElements)
         g_nextDrawElements = (void(*)(GLenum, GLsizei, GLenum, const void*))
                              dlsym(RTLD_NEXT, "glDrawElements");
+
+#if defined(NWN_TAG_WORK_BENCH_DIAGNOSTIC) && !defined(_WIN32)
+    if (creature_coverage::active) {
+        if (g_nextDrawElements) creature_coverage::submit([&] { g_nextDrawElements(mode, count, type, indices); });
+        return;
+    }
+#endif
     shadow_before_draw();
     trace_normal_geometry_draw(count, true);
     if (suppress_native_rain_draw()) { finish_observed_engine_draw(); return; }
@@ -2653,9 +2719,21 @@ extern "C" void NWN_GL_INTERPOSE(glDrawElements)(GLenum mode, GLsizei count, GLe
 
 static void (*g_nextDrawArrays)(GLenum, GLint, GLsizei) = nullptr;
 extern "C" void NWN_GL_INTERPOSE(glDrawArrays)(GLenum mode, GLint first, GLsizei count) {
+#if defined(NWN_TAG_WORK_BENCH_DIAGNOSTIC) && !defined(_WIN32)
+    draw_cpu_probe::Timer replayDraw(
+        g_localLightPassActive ? draw_cpu_probe::LocalDrawWrapper : draw_cpu_probe::SunDrawWrapper,
+        g_localLightPassActive || g_cascadeReplayActive);
+#endif
     if (!g_nextDrawArrays)
         g_nextDrawArrays = (void(*)(GLenum, GLint, GLsizei))
                            dlsym(RTLD_NEXT, "glDrawArrays");
+
+#if defined(NWN_TAG_WORK_BENCH_DIAGNOSTIC) && !defined(_WIN32)
+    if (creature_coverage::active) {
+        if (g_nextDrawArrays) creature_coverage::submit([&] { g_nextDrawArrays(mode, first, count); });
+        return;
+    }
+#endif
     shadow_before_draw();
     trace_normal_geometry_draw(count, false);
     if (suppress_native_rain_draw()) { finish_observed_engine_draw(); return; }
@@ -2725,6 +2803,18 @@ static GlXGetProcAddressARB_t g_realGlXGetProcAddressARB = nullptr;
 extern "C" void my_draw_range_elements(GLenum mode, GLuint start, GLuint end,
                                         GLsizei count, GLenum type,
                                         const void* indices) {
+#if defined(NWN_TAG_WORK_BENCH_DIAGNOSTIC) && !defined(_WIN32)
+    if (creature_coverage::active) {
+        if (g_realDrawRangeElements) creature_coverage::submit([&] { g_realDrawRangeElements(mode, start, end, count, type, indices); });
+        return;
+    }
+#endif
+
+#if defined(NWN_TAG_WORK_BENCH_DIAGNOSTIC) && !defined(_WIN32)
+    draw_cpu_probe::Timer replayDraw(
+        g_localLightPassActive ? draw_cpu_probe::LocalDrawWrapper : draw_cpu_probe::SunDrawWrapper,
+        g_localLightPassActive || g_cascadeReplayActive);
+#endif
     trace_normal_geometry_draw(count, true);
     if (suppress_native_rain_draw()) { finish_observed_engine_draw(); return; }
     const bool suppressNative = nwn_oit_suppress_current_draw();
@@ -2763,6 +2853,18 @@ extern "C" void my_draw_range_elements(GLenum mode, GLuint start, GLuint end,
 
 extern "C" void my_multi_draw_arrays(GLenum mode, const GLint* first,
                                      const GLsizei* count, GLsizei drawcount) {
+#if defined(NWN_TAG_WORK_BENCH_DIAGNOSTIC) && !defined(_WIN32)
+    if (creature_coverage::active) {
+        if (g_realMultiDrawArrays) creature_coverage::submit([&] { g_realMultiDrawArrays(mode, first, count, drawcount); });
+        return;
+    }
+#endif
+
+#if defined(NWN_TAG_WORK_BENCH_DIAGNOSTIC) && !defined(_WIN32)
+    draw_cpu_probe::Timer replayDraw(
+        g_localLightPassActive ? draw_cpu_probe::LocalDrawWrapper : draw_cpu_probe::SunDrawWrapper,
+        g_localLightPassActive || g_cascadeReplayActive);
+#endif
     if (count) for (GLsizei i = 0; i < drawcount; ++i)
         trace_normal_geometry_draw(count[i], false);
     if (suppress_native_rain_draw()) { finish_observed_engine_draw(); return; }
@@ -2801,6 +2903,18 @@ extern "C" void my_multi_draw_arrays(GLenum mode, const GLint* first,
 extern "C" void my_multi_draw_elements(GLenum mode, const GLsizei* count,
                                        GLenum type, const void* const* indices,
                                        GLsizei drawcount) {
+#if defined(NWN_TAG_WORK_BENCH_DIAGNOSTIC) && !defined(_WIN32)
+    if (creature_coverage::active) {
+        if (g_realMultiDrawElements) creature_coverage::submit([&] { g_realMultiDrawElements(mode, count, type, indices, drawcount); });
+        return;
+    }
+#endif
+
+#if defined(NWN_TAG_WORK_BENCH_DIAGNOSTIC) && !defined(_WIN32)
+    draw_cpu_probe::Timer replayDraw(
+        g_localLightPassActive ? draw_cpu_probe::LocalDrawWrapper : draw_cpu_probe::SunDrawWrapper,
+        g_localLightPassActive || g_cascadeReplayActive);
+#endif
     if (count) for (GLsizei i = 0; i < drawcount; ++i)
         trace_normal_geometry_draw(count[i], true);
     if (suppress_native_rain_draw()) { finish_observed_engine_draw(); return; }
@@ -2841,6 +2955,18 @@ extern "C" void my_multi_draw_elements(GLenum mode, const GLsizei* count,
 extern "C" void my_draw_elements_base_vertex(GLenum mode, GLsizei count,
                                                GLenum type, const void* indices,
                                                GLint basevertex) {
+#if defined(NWN_TAG_WORK_BENCH_DIAGNOSTIC) && !defined(_WIN32)
+    if (creature_coverage::active) {
+        if (g_realDrawElementsBaseVertex) creature_coverage::submit([&] { g_realDrawElementsBaseVertex(mode, count, type, indices, basevertex); });
+        return;
+    }
+#endif
+
+#if defined(NWN_TAG_WORK_BENCH_DIAGNOSTIC) && !defined(_WIN32)
+    draw_cpu_probe::Timer replayDraw(
+        g_localLightPassActive ? draw_cpu_probe::LocalDrawWrapper : draw_cpu_probe::SunDrawWrapper,
+        g_localLightPassActive || g_cascadeReplayActive);
+#endif
     trace_normal_geometry_draw(count, true);
     if (suppress_native_rain_draw()) { finish_observed_engine_draw(); return; }
     const bool suppressNative = nwn_oit_suppress_current_draw();
@@ -2882,6 +3008,18 @@ extern "C" void my_draw_range_elements_base_vertex(GLenum mode, GLuint start,
                                                      GLuint end, GLsizei count,
                                                      GLenum type, const void* indices,
                                                      GLint basevertex) {
+#if defined(NWN_TAG_WORK_BENCH_DIAGNOSTIC) && !defined(_WIN32)
+    if (creature_coverage::active) {
+        if (g_realDrawRangeElementsBaseVertex) creature_coverage::submit([&] { g_realDrawRangeElementsBaseVertex(mode, start, end, count, type, indices, basevertex); });
+        return;
+    }
+#endif
+
+#if defined(NWN_TAG_WORK_BENCH_DIAGNOSTIC) && !defined(_WIN32)
+    draw_cpu_probe::Timer replayDraw(
+        g_localLightPassActive ? draw_cpu_probe::LocalDrawWrapper : draw_cpu_probe::SunDrawWrapper,
+        g_localLightPassActive || g_cascadeReplayActive);
+#endif
     trace_normal_geometry_draw(count, true);
     if (suppress_native_rain_draw()) { finish_observed_engine_draw(); return; }
     const bool suppressNative = nwn_oit_suppress_current_draw();
@@ -2926,6 +3064,18 @@ extern "C" void my_draw_range_elements_base_vertex(GLenum mode, GLuint start,
 extern "C" void my_draw_elements_instanced(GLenum mode, GLsizei count,
                                             GLenum type, const void* indices,
                                             GLsizei instances) {
+#if defined(NWN_TAG_WORK_BENCH_DIAGNOSTIC) && !defined(_WIN32)
+    if (creature_coverage::active) {
+        if (g_realDrawElementsInstanced) creature_coverage::submit([&] { g_realDrawElementsInstanced(mode, count, type, indices, instances); });
+        return;
+    }
+#endif
+
+#if defined(NWN_TAG_WORK_BENCH_DIAGNOSTIC) && !defined(_WIN32)
+    draw_cpu_probe::Timer replayDraw(
+        g_localLightPassActive ? draw_cpu_probe::LocalDrawWrapper : draw_cpu_probe::SunDrawWrapper,
+        g_localLightPassActive || g_cascadeReplayActive);
+#endif
     for (GLsizei i = 0; i < instances; ++i) trace_normal_geometry_draw(count, true);
     if (suppress_native_rain_draw()) { finish_observed_engine_draw(); return; }
     const bool suppressNative = nwn_oit_suppress_current_draw();
@@ -2966,6 +3116,18 @@ extern "C" void my_draw_elements_instanced(GLenum mode, GLsizei count,
 extern "C" void my_draw_elements_instanced_base_vertex(GLenum mode, GLsizei count,
                                                         GLenum type, const void* indices,
                                                         GLsizei instances, GLint basevertex) {
+#if defined(NWN_TAG_WORK_BENCH_DIAGNOSTIC) && !defined(_WIN32)
+    if (creature_coverage::active) {
+        if (g_realDrawElementsInstancedBaseVertex) creature_coverage::submit([&] { g_realDrawElementsInstancedBaseVertex(mode, count, type, indices, instances, basevertex); });
+        return;
+    }
+#endif
+
+#if defined(NWN_TAG_WORK_BENCH_DIAGNOSTIC) && !defined(_WIN32)
+    draw_cpu_probe::Timer replayDraw(
+        g_localLightPassActive ? draw_cpu_probe::LocalDrawWrapper : draw_cpu_probe::SunDrawWrapper,
+        g_localLightPassActive || g_cascadeReplayActive);
+#endif
     for (GLsizei i = 0; i < instances; ++i) trace_normal_geometry_draw(count, true);
     if (suppress_native_rain_draw()) { finish_observed_engine_draw(); return; }
     const bool suppressNative = nwn_oit_suppress_current_draw();

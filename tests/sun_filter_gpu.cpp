@@ -90,7 +90,7 @@ static void check(GLuint receiver, GLuint output, const char *label, const float
         ++failures;
 }
 int main(int argc, char **argv) {
-    if (argc != 3)
+    if (argc != 3 && argc != 4)
         return 2;
     EGLDisplay display =
         eglGetPlatformDisplay(EGL_PLATFORM_SURFACELESS_MESA, EGL_DEFAULT_DISPLAY, nullptr);
@@ -123,7 +123,10 @@ int main(int argc, char **argv) {
     GLuint vao;
     glGenVertexArrays(1, &vao);
     glBindVertexArray(vao);
-    GLuint receiver = program(read_file(argv[1]));
+    std::string receiverSource=read_file(argv[1]);
+    const bool noTags=argc==4;
+    if (noTags) receiverSource.insert(receiverSource.find('\n')+1,"#define NWN_NO_RECEIVER_TAGS 1\n");
+    GLuint receiver = program(receiverSource);
     GLuint tagged = program(read_file(argv[2]));
     GLuint outputTex, output;
     glGenTextures(1, &outputTex);
@@ -185,6 +188,15 @@ int main(int argc, char **argv) {
                        identity);
     glUniformMatrix4fv(glGetUniformLocation(receiver, "nwnStaticLightVP[0]"), 4, GL_FALSE,
                        matrices);
+    if (noTags) {
+        if (glGetUniformLocation(receiver,"nwnSunReceiverTags")!=-1 ||
+            glGetUniformLocation(receiver,"nwnSunReceiverTagsMS")!=-1 ||
+            glGetUniformLocation(receiver,"nwnSunObjectDepth")!=-1)
+            return 1;
+        const float expected[4]={1,1,1,1};
+        check(receiver,output,"tag-free sun composite",expected);
+        return 0;
+    }
     const float selectiveExpected[4] = {1, 0, 1, 1};
     check(receiver, output, "floor/creature/object-on-creature/placeable", selectiveExpected);
     // Highlighted creature samples must preserve NWN's native hover output.

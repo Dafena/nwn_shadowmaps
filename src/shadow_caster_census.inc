@@ -33,6 +33,9 @@ static ShadowFrameContext timingReference;
 static std::vector<double> allSamples,nonCreatureSamples,coverageSamples,drawSamples,callSamples;
 static double median(std::vector<double> values){if(values.empty())return 0;std::sort(values.begin(),values.end());return values[values.size()/2];}
 template<class Call> static inline void submit(Call call){
+    draw_cpu_probe::Timer submission(
+        g_localLightPassActive ? draw_cpu_probe::LocalGLSubmit : draw_cpu_probe::SunGLSubmit,
+        g_localLightPassActive || g_cascadeReplayActive);
     const bool local=timingFrame && g_localLightPassActive && currentNominated;
     const bool later=timingFrame && currentNominated && (g_localLightPassActive || (sun_mesh_pass() && g_cascadeReplayLayer>0));
     if(local || later){const double start=now_seconds();call();const double elapsed=(now_seconds()-start)*1000;if(local){nominatedDriverAll+=elapsed;if(g_localObjectCaptureLayer>0)nominatedDriverLater+=elapsed;}if(later)crossDriverLater+=elapsed;}

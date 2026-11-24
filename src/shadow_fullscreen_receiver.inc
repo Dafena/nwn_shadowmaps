@@ -459,9 +459,11 @@ static void build_static_receiver_program() {
         "uniform sampler2D nwnStaticSceneColor; uniform float nwnSelfIllumGuard;\n"
         "uniform sampler2DArrayShadow nwnStaticLightDepth;\n"
         "uniform sampler2DArrayShadow nwnDynamicLightDepth;\n"
+        "\n#ifndef NWN_NO_RECEIVER_TAGS\n"
         "uniform sampler2DArrayShadow nwnSunObjectDepth; uniform int nwnSunObjectReady;\n"
         "uniform usampler2D nwnSunReceiverTags; uniform usampler2DMS nwnSunReceiverTagsMS;\n"
         "uniform int nwnSunTagSamples,nwnSunTagsReady;\n"
+        "\n#endif\n"
         "uniform mat4 nwnStaticCameraVPInv; uniform mat4 nwnStaticCameraView;\n"
         "uniform mat4 nwnStaticLightVP[4];\n"
         "uniform float nwnStaticClipFar0,nwnStaticClipFar1,nwnStaticClipFar2,nwnStaticClipFar3;\n"
@@ -538,6 +540,7 @@ static void build_static_receiver_program() {
         "total.y+=(nwnStaticDynamicEnabled!=0&&layer<nwnDynamicLayers)?"
         "texture(nwnDynamicLightDepth,vec4(uv,float(layer),s.z-nwnStaticReceiverBias)):1.0;}"
         "lit.yz=total/9.0;return lit;}\n"
+        "\n#ifndef NWN_NO_RECEIVER_TAGS\n"
         "int nwnSunReceiverClass(vec2 uv,float depth){"
         "if(nwnSunTagsReady==0)return -1;"
         "ivec2 p=ivec2(uv*vec2(textureSize(nwnStaticSceneDepth,0)));"
@@ -549,9 +552,13 @@ static void build_static_receiver_program() {
         "float span=max(uintBitsToFloat(tag.y),4.0/16777215.0);"
         "if(abs(z-depth)>span)continue;"
         "if((kind&1u)==0u)return int(kind);result=int(kind);}return result;}\n"
+        "\n#endif\n"
         "float nwnSunMovingLit(vec4 s,bool creatureReceiver){"
+        "\n#ifndef NWN_NO_RECEIVER_TAGS\n"
         "if(creatureReceiver){if(nwnSunObjectReady==0)return 1.0;"
-        "return texture(nwnSunObjectDepth,s);}return texture(nwnDynamicLightDepth,s);}\n"
+        "return texture(nwnSunObjectDepth,s);}\n"
+        "\n#endif\n"
+        "return texture(nwnDynamicLightDepth,s);}\n"
         "float nwnLayerLit(int layer,vec4 w,float worldStatic,bool creatureReceiver){"
         "vec4 l=nwnStaticLightVP[layer]*w;if(l.w<=0.0)return 1.0;"
         "vec3 s=l.xyz/l.w*0.5+0.5;"
@@ -719,11 +726,15 @@ static void build_static_receiver_program() {
         "vec2 sz=vec2(textureSize(nwnStaticSceneDepth,0));"
         "vec2 uv=(gl_FragCoord.xy-nwnStaticViewportOrigin.xy)/sz;"
         "float d=texture(nwnStaticSceneDepth,uv).r; if(d>=0.999999) discard;"
-        "int receiverClass=nwnSunReceiverClass(uv,d);"
-        "if(nwnReceiverDebug==8){nwnFragColor=vec4(receiverClass>=0&&((receiverClass&2)!=0||(receiverClass&1)==0)?1.0:0.0,receiverClass>=0&&(receiverClass&1)!=0?1.0:0.0,receiverClass<0?1.0:0.0,1.0);return;}"
-        "if(nwnReceiverDebug==1){nwnFragColor=vec4(0.0,1.0,0.0,1.0);return;}"
         "vec4 w=nwnStaticCameraVPInv*vec4(uv*2.0-1.0,d*2.0-1.0,1.0); w/=w.w;"
         "float z=-((nwnStaticCameraView*w).z);"
+        // A fully fogged pixel already discards in the final composite.
+        "if(nwnReceiverDebug==0&&nwnFogEnabled==2&&nwnFogEnd>nwnFogStart&&z>=nwnFogEnd)discard;"
+        "\n#ifndef NWN_NO_RECEIVER_TAGS\n"
+        "int receiverClass=nwnSunReceiverClass(uv,d);"
+        "if(nwnReceiverDebug==8){nwnFragColor=vec4(receiverClass>=0&&((receiverClass&2)!=0||(receiverClass&1)==0)?1.0:0.0,receiverClass>=0&&(receiverClass&1)!=0?1.0:0.0,receiverClass<0?1.0:0.0,1.0);return;}"
+        "\n#endif\n"
+        "if(nwnReceiverDebug==1){nwnFragColor=vec4(0.0,1.0,0.0,1.0);return;}"
         "int layer=nwnStaticLayer;float sunShade=0.0;"
         "if(nwnLocalOnlyPass==0){"
         "if(nwnStaticCSMEnabled!=0){if(z<=0.0||z>nwnStaticClipFar3) discard;"
@@ -737,7 +748,11 @@ static void build_static_receiver_program() {
         // 1920x1009) and it dominated the frame.
         "float worldStatic=nwnWorldStaticLit(w);"
         "if(nwnReceiverDebug==6){nwnFragColor=vec4(vec3(1.0)-nwnSunSourceLit(layer,w,worldStatic),1.0);return;}"
+        "\n#ifndef NWN_NO_RECEIVER_TAGS\n"
         "bool creatureReceiver=receiverClass>=0&&(receiverClass&1)!=0;"
+        "\n#else\n"
+        "bool creatureReceiver=false;\n"
+        "\n#endif\n"
         "float lit=nwnLayerLit(layer,w,worldStatic,creatureReceiver);"
         "if(nwnStaticCSMEnabled!=0&&nwnStaticCascadeBlend>0.0&&layer<3){"
         "float edge=layer==0?nwnStaticClipFar0:layer==1?nwnStaticClipFar1:nwnStaticClipFar2;"
@@ -856,7 +871,9 @@ static void build_static_receiver_program() {
         "sunShade*=keep;}"
         // Native hover/selection is an explicit engine effect, not an RGB
         // brightness guess. Preserve its appearance from both shadow terms.
+        "\n#ifndef NWN_NO_RECEIVER_TAGS\n"
         "if(receiverClass>=0&&(receiverClass&2)!=0){sunShade=0.0;localShade=0.0;}"
+        "\n#endif\n"
         "float sunAlpha=nwnStaticCompositeStrength*sunShade;"
         "float localAlpha=nwnLocalLightStrength*localShade;"
         // Darkest wins rather than summing: two overlapping shadows should not
@@ -895,8 +912,16 @@ static void build_static_receiver_program() {
         "if(nwnStaticComposite!=0) nwnFragColor=vec4(0.0,0.0,0.0,alpha);"
         "else nwnFragColor=vec4(0.70*shade,0.0,0.0,1.0); }\n";
     GLuint v=create(GL_VERTEX_SHADER), f=create(GL_FRAGMENT_SHADER);
-    const GLint vl=(GLint)strlen(vs), fl=(GLint)strlen(fs);
-    source(v,1,&vs,&vl); source(f,1,&fs,&fl); compile(v); compile(f);
+    const GLint vl=(GLint)strlen(vs);
+    std::string receiverSource;
+    const char* fragment=fs;
+    if constexpr (!kReceiverTagsEnabled) {
+        receiverSource=fs;
+        receiverSource.insert(receiverSource.find('\n')+1,"#define NWN_NO_RECEIVER_TAGS 1\n");
+        fragment=receiverSource.c_str();
+    }
+    const GLint fl=(GLint)strlen(fragment);
+    source(v,1,&vs,&vl); source(f,1,&fragment,&fl); compile(v); compile(f);
     GLint vok=0, fok=0; getShader(v,GL_COMPILE_STATUS,&vok); getShader(f,GL_COMPILE_STATUS,&fok);
     if (!vok || !fok) {
         // Print the driver's actual error. "compile FAILED" with no log meant a
