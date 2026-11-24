@@ -47,6 +47,7 @@ static constexpr int kWeatherCaptureDepthUnit = 24;
 #ifndef _WIN32
 #ifdef NWN_TAG_WORK_BENCH_DIAGNOSTIC
 static bool inactiveUploadProbe=false;
+static bool cacheWeatherScalars=false;
 #else
 static constexpr bool inactiveUploadProbe=true;
 #endif
@@ -55,6 +56,11 @@ struct ProgramState {
     GLuint program = 0;
 #ifndef _WIN32
     bool inactiveUploadPrimed=false;
+    bool fixedSamplersUploaded=false;
+#ifdef NWN_TAG_WORK_BENCH_DIAGNOSTIC
+    bool scalarCacheValid=false;
+    float uploadedEligibility=0.0f, uploadedRain=0.0f, uploadedSnow=0.0f;
+#endif
 #endif
     GLint skinmesh = -1;
     GLint areaFlags = -1;
@@ -224,6 +230,15 @@ static ProgramState* find_program_state(GLuint program) {
         if (g.programs[i].program == program) return &g.programs[i];
     return nullptr;
 }
+
+#ifndef _WIN32
+static void forget_program(GLuint program) {
+    if (auto* state = find_program_state(program)) {
+        *state = g.programs[--g.programCount];
+        g.programs[g.programCount] = ProgramState{};
+    }
+}
+#endif
 
 static ProgramState* program_state(GLuint program) {
     if (!program || !gl::GetUniformLocation) return nullptr;
@@ -1109,30 +1124,111 @@ static void update_snow_deformation_texture(double now) {
     g.snowDeformationReady = true;
 }
 
+enum class WeatherBinding { SnowTrails, ReflectionColor, ReflectionDepth, SnowLights, Shelter, Count };
+#if defined(NWN_TAG_WORK_BENCH_DIAGNOSTIC) && !defined(_WIN32)
+struct WeatherBindCounts { unsigned attempts=0, alreadyBound=0; };
+static bool countWeatherBinds=false;
+#endif
+#ifndef _WIN32
+using WeatherMultiBind = void (*)(GLuint, GLsizei, const GLuint*);
+static WeatherMultiBind weatherMultiBind=nullptr;
+static std::uintptr_t weatherMultiBindContext=0;
+static unsigned weatherMultiBindCalls=0;
+
+static void configure_weather_multi_bind(bool enabled) {
+    weatherMultiBind=nullptr;
+    weatherMultiBindContext=0;
+    weatherMultiBindCalls=0;
+    if (!enabled || !gl::GetString || !gl::GetIntegerv) return;
+    const auto context=nwn_drawing_probe_context();
+    if (!context) return;
+    const auto* version=reinterpret_cast<const char*>(gl::GetString(GL_VERSION));
+    int major=0, minor=0;
+    bool supported=version && std::sscanf(version,"%d.%d",&major,&minor)==2 &&
+                   (major>4 || (major==4 && minor>=4));
+    if (!supported) {
+        using GetStringIndexed = const unsigned char* (*)(GLenum, GLuint);
+        const auto getStringIndexed=reinterpret_cast<GetStringIndexed>(dlsym(RTLD_NEXT,"glGetStringi"));
+        if (!getStringIndexed || major<3) return;
+        GLint count=0;
+        gl::GetIntegerv(0x821D, &count); // GL_NUM_EXTENSIONS
+        for (GLint i=0;i<count;++i) {
+            const auto* ext=reinterpret_cast<const char*>(getStringIndexed(0x1F03,i));
+            if (ext && std::strcmp(ext,"GL_ARB_multi_bind")==0) { supported=true; break; }
+        }
+    }
+    if (!supported) return;
+    GLint units=0;
+    gl::GetIntegerv(0x8B4D,&units); // GL_MAX_COMBINED_TEXTURE_IMAGE_UNITS
+    if (units<=kPrecipitationOcclusionUnit) return;
+    weatherMultiBind=reinterpret_cast<WeatherMultiBind>(dlsym(RTLD_NEXT,"glBindTextures"));
+    if (weatherMultiBind) weatherMultiBindContext=context;
+}
+
+#endif
+#if defined(NWN_TAG_WORK_BENCH_DIAGNOSTIC) && !defined(_WIN32)
+static WeatherBindCounts weatherBindCounts[static_cast<unsigned>(WeatherBinding::Count)]={};
+#endif
+
+static inline void bind_weather_texture(WeatherBinding binding, GLuint texture) {
+#if defined(NWN_TAG_WORK_BENCH_DIAGNOSTIC) && !defined(_WIN32)
+    if (countWeatherBinds) {
+        GLint current=0;
+        gl::GetIntegerv(GL_TEXTURE_BINDING_2D, &current);
+        auto& counts=weatherBindCounts[static_cast<unsigned>(binding)];
+        ++counts.attempts;
+        if (static_cast<GLuint>(current)==texture) ++counts.alreadyBound;
+    }
+#else
+    (void)binding;
+#endif
+    gl::BindTexture(GL_TEXTURE_2D, texture);
+}
+
 static void push_draw_state(ProgramState* state, float receiverClass) {
     if (!state || state->weatherEligible < 0 || !gl::Uniform1f) return;
-    // The current engine program is already bound at the draw funnel. Always
-    // upload eligibility, including zero, because NWN reuses a material
-    // program across static meshes, creatures, water and auxiliary passes.
-    // 0 = excluded, 1 = opaque static, 2 = static alpha/card. The shader uses
-    // class 2 for wet noise but explicitly forbids standing puddles there.
-    gl::Uniform1f(state->weatherEligible, receiverClass);
-    if (state->rainAmount >= 0)
-        gl::Uniform1f(state->rainAmount, g.rainAmount);
-    if (state->snowAmount >= 0)
-        gl::Uniform1f(state->snowAmount, g.snowAmount);
+    draw_cpu_probe::Timer uploads(draw_cpu_probe::WeatherUpload);
+    // Programs can be shared by draws with different surface eligibility.
+#if defined(NWN_TAG_WORK_BENCH_DIAGNOSTIC) && !defined(_WIN32)
+    if (cacheWeatherScalars) {
+        const auto upload = [&](GLint location, float value, float& previous) {
+            if (location >= 0 && (!state->scalarCacheValid || previous != value)) {
+                gl::Uniform1f(location, value);
+                previous = value;
+            }
+        };
+        upload(state->weatherEligible, receiverClass, state->uploadedEligibility);
+        upload(state->rainAmount, g.rainAmount, state->uploadedRain);
+        upload(state->snowAmount, g.snowAmount, state->uploadedSnow);
+        state->scalarCacheValid = true;
+    } else
+#endif
+    {
+#if defined(NWN_TAG_WORK_BENCH_DIAGNOSTIC) && !defined(_WIN32)
+        state->scalarCacheValid = false;
+#endif
+        gl::Uniform1f(state->weatherEligible, receiverClass);
+        if (state->rainAmount >= 0)
+            gl::Uniform1f(state->rainAmount, g.rainAmount);
+        if (state->snowAmount >= 0)
+            gl::Uniform1f(state->snowAmount, g.snowAmount);
+    }
 #ifndef _WIN32
     // Both shader effect branches are inactive at these exact thresholds.
     // Eligibility and amounts above remain per-draw; sampler initialization
     // must have completed once before skipping the inactive payload.
     if(inactiveUploadProbe && state->inactiveUploadPrimed &&
+       (state->fixedSamplersUploaded || !gl::Uniform1i) &&
        g.rainAmount<=0.001f && g.snowAmount<=0.001f)return;
 #endif
     if (state->weatherTime >= 0) {
         const float t = (float)std::fmod(now_seconds(), 4096.0);
         gl::Uniform1f(state->weatherTime, t);
     }
-    if (receiverClass > 0.5f) probe_framebuffer_reflection_inputs();
+    if (receiverClass > 0.5f) {
+        draw_cpu_probe::Timer reflection(draw_cpu_probe::WeatherReflection);
+        probe_framebuffer_reflection_inputs();
+    }
     const int probeMode = g_wetFilmProfiling ? g_wetFilmProbeMode : 0;
     if (state->wetFilmProbe >= 0 && gl::Uniform1i && state->uploadedWetFilmProbe != probeMode) {
         gl::Uniform1i(state->wetFilmProbe, probeMode);
@@ -1177,7 +1273,11 @@ static void push_draw_state(ProgramState* state, float receiverClass) {
     if (state->weatherNoiseReady >= 0)
         gl::Uniform1f(state->weatherNoiseReady,
                       receiverClass > 0.5f && g.noiseReady ? 1.0f : 0.0f);
-    if (gl::Uniform1i) {
+    if (gl::Uniform1i
+#ifndef _WIN32
+        && !state->fixedSamplersUploaded
+#endif
+    ) {
         if (state->weatherFbColor >= 0)
             gl::Uniform1i(state->weatherFbColor, kWeatherCaptureColorUnit);
         if (state->weatherFbDepth >= 0)
@@ -1191,6 +1291,9 @@ static void push_draw_state(ProgramState* state, float receiverClass) {
         if (state->precipitationOcclusionTex >= 0)
             gl::Uniform1i(state->precipitationOcclusionTex,
                           kPrecipitationOcclusionUnit);
+#ifndef _WIN32
+        state->fixedSamplersUploaded = true;
+#endif
     }
     if (state->snowDeformationTransform >= 0 && gl::Uniform4f) {
         gl::Uniform4f(state->snowDeformationTransform,
@@ -1228,23 +1331,48 @@ static void push_draw_state(ProgramState* state, float receiverClass) {
         if (state->snowLightCount >= 0 && gl::Uniform1i)
             gl::Uniform1i(state->snowLightCount, g.snowLightDataCount);
     }
+    draw_cpu_probe::Timer bindings(draw_cpu_probe::WeatherBindings);
+#ifndef _WIN32
+    if (weatherMultiBind && receiverClass > 0.5f &&
+        g.framebufferColorTexture && g.framebufferDepthTexture &&
+        g.snowDeformationTexture && g.snowLightDataTexture &&
+        g.precipitationOcclusionTexture &&
+        nwn_drawing_probe_context()==weatherMultiBindContext) {
+        static_assert(kWeatherCaptureDepthUnit==kWeatherCaptureColorUnit+1 &&
+                      kSnowDeformationUnit==kWeatherCaptureColorUnit+2 &&
+                      kSnowLightDataUnit==kWeatherCaptureColorUnit+3 &&
+                      kPrecipitationOcclusionUnit==kWeatherCaptureColorUnit+4);
+        const GLuint textures[]={g.framebufferColorTexture,g.framebufferDepthTexture,
+            g.snowDeformationTexture,g.snowLightDataTexture,g.precipitationOcclusionTexture};
+        weatherMultiBind(kWeatherCaptureColorUnit,5,textures);
+        ++weatherMultiBindCalls;
+        state->inactiveUploadPrimed=true;
+        return;
+    }
+#endif
+    // These bindings only touch injector-owned units. Preserve the engine's
+    // active selector once around the entire group.
+    GLint oldActive = GL_TEXTURE0;
+    bool activeTextureSaved = false;
+    const auto save_active_texture = [&] {
+        if (activeTextureSaved) return;
+        gl::GetIntegerv(GL_ACTIVE_TEXTURE, &oldActive);
+        activeTextureSaved = true;
+    };
     if (receiverClass > 0.5f && g.snowDeformationTexture &&
         gl::ActiveTexture && gl::BindTexture && gl::GetIntegerv) {
-        GLint oldActive = GL_TEXTURE0;
-        gl::GetIntegerv(GL_ACTIVE_TEXTURE, &oldActive);
+        save_active_texture();
         gl::ActiveTexture(GL_TEXTURE0 + kSnowDeformationUnit);
-        gl::BindTexture(GL_TEXTURE_2D, g.snowDeformationTexture);
-        gl::ActiveTexture((GLenum)oldActive);
+        bind_weather_texture(WeatherBinding::SnowTrails, g.snowDeformationTexture);
     }
     if (receiverClass > 0.5f && g.framebufferColorTexture &&
         g.framebufferDepthTexture && gl::ActiveTexture && gl::BindTexture &&
         gl::GetIntegerv) {
-        GLint oldActive = GL_TEXTURE0;
-        gl::GetIntegerv(GL_ACTIVE_TEXTURE, &oldActive);
+        save_active_texture();
         gl::ActiveTexture(GL_TEXTURE0 + kWeatherCaptureColorUnit);
-        gl::BindTexture(GL_TEXTURE_2D, g.framebufferColorTexture);
+        bind_weather_texture(WeatherBinding::ReflectionColor, g.framebufferColorTexture);
         gl::ActiveTexture(GL_TEXTURE0 + kWeatherCaptureDepthUnit);
-        gl::BindTexture(GL_TEXTURE_2D, g.framebufferDepthTexture);
+        bind_weather_texture(WeatherBinding::ReflectionDepth, g.framebufferDepthTexture);
         static bool logged = false;
         if (!logged && g.rainAmount > 0.01f) {
             GLint colorBound = 0, depthBound = 0;
@@ -1262,24 +1390,20 @@ static void push_draw_state(ProgramState* state, float receiverClass) {
                     colorBound, depthBound);
             logged = true;
         }
-        gl::ActiveTexture((GLenum)oldActive);
     }
     if (receiverClass > 0.5f && g.snowLightDataTexture &&
         gl::ActiveTexture && gl::BindTexture && gl::GetIntegerv) {
-        GLint oldActive = GL_TEXTURE0;
-        gl::GetIntegerv(GL_ACTIVE_TEXTURE, &oldActive);
+        save_active_texture();
         gl::ActiveTexture(GL_TEXTURE0 + kSnowLightDataUnit);
-        gl::BindTexture(GL_TEXTURE_2D, g.snowLightDataTexture);
-        gl::ActiveTexture((GLenum)oldActive);
+        bind_weather_texture(WeatherBinding::SnowLights, g.snowLightDataTexture);
     }
     if (receiverClass > 0.5f && g.precipitationOcclusionTexture &&
         gl::ActiveTexture && gl::BindTexture && gl::GetIntegerv) {
-        GLint oldActive = GL_TEXTURE0;
-        gl::GetIntegerv(GL_ACTIVE_TEXTURE, &oldActive);
+        save_active_texture();
         gl::ActiveTexture(GL_TEXTURE0 + kPrecipitationOcclusionUnit);
-        gl::BindTexture(GL_TEXTURE_2D, g.precipitationOcclusionTexture);
-        gl::ActiveTexture((GLenum)oldActive);
+        bind_weather_texture(WeatherBinding::Shelter, g.precipitationOcclusionTexture);
     }
+    if (activeTextureSaved) gl::ActiveTexture((GLenum)oldActive);
 #ifndef _WIN32
     state->inactiveUploadPrimed=true;
 #endif
@@ -1376,12 +1500,17 @@ static void observe_draw(GLuint program, GLsizei count) {
         g_overlayPassActive || nwn_core::g_ownedPass)
         return;
 
-    ProgramState* state = program_state(program);
+    ProgramState* state = nullptr;
+    {
+        draw_cpu_probe::Timer lookup(draw_cpu_probe::WeatherProgram);
+        state = program_state(program);
+    }
     if (!state) return;
     // Recover the authoritative destination-area flag once if its upload
     // happened before interception/scene ownership. This is not a per-draw
     // query: subsequent draws consume the cached value.
     if (state->areaFlags >= 0) {
+        draw_cpu_probe::Timer areaState(draw_cpu_probe::WeatherArea);
         if (!state->areaFlagsKnown && gl::GetUniformiv) {
             gl::GetUniformiv(program, state->areaFlags,
                              &state->areaFlagsValue);

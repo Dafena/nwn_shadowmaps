@@ -175,11 +175,438 @@ struct SunTagBufferEligibility {
             tag_buffer_lease::release(tag_buffer_lease::Fence::Boundary);
     }
 };
+static bool material_receiver_preview();
+#if defined(NWN_TAG_WORK_BENCH_DIAGNOSTIC) && !defined(_WIN32)
+// Diagnostic snapshot only. The live capture texture remains the write target.
+static GLuint g_materialSunSnapshot=0, g_materialStaticSnapshot=0;
+static int g_materialStaticSize=0;
+static bool g_materialStaticReady=false;
+static std::uintptr_t g_materialSunContext=0;
+static int g_materialSunSize=0;
+static void* g_materialSunScene=nullptr;
+static unsigned g_materialSunSerial=0;
+static CascadeMathState g_materialSunMath;
+using MaterialCopyImage = void (*)(GLuint, GLenum, GLint, GLint, GLint, GLint,
+    GLuint, GLenum, GLint, GLint, GLint, GLint, GLsizei, GLsizei, GLsizei);
+static MaterialCopyImage g_materialCopyImage=nullptr;
+
+static void release_material_sun_snapshot() {
+    g_materialSunSerial=0;
+    if (g_materialSunSnapshot && gl::DeleteTextures &&
+        nwn_drawing_probe_context()==g_materialSunContext) {
+        gl::DeleteTextures(1,&g_materialSunSnapshot);
+        if (g_materialStaticSnapshot) gl::DeleteTextures(1,&g_materialStaticSnapshot);
+        g_materialStaticSnapshot=0;
+        g_materialStaticSize=0;
+        g_materialStaticReady=false;
+        g_materialSunSnapshot=0;
+        g_materialSunContext=0;
+        g_materialSunSize=0;
+    }
+}
+
+static void configure_material_sun_audit() {
+    g_materialCopyImage=nullptr;
+    g_materialSunSerial=0;
+    if (!gl::GetString || !gl::GetIntegerv) return;
+    const auto* version=reinterpret_cast<const char*>(gl::GetString(GL_VERSION));
+    int major=0, minor=0;
+    if (!version || std::sscanf(version,"%d.%d",&major,&minor)!=2 || major<3) return;
+    bool supported=major>4 || (major==4 && minor>=3);
+    if (!supported) {
+        using GetStringIndexed=const unsigned char* (*)(GLenum,GLuint);
+        const auto getStringIndexed=reinterpret_cast<GetStringIndexed>(dlsym(RTLD_NEXT,"glGetStringi"));
+        if (!getStringIndexed) return;
+        GLint count=0;
+        gl::GetIntegerv(0x821D,&count); // GL_NUM_EXTENSIONS
+        for (GLint i=0;i<count;++i) {
+            const auto* extension=reinterpret_cast<const char*>(getStringIndexed(0x1F03,i));
+            if (extension && std::strcmp(extension,"GL_ARB_copy_image")==0) {
+                supported=true;
+                break;
+            }
+        }
+    }
+    if (supported)
+        g_materialCopyImage=reinterpret_cast<MaterialCopyImage>(dlsym(RTLD_NEXT,"glCopyImageSubData"));
+}
+
+struct MaterialReceiverAudit {
+    unsigned creatures=0, highlighted=0, blended=0;
+    unsigned filteredSun=0, sunLayersTouchedThisFrame=0, completedLocal=0;
+    unsigned snapshotCopies=0, snapshotReadyDraws=0;
+    double snapshotCpuMs=0;
+};
+static bool g_materialReceiverAuditActive=false;
+static MaterialReceiverAudit g_materialReceiverAudit;
+
+static void snapshot_material_sun(void* scene) {
+    if ((!g_materialReceiverAuditActive && !material_receiver_preview()) || !g_materialCopyImage || scene!=g_areaScene ||
+        !g_sunObjectTex || !g_cascadeMath.valid || !g_shadowFrameContext.valid ||
+        g_shadowFrameContext.scene!=scene || !gl::GetError || !gl::TexImage3D)
+        return;
+    const int layers=std::min(g_cascadeActiveCount,g_cascadeDynamicLayers);
+    if (layers<=0 || layers>kCascadeCount || !g_shadowFrameContext.serial) return;
+    for (int layer=0;layer<layers;++layer)
+        if (g_sunObjectFrame[layer]!=g_shadowFrameContext.serial ||
+            g_cascadeDynamicCaptureFrameLayer[layer]!=g_shadowFrameContext.serial)
+            return;
+    const auto context=nwn_drawing_probe_context();
+    if (!context || (g_materialSunContext && context!=g_materialSunContext)) return;
+    if (g_materialSunSerial==g_shadowFrameContext.serial && g_materialSunScene==scene) return;
+
+    const double start=now_seconds();
+    g_materialSunSerial=0;
+    const auto allocate=[&](GLuint& texture,int& size) {
+        if (texture && size==g_size) return true;
+        GLint previous=0;
+        gl::GetIntegerv(GL_TEXTURE_BINDING_2D_ARRAY,&previous);
+        if (!texture) gl::GenTextures(1,&texture);
+        if (!texture) return false;
+        g_materialSunContext=context;
+        gl::BindTexture(GL_TEXTURE_2D_ARRAY,texture);
+        gl::TexImage3D(GL_TEXTURE_2D_ARRAY,0,GL_DEPTH_COMPONENT24,g_size,g_size,kCascadeCount,
+                       0,GL_DEPTH_COMPONENT,GL_UNSIGNED_INT,nullptr);
+        gl::TexParameteri(GL_TEXTURE_2D_ARRAY,GL_TEXTURE_MIN_FILTER,GL_LINEAR);
+        gl::TexParameteri(GL_TEXTURE_2D_ARRAY,GL_TEXTURE_MAG_FILTER,GL_LINEAR);
+        gl::TexParameteri(GL_TEXTURE_2D_ARRAY,GL_TEXTURE_COMPARE_MODE,GL_COMPARE_REF_TO_TEXTURE);
+        gl::TexParameteri(GL_TEXTURE_2D_ARRAY,GL_TEXTURE_COMPARE_FUNC,GL_LESS);
+        gl::TexParameteri(GL_TEXTURE_2D_ARRAY,GL_TEXTURE_WRAP_S,GL_CLAMP_TO_EDGE);
+        gl::TexParameteri(GL_TEXTURE_2D_ARRAY,GL_TEXTURE_WRAP_T,GL_CLAMP_TO_EDGE);
+        gl::BindTexture(GL_TEXTURE_2D_ARRAY,static_cast<GLuint>(previous));
+        if (gl::GetError()!=GL_NO_ERROR) return false;
+        size=g_size;
+        return true;
+    };
+    if (!allocate(g_materialSunSnapshot,g_materialSunSize)) return;
+    g_materialStaticReady=false;
+    if (material_receiver_preview() && g_cascadeStaticTex) {
+        bool complete=true;
+        for (int layer=0;layer<layers;++layer)
+            complete=complete && g_cascadeStaticCaptureFrameLayer[layer]==g_shadowFrameContext.serial;
+        if (complete && allocate(g_materialStaticSnapshot,g_materialStaticSize)) {
+            g_materialCopyImage(g_cascadeStaticTex,GL_TEXTURE_2D_ARRAY,0,0,0,0,
+                                g_materialStaticSnapshot,GL_TEXTURE_2D_ARRAY,0,0,0,0,
+                                g_size,g_size,layers);
+            g_materialStaticReady=gl::GetError()==GL_NO_ERROR;
+        }
+    }
+
+    g_materialCopyImage(g_sunObjectTex,GL_TEXTURE_2D_ARRAY,0,0,0,0,
+                        g_materialSunSnapshot,GL_TEXTURE_2D_ARRAY,0,0,0,0,
+                        g_size,g_size,layers);
+    if (gl::GetError()!=GL_NO_ERROR) return;
+    g_materialSunMath=g_cascadeMath;
+    g_materialSunScene=scene;
+    g_materialSunSerial=g_shadowFrameContext.serial;
+    ++g_materialReceiverAudit.snapshotCopies;
+    g_materialReceiverAudit.snapshotCpuMs+=(now_seconds()-start)*1000.0;
+}
+
+static void observe_material_receiver_candidate(bool creature, bool highlighted) {
+    if (!g_materialReceiverAuditActive || !creature || nwn_core::g_currentBucket!=2) return;
+    auto& audit=g_materialReceiverAudit;
+    ++audit.creatures;
+    if (g_materialSunSerial && g_materialSunSerial+1==g_shadowFrameContext.serial &&
+        g_materialSunScene==g_areaScene && g_materialSunSize==g_size &&
+        g_materialSunMath.valid && nwn_drawing_probe_context()==g_materialSunContext)
+        ++audit.snapshotReadyDraws;
+    if (highlighted) ++audit.highlighted;
+    if (gl::IsEnabled && gl::IsEnabled(GL_BLEND)) ++audit.blended;
+    if (g_sunObjectTex) {
+        ++audit.filteredSun;
+        const int layers=std::min(g_cascadeActiveCount,g_cascadeDynamicLayers);
+        for (int layer=0;layer<layers;++layer) {
+            if (g_sunObjectFrame[layer]==g_shadowFrameContext.serial) {
+                ++audit.sunLayersTouchedThisFrame;
+                break;
+            }
+        }
+    }
+    if (g_localObjectMapReady && g_localObjectTargetUsable && g_localObjectDepthTex &&
+        g_localObjectDepthTex!=g_localObjectWriteDepthTex)
+        ++audit.completedLocal;
+}
+#endif
+
+static bool material_receiver_preview() {
+#if defined(NWN_TAG_WORK_BENCH_DIAGNOSTIC) && !defined(_WIN32)
+    static const bool enabled=[] {
+        const char* value=shadow_getenv("NWN_MATERIAL_RECEIVER_PREVIEW");
+        return value && atoi(value)!=0;
+    }();
+    return enabled;
+#else
+    return false;
+#endif
+}
+
+#if defined(NWN_TAG_WORK_BENCH_DIAGNOSTIC) && !defined(_WIN32)
+// Read-only attachment gate. A shared attachment is necessary before checking
+// ownership of individual stencil bits or changing any stencil state.
+namespace stencil_receiver_audit {
+struct Observation {
+    GLint fbo=0, type=0, name=0, bits=0, samples=0;
+    GLint depthType=0, depthName=0, depthBits=0, readFbo=0;
+    bool composite=false;
+    unsigned count=0;
+};
+static bool active=false;
+static unsigned serial=0;
+static std::vector<Observation> observations;
+struct BucketBoundary {
+    int bucket;
+    GLint drawFbo, samples;
+    unsigned staticMask, dynamicMask, filteredSunMask;
+    bool localReady;
+};
+static std::vector<BucketBoundary> boundaries;
+
+struct CreatureDraw {
+    int bucket=0;
+    GLint program=0, depthWrite=0, blend=0, coverage=0, layerPass=-1;
+    GLint mode2=-1;
+    unsigned staticMask=0, filteredSunMask=0, count=0;
+    bool filteredLocal=false;
+};
+static std::vector<CreatureDraw> creatureDraws;
+
+static void observe_creature_draw() {
+    if (!active || !serial || serial!=g_shadowFrameContext.serial ||
+        !current_draw_is_creature() || nwn_core::g_currentBucket<0 ||
+        nwn_core::g_currentBucket==2 || g_traceCurrentScene!=g_areaScene ||
+        g_inOurPass || g_cascadeReplayActive || g_localLightPassActive ||
+        nwn_core::g_ownedPass || g_overlayPassActive ||
+        !gl::GetIntegerv || !gl::IsEnabled || !gl::GetUniformLocation) return;
+    CreatureDraw row;
+    row.bucket=nwn_core::g_currentBucket;
+    gl::GetIntegerv(GL_CURRENT_PROGRAM,&row.program);
+    if (!row.program) return;
+    gl::GetIntegerv(GL_DEPTH_WRITEMASK,&row.depthWrite);
+    row.blend=gl::IsEnabled(GL_BLEND);
+    row.coverage=gl::IsEnabled(GL_SAMPLE_ALPHA_TO_COVERAGE);
+    GLint layer=gl::GetUniformLocation(row.program,"wmLayerAlphaPass");
+    if (layer<0) layer=gl::GetUniformLocation(row.program,"wmDiagAlphaPass");
+    if (layer>=0 && gl::GetUniformfv) {
+        GLfloat value=-1.0f;
+        gl::GetUniformfv(row.program,layer,&value);
+        if (value>=0.0f && value<=16.0f) row.layerPass=static_cast<GLint>(value);
+    }
+    const GLint mode2=gl::GetUniformLocation(row.program,"nwnA2cPass");
+    if (mode2>=0 && gl::GetUniformiv) gl::GetUniformiv(row.program,mode2,&row.mode2);
+    for (int i=0;i<kCascadeCount;++i) {
+        if (g_cascadeStaticCaptureFrameLayer[i]==serial) row.staticMask|=1u<<i;
+        if (g_sunObjectTex && g_sunObjectFrame[i]==serial) row.filteredSunMask|=1u<<i;
+    }
+    row.filteredLocal=g_localObjectMapReady && g_localObjectTargetUsable &&
+                      g_localObjectDepthTex && g_localObjectDepthTex!=g_localObjectWriteDepthTex;
+    for (auto& entry:creatureDraws) {
+        if (entry.bucket==row.bucket && entry.program==row.program &&
+            entry.depthWrite==row.depthWrite && entry.blend==row.blend &&
+            entry.coverage==row.coverage && entry.layerPass==row.layerPass &&
+            entry.mode2==row.mode2 && entry.staticMask==row.staticMask &&
+            entry.filteredSunMask==row.filteredSunMask && entry.filteredLocal==row.filteredLocal) {
+            ++entry.count;
+            return;
+        }
+    }
+    if (creatureDraws.size()<128) {
+        row.count=1;
+        creatureDraws.push_back(row);
+    }
+}
+
+static void after_bucket(int bucket) {
+    if (!active || !serial || serial!=g_shadowFrameContext.serial ||
+        boundaries.size()>=64 || !gl::GetIntegerv) return;
+    BucketBoundary row{bucket,0,0,0,0,0,g_localObjectMapReady};
+    gl::GetIntegerv(GL_DRAW_FRAMEBUFFER_BINDING,&row.drawFbo);
+    gl::GetIntegerv(GL_SAMPLES,&row.samples);
+    for (int layer=0;layer<kCascadeCount;++layer) {
+        if (g_cascadeStaticCaptureFrameLayer[layer]==serial) row.staticMask|=1u<<layer;
+        if (g_cascadeDynamicCaptureFrameLayer[layer]==serial) row.dynamicMask|=1u<<layer;
+        if (g_sunObjectTex && g_sunObjectFrame[layer]==serial) row.filteredSunMask|=1u<<layer;
+    }
+    boundaries.push_back(row);
+}
+
+
+static void observe(bool composite, GLint fbo) {
+    if (!active || !gl::GetIntegerv || !gl::GetFramebufferAttachmentParameteriv) return;
+    const unsigned frame=g_shadowFrameContext.serial;
+    if (!frame) return;
+    if (!serial) serial=frame;
+    if (serial!=frame) return;
+
+    constexpr GLenum stencilBits=0x0D57;
+    constexpr GLenum stencilAttachment=0x8D20;
+    Observation found;
+    found.fbo=fbo;
+    found.composite=composite;
+    gl::GetIntegerv(stencilBits,&found.bits);
+    gl::GetIntegerv(GL_READ_FRAMEBUFFER_BINDING,&found.readFbo);
+    // GL_DEPTH is the default framebuffer attachment selector.
+    const GLenum depthAttachment=fbo ? GL_DEPTH_ATTACHMENT : 0x1801;
+    gl::GetFramebufferAttachmentParameteriv(GL_DRAW_FRAMEBUFFER,depthAttachment,
+        GL_FRAMEBUFFER_ATTACHMENT_OBJECT_TYPE,&found.depthType);
+    if (found.depthType!=GL_NONE) {
+        gl::GetFramebufferAttachmentParameteriv(GL_DRAW_FRAMEBUFFER,depthAttachment,
+            0x8216,&found.depthBits); // GL_FRAMEBUFFER_ATTACHMENT_DEPTH_SIZE
+        if (fbo)
+            gl::GetFramebufferAttachmentParameteriv(GL_DRAW_FRAMEBUFFER,depthAttachment,
+                GL_FRAMEBUFFER_ATTACHMENT_OBJECT_NAME,&found.depthName);
+    }
+    gl::GetIntegerv(GL_SAMPLES,&found.samples);
+    if (fbo) {
+        gl::GetFramebufferAttachmentParameteriv(GL_DRAW_FRAMEBUFFER,stencilAttachment,
+            GL_FRAMEBUFFER_ATTACHMENT_OBJECT_TYPE,&found.type);
+        if (found.type!=GL_NONE)
+            gl::GetFramebufferAttachmentParameteriv(GL_DRAW_FRAMEBUFFER,stencilAttachment,
+                GL_FRAMEBUFFER_ATTACHMENT_OBJECT_NAME,&found.name);
+    }
+    for (auto& observation:observations) {
+        if (observation.fbo==found.fbo && observation.type==found.type &&
+            observation.name==found.name && observation.bits==found.bits &&
+            observation.samples==found.samples && observation.composite==found.composite &&
+            observation.depthType==found.depthType && observation.depthName==found.depthName &&
+            observation.depthBits==found.depthBits && observation.readFbo==found.readFbo) {
+            ++observation.count;
+            return;
+        }
+    }
+    found.count=1;
+    observations.push_back(found);
+}
+}
+#endif
+
+#if defined(NWN_TAG_WORK_BENCH_DIAGNOSTIC) && !defined(_WIN32)
+namespace creature_coverage {
+static bool active=false;
+static GLint framebuffer=0;
+struct Counts { unsigned seen=0, owner=0, blend=0, depthDisabled=0, coverage=0, target=0, shader=0, depthWrite=0, submitted=0; };
+static Counts counts;
+static bool shade_preview() {
+    static const bool value=[] {
+        const char* flag=shadow_getenv("NWN_CREATURE_FILTERED_SHADE_PREVIEW");
+        return flag && atoi(flag)!=0 && creature_filtered_sun_requested();
+    }();
+    return value;
+}
+static bool completed_sun() {
+    if (!g_sunObjectTex || !g_cascadeStaticTex || !g_shadowFrameContext.valid ||
+        !g_cascadeMath.valid) return false;
+    const int layers=std::min(g_cascadeActiveCount,g_cascadeDynamicLayers);
+    if (layers<=0 || layers>kCascadeCount) return false;
+    for (int i=0;i<layers;++i)
+        if (g_sunObjectFrame[i]!=g_shadowFrameContext.serial ||
+            g_cascadeStaticCaptureFrameLayer[i]!=g_shadowFrameContext.serial)
+            return false;
+    return true;
+}
+static bool enabled() {
+    static const bool value=[] {
+        const char* flag=shadow_getenv("NWN_CREATURE_COVERAGE_PREVIEW");
+        return flag && atoi(flag)!=0;
+    }();
+    return value || shade_preview();
+}
+static GLint nativeTint=-1;
+static GLuint nativeTintProgram=0;
+
+static void begin_native_tint() {
+    if (!enabled() || shade_preview() || nativeTint>=0 || !current_draw_is_creature() ||
+        nwn_core::g_currentBucket!=3 || g_traceCurrentScene!=g_areaScene ||
+        g_inOurPass || g_cascadeReplayActive || g_localLightPassActive ||
+        nwn_core::g_ownedPass || g_overlayPassActive || !gl::GetIntegerv ||
+        !gl::GetUniformLocation || !gl::Uniform1i || !gl::GetUniformiv ||
+        !gl::IsEnabled || !gl::IsEnabled(GL_SAMPLE_ALPHA_TO_COVERAGE)) return;
+    GLint program=0;
+    gl::GetIntegerv(GL_CURRENT_PROGRAM,&program);
+    if (!program) return;
+    const GLint mode=gl::GetUniformLocation(program,"nwnA2cPass");
+    GLint pass=0;
+    if (mode>=0) gl::GetUniformiv(program,mode,&pass);
+    if (pass!=1) return;
+    const GLint tint=gl::GetUniformLocation(program,"nwnCreatureCoverage");
+    if (tint<0) return;
+    nativeTint=tint;
+    nativeTintProgram=static_cast<GLuint>(program);
+    gl::Uniform1i(tint,1);
+    static unsigned reports=0;
+    if (reports++<6)
+        fprintf(stderr,"[creature-coverage-native] frame=%u program=%d mode2=1\n",
+                g_shadowFrameContext.serial,program);
+}
+
+static void end_native_tint() {
+    if (nativeTint<0) return;
+    GLint program=0;
+    gl::GetIntegerv(GL_CURRENT_PROGRAM,&program);
+    if (static_cast<GLuint>(program)==nativeTintProgram) gl::Uniform1i(nativeTint,0);
+    nativeTint=-1;
+}
+
+static bool inject(std::string& source) {
+    if (!enabled() ||
+        source.find("out vec4 compat_glFragColor;")==std::string::npos ||
+        source.find("gl_FragDepth")!=std::string::npos) return false;
+    const auto main=source.rfind("void main");
+    if (main==std::string::npos) return false;
+    source.replace(main+5,4,"nwnCoverageNativeMain");
+    source+="\nuniform int nwnCreatureCoverage;"
+            "\nvoid main(){nwnCoverageNativeMain();"
+            "if(nwnCreatureCoverage==1)compat_glFragColor.rgb=vec3(1.0,0.0,1.0);";
+    if (source.find("float nwnA2cDirectionalShadow()")!=std::string::npos)
+        source+="if(nwnCreatureCoverage==2)compat_glFragColor.rgb*="
+                "min(nwnA2cDirectionalShadow(),nwnA2cLocalShadow());";
+    source+="}\n";
+    return true;
+}
+template<class Draw> static void submit(Draw draw) {
+    ++counts.seen;
+    if (!current_draw_is_creature()) { ++counts.owner; return; }
+    if (gl::IsEnabled(GL_BLEND)) ++counts.blend;
+    const bool depthEnabled=gl::IsEnabled(GL_DEPTH_TEST);
+    if (!depthEnabled) ++counts.depthDisabled;
+    // Leave the engine's alpha-to-coverage mask intact. The tint only changes RGB.
+    if (gl::IsEnabled(GL_SAMPLE_ALPHA_TO_COVERAGE)) ++counts.coverage;
+    GLint target=0,program=0,depthFunc=0;
+    gl::GetIntegerv(GL_DRAW_FRAMEBUFFER_BINDING,&target);
+    gl::GetIntegerv(GL_CURRENT_PROGRAM,&program);
+    if (target!=framebuffer || !program) { ++counts.target; return; }
+    const GLint tint=gl::GetUniformLocation(program,"nwnCreatureCoverage");
+    if (tint<0 || !gl::GetBooleani_v || !gl::ColorMaski) { ++counts.shader; return; }
+    const bool shade=shade_preview();
+    if (shade && (!completed_sun() || !nwn_shadow_begin_a2c_receiver(program))) return;
+    GLboolean colourMask[4]={};
+    gl::GetBooleani_v(GL_COLOR_WRITEMASK,0,colourMask);
+    gl::ColorMaski(0,GL_TRUE,GL_TRUE,GL_TRUE,GL_FALSE);
+    GLboolean depthWrite=GL_FALSE;
+    gl::GetBooleanv(GL_DEPTH_WRITEMASK,&depthWrite);
+    if (!depthWrite) ++counts.depthWrite;
+    gl::GetIntegerv(GL_DEPTH_FUNC,&depthFunc);
+    gl::Uniform1i(tint,shade ? 2 : 1);
+    if (!depthEnabled) gl::Enable(GL_DEPTH_TEST);
+    gl::DepthFunc(0x0202); // GL_EQUAL
+    gl::DepthMask(GL_FALSE);
+    draw();
+    gl::ColorMaski(0,colourMask[0],colourMask[1],colourMask[2],colourMask[3]);
+    gl::DepthMask(depthWrite);
+    gl::DepthFunc(static_cast<GLenum>(depthFunc));
+    if (!depthEnabled) gl::Disable(GL_DEPTH_TEST);
+    gl::Uniform1i(tint,0);
+    if (shade) nwn_shadow_end_a2c_receiver();
+    ++counts.submitted;
+}
+}
+#endif
+
 static void begin_sun_receiver_tag() {
     SunTagBufferEligibility bufferEligibility;
     tag_work::BeginDraw beginTiming;
     if(!tag_buffer_lease::safe_context())return;
-    if (g_shadowStageSkipTags || g_sunTagBorrowed || !g_receiverEnabled || g_inOurPass || g_cascadeReplayActive ||
+    if (material_receiver_preview() || g_shadowStageSkipTags || g_sunTagBorrowed || !g_receiverEnabled || g_inOurPass || g_cascadeReplayActive ||
         g_localLightPassActive || g_overlayPassActive || nwn_core::g_ownedPass ||
         g_inStencilShadow || !g_shadowFrameContext.valid || !g_traceFrameActive ||
         g_traceCurrentScene != g_areaScene || nwn_core::g_currentBucket < 0 || !gl::DrawBuffers ||
@@ -332,7 +759,12 @@ static void begin_sun_receiver_tag() {
     bool highlighted=false;
     { tag_work::Timer timing(tag_work::Classification);
       highlighted=current_draw_is_highlighted();
-      gl::Uniform1i(kind,(current_draw_is_creature()?1:0)|(highlighted?2:0)); }
+      const bool creature=current_draw_is_creature();
+      gl::Uniform1i(kind,(creature?1:0)|(highlighted?2:0));
+#if defined(NWN_TAG_WORK_BENCH_DIAGNOSTIC) && !defined(_WIN32)
+      observe_material_receiver_candidate(creature,highlighted);
+#endif
+    }
     if (highlighted) {
         static bool reportedHighlight = false;
         if (!reportedHighlight) {

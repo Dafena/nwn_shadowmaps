@@ -807,6 +807,114 @@ extern "C" const void* DrawBucketGetNextItem_detour(void* self, int bucket,
     return item;
 }
 
+#if defined(NWN_TAG_WORK_BENCH_DIAGNOSTIC) && !defined(_WIN32)
+static void creature_coverage_boundary(void* scene,int bucket) {
+    static bool failed=false;
+    if (failed) return;
+    if (!creature_coverage::enabled() || kReceiverTagsEnabled ||
+        scene!=g_areaScene || !g_shadowFrameContext.valid || !g_traceFrameActive ||
+        g_guardArmed || !gl::GetIntegerv || !gl::GetBooleanv || !gl::IsEnabled ||
+        !gl::DepthFunc || !gl::DepthMask || !gl::Enable || !gl::Disable || !gl::GetUniformLocation || !gl::Uniform1i)
+        return;
+    static unsigned sourceFrame=0, lastPreview=0;
+    static GLint sourceFbo=0, sourceViewport[4]={};
+    static float sourceView[16]={}, sourceProjection[16]={};
+    auto* view=mtx_entry(MTX_VIEW);
+    auto* projection=mtx_entry(MTX_PROJ);
+    if (!view || !projection || !eng::SetMatrixMode || !eng::FlagDirty || !eng::CurMtxIdx)
+        return;
+    const unsigned serial=g_shadowFrameContext.serial;
+    if (!serial) return;
+    if (bucket==2) {
+        sourceFrame=serial;
+        gl::GetIntegerv(GL_DRAW_FRAMEBUFFER_BINDING,&sourceFbo);
+        gl::GetIntegerv(GL_VIEWPORT,sourceViewport);
+        std::memcpy(sourceView,view,sizeof(sourceView));
+        std::memcpy(sourceProjection,projection,sizeof(sourceProjection));
+        return;
+    }
+    if (bucket!=4 || lastPreview==serial || sourceFrame!=serial || !sourceFbo) return;
+    GLint fbo=0,viewport[4]={},samples=0;
+    gl::GetIntegerv(GL_DRAW_FRAMEBUFFER_BINDING,&fbo);
+    gl::GetIntegerv(GL_VIEWPORT,viewport);
+    gl::GetIntegerv(GL_SAMPLES,&samples);
+    if (fbo!=sourceFbo || samples!=4 || std::memcmp(viewport,sourceViewport,sizeof(viewport)) ||
+        std::memcmp(view,sourceView,sizeof(sourceView)) ||
+        std::memcmp(projection,sourceProjection,sizeof(sourceProjection))) return;
+
+    constexpr GLenum samplesPassed=0x8914, currentQuery=0x8865, resultAvailable=0x8867;
+    using GetQuery=void (*)(GLenum,GLenum,GLint*);
+    static const auto getQuery=reinterpret_cast<GetQuery>(dlsym(RTLD_NEXT,"glGetQueryiv"));
+    static GLuint coverageQuery=0;
+    static unsigned queryFrame=0, queryDraws=0, queryReports=0;
+    static std::uintptr_t queryContext=0;
+    const auto context=nwn_drawing_probe_context();
+    if (queryFrame && context==queryContext) {
+        GLuint ready=0;
+        gl::GetQueryObjectuiv(coverageQuery,resultAvailable,&ready);
+        if (ready) {
+            GLuint samplesPassedCount=0;
+            gl::GetQueryObjectuiv(coverageQuery,GL_QUERY_RESULT,&samplesPassedCount);
+            fprintf(stderr,"[creature-coverage-samples] frame=%u submitted=%u passed=%u\n",
+                    queryFrame,queryDraws,samplesPassedCount);
+            queryFrame=0;
+            if (queryDraws) ++queryReports;
+        }
+    }
+    bool measuring=false;
+    if (!queryFrame && queryReports<4 && context && (!queryContext || context==queryContext) &&
+        getQuery && gl::GenQueries && gl::BeginQuery && gl::EndQuery && gl::GetQueryObjectuiv) {
+        GLint busy=0;
+        getQuery(samplesPassed,currentQuery,&busy);
+        if (!busy) {
+            if (!coverageQuery) gl::GenQueries(1,&coverageQuery);
+            if (coverageQuery) {
+                queryContext=context;
+                measuring=true;
+            }
+        }
+    }
+
+    lastPreview=serial;
+    SavedState outer;
+    save_state(outer);
+    const int originalMode=*eng::CurMtxIdx;
+    const bool previousPass=g_inOurPass;
+    const auto* previousLabel=g_faultLabel;
+    g_faultLabel="creature-coverage-preview";
+    g_inOurPass=true;
+    creature_coverage::framebuffer=fbo;
+    creature_coverage::counts={};
+    creature_coverage::active=true;
+    if (measuring) gl::BeginQuery(samplesPassed,coverageQuery);
+    const bool ok=guarded_render_bucket(scene,2);
+    if (measuring) {
+        gl::EndQuery(samplesPassed);
+        queryFrame=serial;
+        queryDraws=creature_coverage::counts.submitted;
+    }
+    creature_coverage::active=false;
+    g_inOurPass=previousPass;
+    g_faultLabel=previousLabel;
+
+    eng::SetMatrixMode(MTX_VIEW);
+    std::memcpy(view,sourceView,sizeof(sourceView));
+    eng::FlagDirty();
+    eng::SetMatrixMode(MTX_PROJ);
+    std::memcpy(projection,sourceProjection,sizeof(sourceProjection));
+    eng::FlagDirty();
+    eng::SetMatrixMode(originalMode);
+    restore_state(outer);
+    if (!ok) failed=true;
+    static unsigned reports=0;
+    if (reports++<3 || !ok) {
+        const auto& c=creature_coverage::counts;
+        fprintf(stderr,"[creature-coverage-preview] frame=%u fbo=%d samples=%d seen=%u rejected_owner=%u blend_enabled=%u depth_test_was_off=%u alpha_to_coverage=%u rejected_target=%u rejected_shader=%u depth_write_was_off=%u submitted=%u ok=%d\n",
+                serial,fbo,samples,c.seen,c.owner,c.blend,c.depthDisabled,c.coverage,c.target,c.shader,c.depthWrite,c.submitted,int(ok));
+    }
+}
+#endif
+
 extern "C" void SceneRenderDrawBucket_trace_detour(void* self, int bucket) {
     // CRITICAL: any injector pass that drives geometry through
     // guarded_render_bucket() calls eng::SceneRenderDrawBucket(), which is
@@ -821,7 +929,11 @@ extern "C" void SceneRenderDrawBucket_trace_detour(void* self, int bucket) {
     //    full 4-layer cascade replay per local-light bucket.
     // Neither re-entrant call needs anything below: the light transform is
     // applied by the caller through the matrix stack. Just draw and return.
-    if (g_cascadeReplayActive || g_localLightPassActive) {
+    if (g_cascadeReplayActive || g_localLightPassActive
+#if defined(NWN_TAG_WORK_BENCH_DIAGNOSTIC) && !defined(_WIN32)
+        || creature_coverage::active
+#endif
+    ) {
         g_currentDrawOwnerKind = DrawOwnerKind::Unknown;
         g_currentDrawOwner = nullptr;
         CALL_ORIGINAL(g_hookTraceBucket, eng::SceneRenderDrawBucket, self, bucket);
@@ -956,6 +1068,10 @@ extern "C" void SceneRenderDrawBucket_trace_detour(void* self, int bucket) {
     // the callee via the flag it sets around its own bucket calls).
     if (self == g_areaScene && !g_localLightPassActive)
         { draw_cpu_probe::Timer timing(draw_cpu_probe::LocalReplay); replay_bucket_into_local_light_layers(self, bucket); }
+#if defined(NWN_TAG_WORK_BENCH_DIAGNOSTIC) && !defined(_WIN32)
+    if (self==g_areaScene) stencil_receiver_audit::after_bucket(bucket);
+    creature_coverage_boundary(self,bucket);
+#endif
     if (capture) dump_cascade_camera_capture_once();
     if (census) {
         g_traceGeometryActive = false;

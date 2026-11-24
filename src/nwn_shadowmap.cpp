@@ -1565,12 +1565,15 @@ static bool resolve_symbols() {
 }
 #endif
 
+// Legacy receiver tags are retained only for historical regression fixtures.
+static constexpr bool kReceiverTagsEnabled=false;
 #include "shadow_targets.inc"
 #include "shadow_local_capture_demand.inc"
 #include "shadow_script_env.inc"
 #include "shadow_drawing_probe.inc"
 #include "shadow_diagnostics_settings.inc"
 static void restore_engine_program(GLuint program);
+#include "shadow_tag_work.inc"
 #include "shadow_replay.inc"
 // ===========================================================================
 //  Phase 1: bind, clear, restore. Proves the target stays healthy every frame.
@@ -2286,7 +2289,6 @@ static bool set_light_view_direct(const Vec3f& eye, const float dir[3]) {
 }
 
 #include "weather_runtime.inc"
-#include "shadow_tag_work.inc"
 #include "shadow_tag_buffer_lease.h"
 #include "shadow_receiver_tags.inc"
 #include "shadow_tag_buffer_lease.inc"
@@ -2392,9 +2394,40 @@ A2cShadowLocations* a2c_shadow_locations(GLuint program) {
 }
 } // namespace
 
+#if defined(NWN_TAG_WORK_BENCH_DIAGNOSTIC) && !defined(_WIN32)
+static bool g_materialPreviewBinding=false;
+static GLint g_materialPreviewPass=-1;
+static GLuint g_materialPreviewProgram=0;
+#endif
+
 bool nwn_shadow_begin_a2c_receiver(unsigned int rawProgram) {
     draw_cpu_probe::Timer timing(draw_cpu_probe::AlphaBegin);
     const GLuint program = (GLuint)rawProgram;
+    const CascadeMathState* receiverMath=&g_cascadeMath;
+    GLuint receiverStatic=g_cascadeStaticTex;
+    GLuint receiverDynamic=g_cascadeDynamicTex;
+    bool inlineStaticReady=false;
+    GLuint receiverLocal=g_localLightDepthTex;
+    bool inlineCreature=false;
+#if defined(NWN_TAG_WORK_BENCH_DIAGNOSTIC) && !defined(_WIN32)
+    const bool currentFiltered=creature_coverage::shade_preview() &&
+        current_draw_is_creature() &&
+        (creature_coverage::active || nwn_core::g_currentBucket==3);
+    if (currentFiltered && !creature_coverage::completed_sun()) return false;
+    inlineCreature=g_materialPreviewBinding || currentFiltered;
+    if (currentFiltered) {
+        inlineStaticReady=true;
+        receiverDynamic=g_sunObjectTex;
+        receiverLocal=g_localObjectDepthTex;
+    }
+    if (g_materialPreviewBinding) {
+        receiverMath=&g_materialSunMath;
+        inlineStaticReady=g_materialStaticReady;
+        receiverStatic=inlineStaticReady ? g_materialStaticSnapshot : g_materialSunSnapshot;
+        receiverDynamic=g_materialSunSnapshot;
+        receiverLocal=g_localObjectDepthTex;
+    }
+#endif
     if (!program || g_a2cShadowBorrowed || !g_receiverEnabled ||
         !g_cascadeCompositeShadows || !g_cascadeCsmStaticReceiver ||
         !g_cascadeTargetsUsable || !g_cascadeStaticTex ||
@@ -2424,20 +2457,22 @@ bool nwn_shadow_begin_a2c_receiver(unsigned int rawProgram) {
     gl::GetIntegerv(GL_ACTIVE_TEXTURE, &g_a2cShadowOldActive);
     gl::ActiveTexture(GL_TEXTURE0 + kStaticUnit);
     gl::GetIntegerv(GL_TEXTURE_BINDING_2D_ARRAY, &g_a2cShadowOldStatic);
-    gl::BindTexture(GL_TEXTURE_2D_ARRAY, g_cascadeStaticTex);
+    gl::BindTexture(GL_TEXTURE_2D_ARRAY, receiverStatic);
     gl::ActiveTexture(GL_TEXTURE0 + kDynamicUnit);
     gl::GetIntegerv(GL_TEXTURE_BINDING_2D_ARRAY, &g_a2cShadowOldDynamic);
-    gl::BindTexture(GL_TEXTURE_2D_ARRAY, g_cascadeDynamicTex);
+    gl::BindTexture(GL_TEXTURE_2D_ARRAY, receiverDynamic);
     gl::ActiveTexture(GL_TEXTURE0 + kLocalUnit);
     gl::GetIntegerv(GL_TEXTURE_BINDING_2D_ARRAY, &g_a2cShadowOldLocal);
     // Ground-only mode composites this term once after the alpha bucket and
     // before characters. Applying it directly in A2C as well would darken the
     // same resolved surface twice.
-    const bool localReady = !g_localLightGroundOnly &&
+    const bool localReady = (inlineCreature ? g_localObjectMapReady && g_localObjectTargetUsable &&
+                             receiverLocal && receiverLocal!=g_localObjectWriteDepthTex
+                                           : !g_localLightGroundOnly) &&
                             g_localLightReceiver && g_localLightTargetUsable &&
                             g_localLightDepthTex && g_haveLocalLightVP &&
                             g_localDeselectFadeShown > 0.0005f;
-    gl::BindTexture(GL_TEXTURE_2D_ARRAY, localReady ? g_localLightDepthTex
+    gl::BindTexture(GL_TEXTURE_2D_ARRAY, localReady ? receiverLocal
                                                     : g_cascadeStaticTex);
     gl::ActiveTexture((GLenum)g_a2cShadowOldActive);
     g_a2cShadowBorrowed = true;
@@ -2453,10 +2488,12 @@ bool nwn_shadow_begin_a2c_receiver(unsigned int rawProgram) {
     gl::UniformMatrix4fv(l->cameraView, 1, GL_FALSE,
                          g_shadowFrameContext.view);
     gl::UniformMatrix4fv(l->lightVp, kCascadeCount, GL_FALSE,
-                         &g_cascadeMath.lightVP[0][0]);
-    gl::Uniform4f(l->clipFar, g_cascadeMath.clipFar[0],
-                  g_cascadeMath.clipFar[1], g_cascadeMath.clipFar[2],
-                  g_cascadeMath.clipFar[3]);
+                         &receiverMath->lightVP[0][0]);
+    const int last=inlineCreature ?
+        std::max(0,std::min(g_cascadeActiveCount,g_cascadeDynamicLayers)-1) : 3;
+    const auto& split=receiverMath->clipFar;
+    gl::Uniform4f(l->clipFar,split[0],split[std::min(1,last)],
+                  split[std::min(2,last)],split[last]);
     gl::Uniform4f(l->viewport,
                   (GLfloat)g_shadowFrameContext.viewport[0],
                   (GLfloat)g_shadowFrameContext.viewport[1],
@@ -2464,7 +2501,7 @@ bool nwn_shadow_begin_a2c_receiver(unsigned int rawProgram) {
                   (GLfloat)g_shadowFrameContext.viewport[3]);
     if (l->dynamicLayers >= 0)
         gl::Uniform1i(l->dynamicLayers,
-                      g_cascadeCsmDynamicReceiver ? g_cascadeDynamicLayers : 0);
+                      (inlineCreature ? inlineStaticReady : g_cascadeCsmDynamicReceiver) ? g_cascadeDynamicLayers : 0);
     // Creature A2C (including rigid/part-based heads) is present in completed
     // scene depth and receives the fullscreen sun composite with its body.
     // Multiplying sun visibility here too makes hair/head darker than the
@@ -2472,7 +2509,7 @@ bool nwn_shadow_begin_a2c_receiver(unsigned int rawProgram) {
     // and its local-light path; give its directional term one receiver owner.
     const bool nativeHighlight = current_draw_is_highlighted();
     const bool creatureComposite = nativeHighlight ||
-        (current_draw_is_creature() && g_receiverDebug != 7);
+        (!inlineCreature && current_draw_is_creature() && g_receiverDebug != 7);
     gl::Uniform1f(l->strength, creatureComposite ? 0.0f : effective_area_sun_strength());
     if (current_draw_is_creature()) {
         static int reportedCreatureMode = -1;
@@ -2485,7 +2522,7 @@ bool nwn_shadow_begin_a2c_receiver(unsigned int rawProgram) {
         }
     }
     if (l->bias >= 0)  gl::Uniform1f(l->bias, g_cascadeReceiverBias);
-    if (l->blend >= 0) gl::Uniform1f(l->blend, g_cascadeBlendWidth);
+    if (l->blend >= 0) gl::Uniform1f(l->blend, inlineCreature ? 0.0f : g_cascadeBlendWidth);
     if (l->pcf >= 0)   gl::Uniform1f(l->pcf, g_cascadePcfRadius);
     if (l->selfIllumGuard >= 0)
         gl::Uniform1f(l->selfIllumGuard,
@@ -2618,6 +2655,53 @@ void nwn_shadow_end_a2c_receiver(void) {
     g_a2cShadowBorrowed = false;
 }
 
+#if defined(NWN_TAG_WORK_BENCH_DIAGNOSTIC) && !defined(_WIN32)
+static void begin_material_receiver_preview() {
+    if (g_materialPreviewPass>=0 || g_a2cShadowBorrowed || !g_curProgram ||
+        g_inOurPass || nwn_core::g_ownedPass || g_overlayPassActive ||
+        g_cascadeReplayActive || g_localLightPassActive || g_sunObjectCaptureActive ||
+        !g_traceFrameActive || g_traceCurrentScene!=g_areaScene ||
+        nwn_core::g_currentBucket!=2 || !current_draw_is_creature() ||
+        current_draw_is_highlighted() || !gl::IsEnabled || gl::IsEnabled(GL_BLEND) ||
+        gl::IsEnabled(GL_SAMPLE_ALPHA_TO_COVERAGE) || !gl::GetBooleanv ||
+        !gl::GetUniformLocation || !gl::GetUniformiv || !gl::Uniform1i ||
+        !g_materialSunSerial || g_materialSunSerial+1!=g_shadowFrameContext.serial ||
+        g_materialSunScene!=g_areaScene || g_materialSunSize!=g_size ||
+        nwn_drawing_probe_context()!=g_materialSunContext)
+        return;
+    GLboolean depthWrite=GL_FALSE;
+    gl::GetBooleanv(GL_DEPTH_WRITEMASK,&depthWrite);
+    if (!depthWrite) return;
+    const GLint pass=gl::GetUniformLocation(g_curProgram,"nwnA2cPass");
+    if (pass<0) return;
+    GLint previous=0;
+    gl::GetUniformiv(g_curProgram,pass,&previous);
+    if (previous!=0) return;
+
+    g_materialPreviewBinding=true;
+    const bool bound=nwn_shadow_begin_a2c_receiver(g_curProgram);
+    g_materialPreviewBinding=false;
+    if (!bound) return;
+    g_materialPreviewPass=pass;
+    g_materialPreviewProgram=g_curProgram;
+    gl::Uniform1i(pass,1);
+    static bool reported=false;
+    if (!reported) {
+        reported=true;
+        fprintf(stderr,"[material-receiver-preview] inline creature shading active static_snapshot=%d sun_strength=%.3f local_slots=%u filtered_local=%d\n",
+                int(g_materialStaticReady),effective_area_sun_strength(),
+                g_localLightSlotCount,int(g_localObjectMapReady));
+    }
+}
+static void end_material_receiver_preview() {
+    if (g_materialPreviewPass<0) return;
+    if (g_curProgram==g_materialPreviewProgram) gl::Uniform1i(g_materialPreviewPass,0);
+    nwn_shadow_end_a2c_receiver();
+    g_materialPreviewPass=-1;
+}
+#endif
+
+
 bool nwn_core_replay_bucket(void* scene, int bucket) {
     if (!scene || !eng::SceneRenderDrawBucket) return false;
     const bool priorReplay = g_cascadeReplayActive;
@@ -2725,16 +2809,6 @@ extern "C" void SceneRender_detour(void* self) {
         caster_census::TimingScope casterTiming(self);
         caster_census::Scope casterCensus(self);
         if(self==g_areaScene)(void)local_capture_demand::allow();
-#if !defined(_WIN32) && !defined(NWN_TAG_WORK_BENCH_DIAGNOSTIC)
-        // Install only with a selected native world context. Incomplete
-        // coverage leaves the accepted per-draw selection path intact.
-        static bool selectionLeaseAttempted=false;
-        if(!selectionLeaseAttempted && self==g_areaScene && g_shadowFrameContext.valid){
-            selectionLeaseAttempted=true;
-            if(!tag_buffer_lease::install())
-                fprintf(stderr,"[tag-buffer-lease] unavailable; per-draw selection retained\n");
-        }
-#endif
         wet_film_profile::Scope wetFilmScope(self);
         shadow_stage_profile::Scope stageScope(self);
         tag_work_benchmark::Scope tagBenchmark(self);
@@ -2762,7 +2836,7 @@ extern "C" void SceneRender_detour(void* self) {
         const bool mainScene = g_frameDrawCalls > 100;
         wetFilmScope.mark_world(mainScene);
         stageScope.mark_world(mainScene);
-        finish_sun_receiver_tag_batch();
+        if constexpr (kReceiverTagsEnabled) finish_sun_receiver_tag_batch();
         tagBenchmark.mark_world(mainScene);
         tagBenchmark.native_end();
         nativeTimer.end();
@@ -2778,6 +2852,13 @@ extern "C" void SceneRender_detour(void* self) {
             gl::GetIntegerv(GL_SAMPLES, &g_fbSamples);
             gl::GetIntegerv(GL_VIEWPORT, g_fbViewport);
         }
+#if defined(NWN_TAG_WORK_BENCH_DIAGNOSTIC) && !defined(_WIN32)
+        if (mainScene && material_receiver_preview() && !g_materialCopyImage) {
+            static bool attempted=false;
+            if (!attempted) { attempted=true; configure_material_sun_audit(); }
+        }
+        if (mainScene) snapshot_material_sun(self);
+#endif
         const double tRecv0 = now_seconds();
         { shadow_stage_profile::Timer timer(shadow_stage_profile::Receiver);
           shadow_stage_profile::finalReceiver=true;

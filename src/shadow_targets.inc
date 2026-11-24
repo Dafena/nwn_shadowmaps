@@ -424,6 +424,18 @@ static bool cascade_targets_requested() {
 // static/dynamic GL_TEXTURE_2D_ARRAY depth maps, four layers each, with
 // hardware comparison sampling.  No engine draw is redirected here yet.  That
 // separation needs a verified classification point, not a bucket heuristic.
+static bool creature_filtered_sun_requested() {
+#if defined(NWN_TAG_WORK_BENCH_DIAGNOSTIC) && !defined(_WIN32)
+    static const bool enabled=[] {
+        const char* value=shadow_getenv("NWN_CREATURE_FILTERED_SUN_TEST");
+        return value && atoi(value)!=0;
+    }();
+    return enabled;
+#else
+    return false;
+#endif
+}
+
 static void create_cascade_targets() {
     if (!cascade_targets_requested() || g_cascadeTargetsUsable ||
         !gl::TexImage3D || !gl::FramebufferTextureLayer) return;
@@ -451,7 +463,8 @@ static void create_cascade_targets() {
     };
     make_array(g_cascadeStaticTex);
     make_array(g_cascadeDynamicTex);
-    make_array(g_sunObjectTex);
+    const bool filteredSun=creature_filtered_sun_requested();
+    if (filteredSun) make_array(g_sunObjectTex);
 
     auto make_fbo = [&](GLuint& fbo, GLuint tex, const char* label) -> bool {
         gl::GenFramebuffers(1, &fbo);
@@ -476,7 +489,7 @@ static void create_cascade_targets() {
     };
     const bool staticOK = make_fbo(g_cascadeStaticFbo, g_cascadeStaticTex, "static");
     const bool dynamicOK = make_fbo(g_cascadeDynamicFbo, g_cascadeDynamicTex, "dynamic");
-    const bool objectOK = make_fbo(g_sunObjectFbo, g_sunObjectTex, "non-creature dynamic");
+    const bool objectOK = !filteredSun || make_fbo(g_sunObjectFbo, g_sunObjectTex, "non-creature dynamic");
     g_cascadeTargetsUsable = staticOK && dynamicOK && objectOK && gl::GetError() == GL_NO_ERROR;
 
     gl::BindFramebuffer(GL_FRAMEBUFFER, (GLuint)prevFBO);

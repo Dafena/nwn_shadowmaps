@@ -320,3 +320,96 @@ cover shipping/developer defaults and script overrides. Windows proxy/game expor
 verification passes. win/version.dll SHA256 0272a74ce76fc944d140485517eb689cd3a107eab3112fa4cf5613812334ef87.
 No deployment to the installed game DLL or native Windows visual test claimed;
 maintainer should compare a lightly fogged area and a dense-fog area.
+
+## Native Linux camera-turn profiling
+
+The opt-in stage profiler accepts mode 3 for a motion capture using configured
+tagging, or mode 4 for a diagnostic tag bypass. With
+NWN_SHADOW_STAGE_PROFILE=1, write "<game PID> 3" to
+/tmp/nwn-shadow-stage-profile.start and repeat the camera turn during the
+15-second capture (first two seconds are warm-up). Keep the same area,
+projection and viewport. Use mode 4 on an otherwise matched run to estimate
+the upper bound of tagging savings. Tag bypass is for diagnosis only.
+
+The [shadow-motion] CSV rows include frame number, camera motion, native and
+sun replay draw counts, cascade hit/refit reasons and CPU/GPU stage timings.
+The interval belongs to the preceding frame. Join by frame number rather than
+log row order, since GPU results can arrive out of order. Check reported
+pending/dropped rows before interpreting tail latency. These are scene-entry
+intervals and stage timings, not presentation timestamps.
+
+The existing Windows-only local replay cull checks caster origin. Do not reuse
+that as verified mesh bounds on Linux. The next runtime step is capture in rainy
+Balamb and test2 to rank refit, replay and tagging costs before changing them.
+
+## City tagging CPU attribution (2026-11-23)
+
+Matched shipping A/B at ~2860 native draws: bypass saves 2.2–2.3 ms median
+scene CPU, with 0.06–0.16 ms reduction in the GPU interval. Tagging restored.
+The separate tag-bench attribution capture (309 sampled frames) ranks
+framebuffer completeness validation first inside tag setup (3.42 ms estimated),
+ahead of basic state (0.77), texture checks (0.73), draw-buffer reads (0.53)
+and classification (0.19). These sampled costs overlap and are not shipping
+savings estimates. Diagnostic replay and weather CPU numbers also warrant
+matched isolation. Evaluate the existing repeated-validation candidate only
+as a diagnostic ceiling before designing mutation-tracked reuse.
+
+## Replay CPU breakdown
+
+The city diagnostic master ON/OFF/ON scene CPU was 37.24 / 8.53 / 37.68 ms.
+Sun engine bucket calls accounted for 6.58–6.67 ms and local engine bucket
+calls 4.46–4.54 ms with master ON. The new diagnostic build reports inclusive
+sun/local draw-wrapper time and nested downstream GL submission CPU time.
+Use matched captures to locate the remaining engine work. These intervals
+can nest and GL submission CPU time can include driver stalls. Do not add
+these rows to their parent replay totals or interpret them as GPU timings.
+
+## Shipping-weather binding comparison (2026-11-23)
+
+Diagnostic mode 9 reduced sampled weather binding CPU from 3.91–3.94 ms
+to 0.48 ms, but median frame intervals stayed around 38 ms. Compare modes
+3 and 9 in the shipping configuration before deciding whether to retain it.
+Build the separate artifact with make deploy
+DEPLOY_TARGET=libnwn_shadowmap_weather_ab.so DEPLOY_DIR=build-weather-ab
+(on one command line). Launch with NWN_SHADOW_STAGE_PROFILE=1 and select
+that artifact via NWN_SHADOWMAP_LIBRARY. Mode 9 stays off outside captures.
+Verify nonzero batched calls, full rain, matched draw counts and stationary
+camera. Compare median and p95 frame intervals across alternating runs.
+
+## Tag-free material receiver feasibility
+
+Mode 10 found 58,236 tagged bucket-2 creature draws with completed filtered
+local maps, no current-frame filtered sun layers, no blended or highlighted
+draws, and MSAA off. Mode 11 additionally copies completed filtered sun layers
+after the selected world scene into a private depth array and pairs the copy
+with cascade transforms. It reports CPU submission time and next-frame draw
+availability. Compare 10/11 frame timings to capture GPU impact as well.
+This is a snapshot experiment only. Inline sampling, static sun generation
+handling, hover coverage, and shipping cutover still require validation.
+
+## Receiver tags removed from normal rendering
+
+Stencil audit at MSAA off and 4x observed native scene FBO 5 and final
+composite FBO 0, so the proposed same-attachment stencil receiver could
+not replace tags in those configurations. Maintainer explicitly accepted
+the loss of tag-based hover protection and creature-specific sun filtering.
+Normal Linux and Windows builds no longer inject, write, allocate, or sample
+receiver tags. The sun-only filtered caster duplicate is also omitted.
+Historical tag behavior remains available in the dedicated Linux tag-bench
+build for regression comparison. The normal fullscreen receiver still uses
+the common sun maps and existing local-light path and publishes fog/weather
+captures. Linux builds, software GL sun/tag regressions, and Windows proxy
+and game export checks passed. The rebuilt Linux shipping library was loaded
+for in-game confirmation. Visual checks and a matched performance run remain.
+
+## Tag-free creature coverage checkpoint (2026-11-24)
+
+Maintainer confirmed body, custom face and hair tint at 4x MSAA. Opaque body
+uses the depth-equality redraw on FBO 5 after bucket 4. It submitted 74 draws
+and passed about 46k–47k samples per frame in the city. Mode 2 face and hair
+tint runs during the original bucket-3 draw, after the native A2C setup.
+The attempted bucket-3 replay submitted zero Mode 2 draws and was removed.
+No receiver tags were enabled. This verifies visible coverage in this test
+view only. Actual filtered shading and suppression of common-map shadows
+on creature pixels remain to be implemented and measured. Hover handling
+is lower priority per maintainer.
