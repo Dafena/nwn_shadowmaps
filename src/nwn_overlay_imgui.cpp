@@ -248,6 +248,7 @@ void nwn_overlay_render(int viewportW, int viewportH, const NwnOverlayState& st)
             if (st.shaderRainSplashes) ImGui::SliderFloat("Splash strength", st.shaderRainSplashes, 0.0f, 2.0f);
         }
 #endif
+#if !defined(_WIN32) || !NWN_SHIP
         if (st.heatEnabled && ImGui::CollapsingHeader("Heat haze")) {
             if (st.scriptOverrides && std::strcmp(st.scriptOverrides, "none") != 0)
                 ImGui::TextWrapped("Area script overrides (win over the controls below): %s",
@@ -271,6 +272,7 @@ void nwn_overlay_render(int viewportW, int viewportH, const NwnOverlayState& st)
                  "(torches, lava, braziers). Needs sun shadows on for scene depth. "
                  "Area scripts can switch it on for volcanoes and deserts.");
         }
+#endif
 
 #if !NWN_SHIP
         if (st.godraysAvailable && ImGui::CollapsingHeader("Volumetric fog")) {
