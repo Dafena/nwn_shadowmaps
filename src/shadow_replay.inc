@@ -1168,6 +1168,23 @@ static void replay_bucket_into_cascade_layers(void* scene, int bucket, bool stat
     if (eng::FlagDirty)     eng::FlagDirty();
     if (eng::SetMatrixMode) eng::SetMatrixMode(oldMode);
 
+#ifdef _WIN32
+    if (g_glIdentityKnown && g_glIdentityAmd) {
+        // Match the b47f980 handoff: leave engine-managed material state
+        // from the native bucket replay in place so NWN's cache agrees with
+        // the driver. Restore the state the cascade code overrides directly.
+        if (!outer.depthTest) gl::Disable(GL_DEPTH_TEST);
+        if (!outer.depthMask) gl::DepthMask(GL_FALSE);
+        if (outer.scissor) gl::Enable(GL_SCISSOR_TEST);
+        gl::ColorMask(outer.colorMask[0], outer.colorMask[1],
+                      outer.colorMask[2], outer.colorMask[3]);
+        gl::Viewport(outer.vp[0], outer.vp[1], outer.vp[2], outer.vp[3]);
+        gl::BindFramebuffer(GL_DRAW_FRAMEBUFFER, (GLuint)outer.fbo);
+        gl::BindFramebuffer(GL_READ_FRAMEBUFFER, (GLuint)outer.readFbo);
+        return;
+    }
+#endif
+
     restore_state(outer);
 }
 
