@@ -53,7 +53,7 @@ Environment defaults (saved panel settings take precedence):
 | --- | --- | --- |
 | NWN_SHADER_RAIN | 1 shipping / 0 developer | 0 / 1 |
 | NWN_SHADER_RAIN_HIDE_NATIVE | 0 | 0 / 1; only active with preview |
-| NWN_SHADER_RAIN_BUDGET | 4352 | 256–262144 |
+| NWN_SHADER_RAIN_BUDGET | 6596 | 256–262144 |
 | NWN_SHADER_RAIN_RADIUS | 40 | 8–64 world metres |
 | NWN_SHADER_RAIN_WIND_X | 0 | -8–8 metres/second |
 | NWN_SHADER_RAIN_WIND_Y | 0 | -8–8 metres/second |
@@ -65,7 +65,7 @@ selects a stable subset of its cells.
 The logarithmic slider and Exact drop budget input allow extreme storms without
 making low-budget tuning awkward. Try 32768 first and increase while checking
 frame times. Above 32768 the panel displays a GPU-cost warning. The ordinary
-default is 4352; the cap is not a promise of acceptable FPS at maximum.
+default is 6596; the cap is not a promise of acceptable FPS at maximum.
 
 Open-air cells now retain falling streaks even when the static map contains no
 ground. This matters for Storm Crown's empty cc tileset and non-static

@@ -186,7 +186,7 @@ static const char* kRainVertexShader =
     "  vec3 lc=texelFetch(lightData,ivec2(i*2+1,0),0).rgb;\n"
     "  float d2=dot(center-lp.xyz,center-lp.xyz); float fall=max(0.0,1-d2/max(lp.w,0.001));\n"
     "  illumination+=lc*fall*fall; }\n"
-    " tint=min(illumination,vec3(2))*vec3(0.68,0.76,0.82);\n"
+    " tint=vec3(0.68,0.76,0.82)*mix(vec3(1),min(illumination,vec3(2)),0.25);\n"
     " if(lightFalloff.w>0.5) opacity*=1-smoothstep(lightFalloff.x,lightFalloff.y,length(center-eyeRadius.xyz));\n"
     " gl_Position=cameraVP*vec4(pos,1); viewDepth=gl_Position.w;\n"
     "}\n";
@@ -442,7 +442,12 @@ static void draw(void* scene) {
        w.observedScene!=scene) { status="waiting for selected area"; return; }
     if(!w.weatherObserved || !w.areaFlagsKnown || w.areaInterior ||
        !w.raining || w.weatherType!=weather_runtime::kWeatherRain) {
-        clockArea=nullptr; status="no exterior rain"; return;
+        clockArea=nullptr;
+        if (!w.weatherObserved) status="waiting for client weather";
+        else if (!w.areaFlagsKnown) status="waiting for area flags";
+        else if (w.areaInterior) status="area flagged as interior";
+        else status="no active engine rain";
+        return;
     }
     if(!w.precipitationOcclusionValid || w.precipitationOcclusionDirty ||
        w.precipitationOcclusionScene!=scene ||
