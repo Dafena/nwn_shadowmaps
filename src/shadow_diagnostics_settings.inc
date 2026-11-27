@@ -87,7 +87,7 @@ static constexpr unsigned kSettingsMax = 128;
 // too. On an older file the keys listed in settings_retuned() are ignored and
 // the file is rewritten at the new version; everything else the user set is
 // preserved.
-static constexpr int kSettingsVersion = 21;
+static constexpr int kSettingsVersion = 22;
 
 // Keys whose defaults changed in a local-light tuning pass.  Version 5 also
 // makes these controls live on the cube receiver; reset the old 1-unit
@@ -100,6 +100,7 @@ static constexpr int kSettingsVersion = 21;
 // reach them; the compiled-in default IS the shipped behaviour, and a stale
 // file must not be allowed to pin the old one.
 static bool settings_retuned(const char* key, int fileVersion) {
+    if (std::strcmp(key, "shader_rain_budget") == 0) return fileVersion < 22;
     // v21 enables private rain by default; keep all unrelated saved tuning.
     if (std::strcmp(key, "shader_rain") == 0) return fileVersion < 21;
     if (fileVersion >= 20) return false;
@@ -107,8 +108,7 @@ static bool settings_retuned(const char* key, int fileVersion) {
     if(fileVersion >= 19) return std::strcmp(key, "fog_lamp_glow") == 0;
     if(std::strcmp(key, "fog_lamp_glow") == 0) return true;
     // Version 18 (2026-11-16): adopt the maintainer's private-rain tuning.
-    static const char* kV18[] = { "shader_rain_budget", "shader_rain_radius",
-                                  "shader_rain_splashes" };
+    static const char* kV18[] = { "shader_rain_radius", "shader_rain_splashes" };
     for (const char* k : kV18) if (std::strcmp(k, key) == 0) return true;
     // Version 15 adopts the PS4/GNM point-shadow capture bias.  Do not let a
     // saved 1.8 factor override the reference factor=3 default.
@@ -326,7 +326,7 @@ static void settings_reset_defaults() {
     g_puddleReflectionQuality = 0;
     g_shaderRainEnabled        = NWN_SHIP != 0;
     g_shaderRainHideNative     = false;
-    g_shaderRainBudget         = 4352;
+    g_shaderRainBudget         = kShaderRainDefaultBudget;
     g_shaderRainRadius         = 40.0f;
     g_shaderRainWindX          = 0.0f;
     g_shaderRainWindY          = 0.0f;

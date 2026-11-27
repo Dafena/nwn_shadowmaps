@@ -1023,7 +1023,8 @@ static bool     g_sunTagBatchAttachments = true;
 static int      g_weatherShelterSize = 0; // 0 follows sun map; explicit 4096/2048/1024
 static bool     g_rainPuddlesEnabled = true;
 static int      g_puddleReflectionQuality = 0;
-static int      g_shaderRainBudget = 4352;
+static constexpr int kShaderRainDefaultBudget = 6596;
+static int      g_shaderRainBudget = kShaderRainDefaultBudget;
 static float    g_shaderRainRadius = 40.0f;
 static float    g_shaderRainWindX = 0.0f;
 static float    g_shaderRainWindY = 0.0f;
@@ -3002,8 +3003,10 @@ extern "C" void SceneRender_detour(void* self) {
         // transparent layer then stacks -- five passes at alpha 0.35 composite
         // to 1-0.65^5 = 0.88 -- and it ran over the Load Game menu, where there
         // is no area at all. Same gate as the receiver and the overlay.
-        if (self == g_areaScene) nwn_oit_frame(self);
-        draw_weather_particles(self);
+        if (self == g_areaScene) {
+            nwn_oit_frame(self);
+            draw_weather_particles(self);
+        }
         // The overlay is intentionally later than the receiver so it is never
         // copied into the scene-depth texture or interpreted as a shadow
         // receiver.  It shares the same selected-area/FBO gate.

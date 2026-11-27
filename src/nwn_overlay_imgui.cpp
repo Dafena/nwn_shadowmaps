@@ -583,6 +583,7 @@ void nwn_overlay_render(int viewportW, int viewportH, const NwnOverlayState& st)
                 int rain = *st.shaderRain ? 1 : 0;
                 if (ImGui::Combo("3D Custom Rain", &rain, choices, 2))
                     *st.shaderRain = rain != 0;
+                ImGui::Text("Rain pass: %s", st.shaderRainStatus);
             }
             if (st.scriptOverrides && std::strcmp(st.scriptOverrides, "none") != 0)
                 ImGui::TextWrapped("Area script overrides: %s", st.scriptOverrides);
